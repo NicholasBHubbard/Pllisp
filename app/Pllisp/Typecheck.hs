@@ -6,39 +6,36 @@ module Pllisp.Typecheck where
 
 import qualified Pllisp.CST as CST
 import qualified Pllisp.Resolve as Resolve
+import qualified Pllisp.SrcLoc as Loc
+import qualified Pllisp.Type as Ty
 
 -- CORE
 
-data Typed a = Typed
-  { ty  :: CST.Type
-  , val :: a
-  } deriving (Eq, Show)
-
 data TypeError = TypeError
-  { teSpan     :: CST.Span
+  { teSpan     :: Loc.Span
   , teMsg      :: String
-  , teExpected :: Maybe CST.Type
-  , teActual   :: Maybe CST.Type
+  , teExpected :: Maybe Ty.Type
+  , teActual   :: Maybe Ty.Type
   } deriving (Eq, Show)
 
-type TExpr = CST.Located (Typed TRExprF)
-type TypedResolvedCST = [TExpr]
+type TyExpr = Loc.Located (Ty.Typed TyRExprF)
+type TypedResolvedCST = [TyExpr]
 
-data TRExprF
-  = TLit  CST.Literal
-  | TBool Bool
-  | TVar  Resolve.VarBinding
-  | TLam  [CST.TSymbol] (Maybe CST.Type) TExpr
-  | TLet  [(CST.TSymbol, TExpr)] TExpr
-  | TIf   TExpr TExpr TExpr
-  | TApp  Resolve.VarBinding [TExpr]
+data TyRExprF
+  = TyLit  CST.Literal
+  | TyBool Bool
+  | TyVar  Resolve.VarBinding
+  | TyLam  [CST.TSymbol] (Maybe Ty.Type) TyExpr
+  | TyLet  [(CST.TSymbol, TyExpr)] TyExpr
+  | TyIf   TyExpr TyExpr TyExpr
+  | TyApp  Resolve.VarBinding [TyExpr]
   deriving (Eq, Show)
 
 typecheck :: Resolve.ResolvedCST -> Either [TypeError] TypedResolvedCST
 typecheck = traverse (typecheckExpr [])
 
-typecheckExpr :: Resolve.ResolveScope -> Resolve.RExpr -> Either [TypeError] TExpr
-typecheckExpr sc (CST.Located sp expr) = CST.Located sp <$> case expr of
+typecheckExpr :: Resolve.ResolveScope -> Resolve.RExpr -> Either [TypeError] TyExpr
+typecheckExpr sc (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   Resolve.RLit l -> Right (typecheckLit l)
   Resolve.RBool b -> Right (typecheckBool b)
   Resolve.RVar v -> typecheckVar sc v
@@ -47,31 +44,33 @@ typecheckExpr sc (CST.Located sp expr) = CST.Located sp <$> case expr of
   Resolve.RIf c t e -> typecheckIf sc c t e
   Resolve.RApp v args -> typecheckApp sc v args
 
-typecheckLit :: CST.Literal -> Typed TRExprF
-typecheckLit l = toType "INT" (TLit l)
+typecheckLit :: CST.Literal -> Ty.Typed TyRExprF
+typecheckLit (CST.LitInt l) = Ty.Typed Ty.TyInt (TyLit (CST.LitInt l))
+typecheckLit (CST.LitFlt f) = Ty.Typed Ty.TyFlt (TyLit (CST.LitFlt f))
+typecheckLit (CST.LitStr s) = Ty.Typed Ty.TyStr (TyLit (CST.LitStr s))
 
-typecheckBool :: Bool -> Typed TRExprF
-typecheckBool b = toType "BOOL" (TBool b)
+typecheckBool :: Bool -> Ty.Typed TyRExprF
+typecheckBool b = Ty.Typed Ty.TyBool (TyBool b)
 
 typecheckVar ::
      Resolve.ResolveScope
   -> Resolve.VarBinding
-  -> Either [TypeError] (Typed TRExprF)
+  -> Either [TypeError] (Ty.Typed TyRExprF)
 typecheckVar = undefined
 
 typecheckLam ::
      Resolve.ResolveScope
   -> [CST.TSymbol]
-  -> Maybe CST.Type
+  -> Maybe Ty.Type
   -> Resolve.RExpr
-  -> Either [TypeError] (Typed TRExprF)
+  -> Either [TypeError] (Ty.Typed TyRExprF)
 typecheckLam sc args rtype body = undefined
 
 typecheckLet ::
      Resolve.ResolveScope
   -> [(CST.TSymbol, Resolve.RExpr)]
   -> Resolve.RExpr
-  -> Either [TypeError] (Typed TRExprF)
+  -> Either [TypeError] (Ty.Typed TyRExprF)
 typecheckLet sc binds body = undefined
 
 typecheckIf ::
@@ -79,7 +78,7 @@ typecheckIf ::
   -> Resolve.RExpr
   -> Resolve.RExpr
   -> Resolve.RExpr
-  -> Either [TypeError] (Typed TRExprF)
+  -> Either [TypeError] (Ty.Typed TyRExprF)
 typecheckIf sc c t e = do
   c' <- typecheckExpr sc c
   t' <- typecheckExpr sc t
@@ -90,22 +89,19 @@ typecheckApp ::
      Resolve.ResolveScope
   -> Resolve.VarBinding
   -> [Resolve.RExpr]
-  -> Either [TypeError] (Typed TRExprF)
+  -> Either [TypeError] (Ty.Typed TyRExprF)
 typecheckApp = undefined
 
 -- HELPERS
 
-toType :: CST.Symbol -> a -> Typed a
-toType t a = Typed (CST.Type t) a
-
-errTypeMismatch :: CST.Type -> CST.Type -> CST.Span -> TypeError
+errTypeMismatch :: Ty.Type -> Ty.Type -> Loc.Span -> TypeError
 errTypeMismatch exp act sp =
   TypeError sp "type mismatch" (Just exp) (Just act)
 
-errNotAFunction :: CST.Type -> CST.Span -> TypeError
+errNotAFunction :: Ty.Type -> Loc.Span -> TypeError
 errNotAFunction t sp =
   TypeError sp "attempted to call a non-function" Nothing (Just t)
 
-errUnknownSymbolType :: String -> CST.Span -> TypeError
+errUnknownSymbolType :: String -> Loc.Span -> TypeError
 errUnknownSymbolType name sp =
   TypeError sp ("unknown symbol type: " <> name) Nothing Nothing

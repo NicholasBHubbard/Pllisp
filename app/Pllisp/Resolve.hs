@@ -3,6 +3,8 @@
 module Pllisp.Resolve where
 
 import qualified Pllisp.CST as CST
+import qualified Pllisp.SrcLoc as Loc
+import qualified Pllisp.Type as Ty
 
 import qualified Data.Set as S
 
@@ -10,7 +12,7 @@ import qualified Data.Set as S
 
 type ResolvedCST = [RExpr]
 
-type RExpr = CST.Located RExprF
+type RExpr = Loc.Located RExprF
 
 type ResolveScope = [S.Set CST.Symbol]
 
@@ -23,14 +25,14 @@ data RExprF
   = RLit  CST.Literal
   | RBool Bool
   | RVar  VarBinding
-  | RLam  [CST.TSymbol] (Maybe CST.Type) RExpr
+  | RLam  [CST.TSymbol] (Maybe Ty.Type) RExpr
   | RLet  [(CST.TSymbol, RExpr)] RExpr
   | RIf   RExpr RExpr RExpr
   | RApp  VarBinding [RExpr]
   deriving (Eq, Show)
 
 data ResolveError = ResolveError
-  { errSpan :: CST.Span
+  { errSpan :: Loc.Span
   , errMsg  :: String
   } deriving (Eq, Show)
 
@@ -38,7 +40,7 @@ resolve :: CST.CST -> Either [ResolveError] ResolvedCST
 resolve = traverse (resolveExpr [])
 
 resolveExpr :: ResolveScope -> CST.Expr -> Either [ResolveError] RExpr
-resolveExpr sc (CST.Located sp expr) = CST.Located sp <$> case expr of
+resolveExpr sc (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   CST.ExprLit l  -> Right (RLit l)
   CST.ExprBool b -> Right (RBool b)
   CST.ExprSym sym -> do
@@ -60,7 +62,7 @@ resolveExpr sc (CST.Located sp expr) = CST.Located sp <$> case expr of
     rbody <- resolveExpr (S.fromList symNames : sc) body
     pure (RLet rbinds rbody)
 
-resolveSym :: ResolveScope -> CST.Symbol -> CST.Span -> Either [ResolveError] VarBinding
+resolveSym :: ResolveScope -> CST.Symbol -> Loc.Span -> Either [ResolveError] VarBinding
 resolveSym sc sym sp = go 0 sc
   where go _ [] = Left [ResolveError { errSpan = sp , errMsg = "symbol not in scope: " ++ show sym}]
         go n (f:fs)
@@ -69,7 +71,7 @@ resolveSym sc sym sp = go 0 sc
 
 -- HELPERS
 
-dupCheck :: String -> [CST.Symbol] -> CST.Span -> Either [ResolveError] ()
+dupCheck :: String -> [CST.Symbol] -> Loc.Span -> Either [ResolveError] ()
 dupCheck errMsg syms sp =
   let syms' = S.fromList syms
   in if S.size syms' == length syms

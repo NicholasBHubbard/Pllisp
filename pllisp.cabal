@@ -68,6 +68,8 @@ executable pllisp
     other-modules:    Pllisp.CST,
                       Pllisp.Parser,
                       Pllisp.Resolve,
+                      Pllisp.SrcLoc,
+                      Pllisp.Type,
                       Pllisp.Typecheck
 
     -- LANGUAGE extensions used by modules in this package.

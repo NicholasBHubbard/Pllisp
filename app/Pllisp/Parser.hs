@@ -5,6 +5,9 @@
 module Pllisp.Parser where
 
 import qualified Pllisp.CST as CST
+import qualified Pllisp.SrcLoc as Loc
+import qualified Pllisp.Type as Ty
+
 
 import Data.Void (Void)
 import qualified Data.Text as T
@@ -88,11 +91,14 @@ symbolParser = MP.label "symbol" $ do
     then fail "reserved word"
     else pure s
 
-typeParser :: Parser CST.Type
-typeParser = MP.label "type" $ CST.Type <$> do
-  _   <- MP.C.char '%'
-  sym <- symbolParser
-  pure $ "%" <> sym
+typeParser :: Parser Ty.Type
+typeParser = MP.C.char '%' *> (ident >>= \t -> case t of
+  "INT"  -> pure Ty.TyInt
+  "FLT"  -> pure Ty.TyFlt
+  "STR"  -> pure Ty.TyStr
+  "BOOL" -> pure Ty.TyBool
+  other  -> pure (Ty.TyCon other)
+  )
 
 boolParser :: Parser Bool
 boolParser = MP.label "boolean value" $ do
@@ -135,11 +141,11 @@ parens = MP.between (MP.C.L.symbol sc "(") (MP.C.L.symbol sc ")")
 sc :: Parser ()
 sc = MP.C.L.space MP.C.space1 (MP.C.L.skipLineComment "#") MP.empty
 
-located :: Parser a -> Parser (CST.Located a)
+located :: Parser a -> Parser (Loc.Located a)
 located p =
-  let toPos sp = CST.Pos (MP.sourceName sp) (MP.P.unPos (MP.sourceLine sp)) (MP.P.unPos (MP.sourceColumn sp))
+  let toPos sp = Loc.Pos (MP.sourceName sp) (MP.P.unPos (MP.sourceLine sp)) (MP.P.unPos (MP.sourceColumn sp))
   in do
     start <- MP.getSourcePos
     x <- p
     end <- MP.getSourcePos
-    pure $ CST.Located (CST.Span (toPos start) (toPos end)) x
+    pure $ Loc.Located (Loc.Span (toPos start) (toPos end)) x
