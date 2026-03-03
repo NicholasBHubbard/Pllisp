@@ -20,6 +20,7 @@ data Type
   | TyBool
   | TyFun [Type] Type
   | TyCon Symbol         -- for user-defined types later
+  | TyVar Integer
   deriving (Eq, Show)
 
 renderType :: Type -> T.Text
@@ -30,3 +31,4 @@ renderType t = case t of
   TyBool     -> "%BOOL"
   TyFun as r -> "%(" <> T.intercalate " " (map renderType as) <> " -> " <> renderType r <> ")"
   TyCon s    -> "%" <> s
+  TyVar n    -> "%t" <> T.pack (show n)

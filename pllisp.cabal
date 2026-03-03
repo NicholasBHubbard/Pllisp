@@ -70,7 +70,7 @@ executable pllisp
                       Pllisp.Resolve,
                       Pllisp.SrcLoc,
                       Pllisp.Type,
-                      Pllisp.Typecheck
+                      Pllisp.TypeCheck
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

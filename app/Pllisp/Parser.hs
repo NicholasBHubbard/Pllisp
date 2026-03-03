@@ -49,9 +49,9 @@ exprLamParser = MP.label "lambda" $ MP.try $ parens $ do
 
 exprAppParser :: Parser CST.ExprF
 exprAppParser = MP.label "application" $ parens $ do
-  sym <- symbolParser
+  fun <- exprParser
   args <- MP.many exprParser
-  pure $ CST.ExprApp sym args
+  pure $ CST.ExprApp fun args
 
 exprLetParser :: Parser CST.ExprF
 exprLetParser = MP.label "let" $ MP.try $ parens $ do

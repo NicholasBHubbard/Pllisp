@@ -28,7 +28,7 @@ type CST = [Expr]
 
 data ExprF
   = ExprLam [TSymbol] (Maybe Ty.Type) Expr
-  | ExprApp Symbol [Expr]
+  | ExprApp Expr [Expr]
   | ExprLet [(TSymbol, Expr)] Expr
   | ExprIf Expr Expr Expr
   | ExprSym Symbol

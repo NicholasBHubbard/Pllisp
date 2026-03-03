@@ -14,7 +14,7 @@ type ResolvedCST = [RExpr]
 
 type RExpr = Loc.Located RExprF
 
-type ResolveScope = [S.Set CST.Symbol]
+type ResolveScope = [S.Set CST.Symbol] -- head = innermost
 
 data VarBinding = VarBinding
   { scopeIdx :: Integer
@@ -28,7 +28,7 @@ data RExprF
   | RLam  [CST.TSymbol] (Maybe Ty.Type) RExpr
   | RLet  [(CST.TSymbol, RExpr)] RExpr
   | RIf   RExpr RExpr RExpr
-  | RApp  VarBinding [RExpr]
+  | RApp  RExpr [RExpr]
   deriving (Eq, Show)
 
 data ResolveError = ResolveError
@@ -47,10 +47,10 @@ resolveExpr sc (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     rvar <- resolveSym sc sym sp
     pure $ RVar rvar
   CST.ExprIf c t f -> RIf <$> resolveExpr sc c <*> resolveExpr sc t <*> resolveExpr sc f
-  CST.ExprApp sym args -> do
-    rsym <- resolveSym sc sym sp
+  CST.ExprApp fun args -> do
+    rfun <- resolveExpr sc fun
     rargs <- traverse (resolveExpr sc) args
-    pure $ RApp rsym rargs
+    pure $ RApp rfun rargs
   CST.ExprLam params mRet body -> do
     dupCheck "duplicate lambda parameter" (map CST.symName params) sp
     rbody <- resolveExpr (S.fromList (map CST.symName params) : sc) body
