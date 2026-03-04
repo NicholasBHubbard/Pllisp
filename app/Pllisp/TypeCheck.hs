@@ -40,7 +40,7 @@ data TypeError = TypeError
 
 type Subst = M.Map Integer Ty.Type
 
-type TypeEnv = M.Map Res.VarBinding Ty.Type
+type TypeEnv = M.Map CST.Symbol Ty.Type
 
 newtype Infer a = Infer
   { runInfer :: TypeEnv -> Subst -> Integer -> Either TypeError (a, Subst, Integer)
@@ -76,11 +76,11 @@ throwError sp msg = Infer $ \_ _ _ -> Left (TypeError sp msg)
 
 lookupVar :: Loc.Span -> Res.VarBinding -> Infer Ty.Type
 lookupVar sp vb = Infer $ \env s n ->
-  case M.lookup vb env of
+  case M.lookup (Res.symName vb) env of
     Just t  -> Right (t, s, n)
     Nothing -> Left (TypeError sp ("unbound variable: " ++ show (Res.symName vb)))
 
-withBindings :: [(Res.VarBinding, Ty.Type)] -> Infer a -> Infer a
+withBindings :: [(CST.Symbol, Ty.Type)] -> Infer a -> Infer a
 withBindings binds (Infer m) = Infer $ \env s n ->
   let env' = foldr (uncurry M.insert) env binds
   in m env' s n
@@ -159,7 +159,7 @@ inferExpr (Loc.Located sp expr) = case expr of
 
   Res.RLam params mRetTy body -> do
     paramTypes <- traverse (\p -> maybe fresh pure (CST.symType p)) params
-    let bindings = zipWith (\p t -> (Res.VarBinding 0 (CST.symName p), t)) params paramTypes
+    let bindings = zipWith (\p t -> (CST.symName p, t)) params paramTypes
     tbody <- withBindings bindings (inferExpr body)
     let bodyTy = Ty.ty (Loc.locVal tbody)
     case mRetTy of
@@ -171,7 +171,14 @@ inferExpr (Loc.Located sp expr) = case expr of
     pure $ Loc.Located sp (Ty.Typed funTy (TRLam paramList retTy tbody))
 
   Res.RLet binds body -> do
-    (tbinds, bindingPairs) <- inferLetBinds sp binds
+    -- Generate fresh type vars for each binding (or use annotation)
+    freshTys <- traverse (\(sym, _) -> maybe fresh pure (CST.symType sym)) binds
+    let bindingPairs = zipWith (\(sym, _) t -> (CST.symName sym, t)) binds freshTys
+    -- Infer RHS with bindings in scope (recursive)
+    tbinds <- withBindings bindingPairs $ traverse (inferBind sp) binds
+    -- Unify inferred types with fresh vars
+    zipWithM_ (\tb freshTy -> unify sp (Ty.ty (Loc.locVal tb)) freshTy) tbinds freshTys
+    -- Infer body
     tbody <- withBindings bindingPairs (inferExpr body)
     let bodyTy = Ty.ty (Loc.locVal tbody)
         typedBinds = [(CST.symName (fst b), Ty.ty (Loc.locVal tb), tb) | (b, tb) <- zip binds tbinds]
@@ -195,18 +202,8 @@ inferExpr (Loc.Located sp expr) = case expr of
     unify sp funTy (Ty.TyFun argTys retTy)
     pure $ Loc.Located sp (Ty.Typed retTy (TRApp tfun targs))
 
-inferLetBinds :: Loc.Span -> [(CST.TSymbol, Res.RExpr)] -> Infer ([TRExpr], [(Res.VarBinding, Ty.Type)])
-inferLetBinds sp binds = do
-  tbinds <- traverse inferBind binds
-  let bindingPairs = [(Res.VarBinding 0 (CST.symName sym), Ty.ty (Loc.locVal trhs)) | ((sym, _), trhs) <- zip binds tbinds]
-  pure (tbinds, bindingPairs)
-  where
-    inferBind (sym, rhs) = do
-      trhs <- inferExpr rhs
-      case CST.symType sym of
-        Just annTy -> unify sp (Ty.ty (Loc.locVal trhs)) annTy
-        Nothing    -> pure ()
-      pure trhs
+inferBind :: Loc.Span -> (CST.TSymbol, Res.RExpr) -> Infer TRExpr
+inferBind _ (_, rhs) = inferExpr rhs
 
 -- FINALIZATION
 

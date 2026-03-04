@@ -57,9 +57,10 @@ resolveExpr sc (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ RLam params mRet rbody
   CST.ExprLet binds body -> do
     let symNames = map (CST.symName . fst) binds
+        sc' = S.fromList symNames : sc  -- bindings in scope for RHS (recursive)
     dupCheck "duplicate let binding" symNames sp
-    rbinds <- traverse (\(v, rhs) -> do; rrhs <- resolveExpr sc rhs; pure (v, rrhs)) binds
-    rbody <- resolveExpr (S.fromList symNames : sc) body
+    rbinds <- traverse (\(v, rhs) -> do; rrhs <- resolveExpr sc' rhs; pure (v, rrhs)) binds
+    rbody <- resolveExpr sc' body
     pure (RLet rbinds rbody)
 
 resolveSym :: ResolveScope -> CST.Symbol -> Loc.Span -> Either [ResolveError] VarBinding
