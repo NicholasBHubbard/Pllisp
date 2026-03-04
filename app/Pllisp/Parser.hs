@@ -110,7 +110,7 @@ boolParser = MP.label "boolean value" $ do
 
 litParser :: Parser CST.Literal
 litParser = MP.label "literal value" $ lexeme $ MP.choice
-  [ CST.LitFlt <$> MP.C.L.float
+  [ CST.LitFlt <$> MP.try MP.C.L.float
   , CST.LitInt <$> MP.C.L.decimal
   , CST.LitStr . T.pack <$> MP.between (MP.C.char '"') (MP.C.char '"') (MP.some MP.C.L.charLiteral)
   ]
