@@ -19,7 +19,7 @@ type ResolveScope = [S.Set CST.Symbol] -- head = innermost
 data VarBinding = VarBinding
   { scopeIdx :: Integer
   , symName :: CST.Symbol
-  } deriving (Eq, Show)
+  } deriving (Eq, Ord, Show)
 
 data RExprF
   = RLit  CST.Literal
