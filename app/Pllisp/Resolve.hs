@@ -2,6 +2,7 @@
 
 module Pllisp.Resolve where
 
+import qualified Pllisp.BuiltIn as BuiltIn
 import qualified Pllisp.CST as CST
 import qualified Pllisp.SrcLoc as Loc
 import qualified Pllisp.Type as Ty
@@ -29,6 +30,7 @@ data RExprF
   | RLet  [(CST.TSymbol, RExpr)] RExpr
   | RIf   RExpr RExpr RExpr
   | RApp  RExpr [RExpr]
+  | RType CST.Symbol [CST.Symbol] [CST.DataCon]
   deriving (Eq, Show)
 
 data ResolveError = ResolveError
@@ -37,7 +39,17 @@ data ResolveError = ResolveError
   } deriving (Eq, Show)
 
 resolve :: CST.CST -> Either [ResolveError] ResolvedCST
-resolve = traverse (resolveExpr [])
+resolve cst =
+  let ctorNames = S.fromList (extractCtorNames cst)
+      initialScope = [S.union BuiltIn.builtInNames ctorNames]
+  in traverse (resolveExpr initialScope) cst
+
+-- Extract constructor names from TYPE declarations
+extractCtorNames :: CST.CST -> [CST.Symbol]
+extractCtorNames = concatMap go
+  where
+    go (Loc.Located _ (CST.ExprType _ _ ctors)) = map CST.dcName ctors
+    go _ = []
 
 resolveExpr :: ResolveScope -> CST.Expr -> Either [ResolveError] RExpr
 resolveExpr sc (Loc.Located sp expr) = Loc.Located sp <$> case expr of
@@ -62,6 +74,10 @@ resolveExpr sc (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     rbinds <- traverse (\(v, rhs) -> do; rrhs <- resolveExpr sc' rhs; pure (v, rrhs)) binds
     rbody <- resolveExpr sc' body
     pure (RLet rbinds rbody)
+  CST.ExprType name params ctors -> do
+    dupCheck "duplicate type parameter" params sp
+    dupCheck "duplicate data constructor" (map CST.dcName ctors) sp
+    pure (RType name params ctors)
 
 resolveSym :: ResolveScope -> CST.Symbol -> Loc.Span -> Either [ResolveError] VarBinding
 resolveSym sc sym sp = go 0 sc

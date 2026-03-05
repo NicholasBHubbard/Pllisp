@@ -19,7 +19,7 @@ data Type
   | TyStr
   | TyBool
   | TyFun [Type] Type
-  | TyCon Symbol         -- for user-defined types later
+  | TyCon Symbol [Type]  -- user-defined: TyCon "Maybe" [TyInt]
   | TyVar Integer
   deriving (Eq, Show)
 
@@ -30,5 +30,6 @@ renderType t = case t of
   TyStr      -> "%STR"
   TyBool     -> "%BOOL"
   TyFun as r -> "%(" <> T.intercalate " " (map renderType as) <> " -> " <> renderType r <> ")"
-  TyCon s    -> "%" <> s
+  TyCon s [] -> "%" <> s
+  TyCon s ts -> "%(" <> s <> " " <> T.intercalate " " (map renderType ts) <> ")"
   TyVar n    -> "%t" <> T.pack (show n)

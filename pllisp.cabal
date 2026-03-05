@@ -65,7 +65,8 @@ executable pllisp
     main-is:          Pllisp/Main.hs
 
     -- Modules included in this executable, other than Main.
-    other-modules:    Pllisp.CST,
+    other-modules:    Pllisp.BuiltIn,
+                      Pllisp.CST,
                       Pllisp.Parser,
                       Pllisp.Resolve,
                       Pllisp.SrcLoc,
@@ -77,9 +78,11 @@ executable pllisp
 
     -- Other library packages from which modules are imported.
     build-depends:    base       ^>=4.21.0.0,
+                      containers ^>=0.7,
                       megaparsec ^>=9.7.0,
-                      text       ^>=2.1.2,
-                      containers ^>=0.7
+                      mtl        ^>=2.3.2,
+                      text       ^>=2.1.2
+
 
     -- Directories containing source files.
     hs-source-dirs:   app

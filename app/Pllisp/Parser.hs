@@ -33,6 +33,7 @@ exprParser = MP.label "expression" $ located $ MP.choice
   [ exprLamParser
   , exprLetParser
   , exprIfParser
+  , exprTypeParser
   , exprAppParser
   , exprBoolParser
   , exprLitParser
@@ -69,6 +70,41 @@ exprIfParser = MP.label "if" $ MP.try $ parens $ do
   else' <- exprParser
   pure $ CST.ExprIf cond then' else'
 
+exprTypeParser :: Parser CST.ExprF
+exprTypeParser = MP.label "type" $ MP.try $ parens $ do
+  _ <- ident' "TYPE"
+  name <- symbolParser
+  params <- parens (MP.many symbolParser)
+  ctors <- MP.many dataConParser
+  pure $ CST.ExprType name params ctors
+
+dataConParser :: Parser CST.DataCon
+dataConParser = MP.label "data constructor" $ parens $ do
+  name <- symbolParser
+  args <- MP.many typeParserInCtor
+  pure $ CST.DataCon name args
+
+-- Type parser for inside constructor definitions (handles type variables)
+typeParserInCtor :: Parser Ty.Type
+typeParserInCtor = MP.choice
+  [ MP.C.char '%' *> typeParserBody  -- %INT, %Maybe, %(List a)
+  , Ty.TyCon <$> symbolParser <*> pure []  -- bare type variable: a, b, etc.
+  ]
+
+typeParserBody :: Parser Ty.Type
+typeParserBody = MP.choice
+  [ parens $ do  -- %(List a) or %(Either a b)
+      name <- ident
+      args <- MP.many typeParserInCtor
+      pure $ Ty.TyCon name args
+  , ident >>= \t -> case t of
+      "INT"  -> pure Ty.TyInt
+      "FLT"  -> pure Ty.TyFlt
+      "STR"  -> pure Ty.TyStr
+      "BOOL" -> pure Ty.TyBool
+      other  -> pure (Ty.TyCon other [])
+  ]
+
 exprSymParser :: Parser CST.ExprF
 exprSymParser = MP.label "symbol" $ CST.ExprSym <$> symbolParser
 
@@ -97,7 +133,7 @@ typeParser = MP.C.char '%' *> (ident >>= \t -> case t of
   "FLT"  -> pure Ty.TyFlt
   "STR"  -> pure Ty.TyStr
   "BOOL" -> pure Ty.TyBool
-  other  -> pure (Ty.TyCon other)
+  other  -> pure (Ty.TyCon other [])
   )
 
 boolParser :: Parser Bool
@@ -112,13 +148,13 @@ litParser :: Parser CST.Literal
 litParser = MP.label "literal value" $ lexeme $ MP.choice
   [ CST.LitFlt <$> MP.try MP.C.L.float
   , CST.LitInt <$> MP.C.L.decimal
-  , CST.LitStr . T.pack <$> MP.between (MP.C.char '"') (MP.C.char '"') (MP.some MP.C.L.charLiteral)
+  , CST.LitStr . T.pack <$> (MP.C.char '"' *> MP.manyTill MP.C.L.charLiteral (MP.C.char '"'))
   ]
 
 -- HELPERS
 
 keywords :: [T.Text]
-keywords = ["LAM", "LET", "IF", "TRUE", "FALSE"]
+keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "TYPE"]
 
 ident :: Parser T.Text
 ident = MP.label "identifier" $ lexeme $ do

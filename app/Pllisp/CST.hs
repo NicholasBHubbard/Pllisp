@@ -34,4 +34,10 @@ data ExprF
   | ExprSym Symbol
   | ExprBool Bool
   | ExprLit Literal
+  | ExprType Symbol [Symbol] [DataCon]  -- (TYPE Name (params...) (Ctor args...)...)
   deriving (Eq, Show)
+
+data DataCon = DataCon
+  { dcName :: Symbol
+  , dcArgs :: [Ty.Type]
+  } deriving (Eq, Show)
