@@ -89,3 +89,25 @@ executable pllisp
 
     -- Base language which the package is written in.
     default-language: Haskell2010
+
+test-suite pllisp-test
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test, app
+    main-is:          Spec.hs
+    other-modules:    ResolveSpec,
+                      TypeCheckSpec,
+                      Pllisp.BuiltIn,
+                      Pllisp.CST,
+                      Pllisp.Parser,
+                      Pllisp.Resolve,
+                      Pllisp.SrcLoc,
+                      Pllisp.Type,
+                      Pllisp.TypeCheck
+    build-depends:    base       ^>=4.21.0.0,
+                      containers ^>=0.7,
+                      megaparsec ^>=9.7.0,
+                      mtl        ^>=2.3.2,
+                      text       ^>=2.1.2,
+                      hspec      ^>=2.11
+    default-language: Haskell2010
