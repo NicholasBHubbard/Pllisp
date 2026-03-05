@@ -32,7 +32,7 @@ type TRExpr = Loc.Located (Ty.Typed TRExprF)
 
 data Scheme = Forall (S.Set TyVar) Ty.Type
 
-data Constraint = Constraint Ty.Type Ty.Type
+data Constraint = Constraint Loc.Span Ty.Type Ty.Type
 
 data TypeError = TypeError
   { teSpan :: Loc.Span
@@ -72,8 +72,8 @@ instance Substitutable Scheme where
   apply s (Forall vs t) = Forall vs $ apply (foldr M.delete s vs) t
 
 instance Substitutable Constraint where
-  tvs (Constraint t1 t2) = tvs t1 `S.union` tvs t2
-  apply s (Constraint t1 t2) = Constraint (apply s t1) (apply s t2)
+  tvs (Constraint _ t1 t2) = tvs t1 `S.union` tvs t2
+  apply s (Constraint sp t1 t2) = Constraint sp (apply s t1) (apply s t2)
 
 instance Substitutable a => Substitutable [a] where
   tvs l = foldr (S.union . tvs) S.empty l
@@ -178,14 +178,14 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     ct <- infer c
     tt <- infer t
     et <- infer e
-    constrain (typeOf ct) Ty.TyBool
-    constrain (typeOf tt) (typeOf et)
+    constrain sp (typeOf ct) Ty.TyBool
+    constrain sp (typeOf tt) (typeOf et)
     pure $ Ty.Typed (typeOf tt) (TRIf ct tt et)
   Res.RApp fexpr aexprs -> do
     ft <- infer fexpr
     ats <- traverse infer aexprs
     rt <- fresh
-    constrain (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
+    constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
     pure $ Ty.Typed rt (TRApp ft ats)
   Res.RLam params _mRet body -> do
     paramTys <- traverse paramType params
@@ -202,7 +202,7 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     let monoSchemes = map (Forall S.empty) freshTys
         recCtx = M.union (M.fromList (zip names monoSchemes)) ctx
     rhsExprs <- traverse (\(_, rhs) -> RWS.local (const recCtx) (infer rhs)) binds
-    sequence_ $ zipWith constrain freshTys (map typeOf rhsExprs)
+    sequence_ $ zipWith (constrain sp) freshTys (map typeOf rhsExprs)
     let generalizedSchemes = map (generalize ctx . typeOf) rhsExprs
         bodyCtx = M.union (M.fromList (zip names generalizedSchemes)) ctx
     bodyExpr <- RWS.local (const bodyCtx) (infer body)
@@ -217,8 +217,8 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
 fresh :: Infer Ty.Type
 fresh = RWS.state (\n -> (Ty.TyVar n, n+1))
 
-constrain :: Ty.Type -> Ty.Type -> Infer ()
-constrain t1 t2 = RWS.tell [Constraint t1 t2]
+constrain :: Loc.Span -> Ty.Type -> Ty.Type -> Infer ()
+constrain sp t1 t2 = RWS.tell [Constraint sp t1 t2]
 
 throwTE :: Loc.Span -> String -> Infer a
 throwTE sp msg = RWS.lift . Left $ TypeError sp msg
@@ -243,38 +243,34 @@ instantiate (Forall vs t) = do
 
 -- UNIFICATION / SOLVING
 
-unify :: Ty.Type -> Ty.Type -> Solve Subst
-unify (Ty.TyVar v) t = bind v t
-unify t (Ty.TyVar v) = bind v t
-unify (Ty.TyFun as1 r1) (Ty.TyFun as2 r2) = unifyMany (r1:as1) (r2:as2)
-unify (Ty.TyCon n1 ts1) (Ty.TyCon n2 ts2)
-  | n1 == n2  = unifyMany ts1 ts2
-unify Ty.TyInt Ty.TyInt = Right M.empty
-unify Ty.TyFlt Ty.TyFlt = Right M.empty
-unify Ty.TyStr Ty.TyStr = Right M.empty
-unify Ty.TyBool Ty.TyBool = Right M.empty
-unify t1 t2 = Left $ solveErr ("cannot unify " ++ show t1 ++ " with " ++ show t2)
+unify :: Loc.Span -> Ty.Type -> Ty.Type -> Solve Subst
+unify sp (Ty.TyVar v) t = bind sp v t
+unify sp t (Ty.TyVar v) = bind sp v t
+unify sp (Ty.TyFun as1 r1) (Ty.TyFun as2 r2) = unifyMany sp (r1:as1) (r2:as2)
+unify sp (Ty.TyCon n1 ts1) (Ty.TyCon n2 ts2)
+  | n1 == n2  = unifyMany sp ts1 ts2
+unify _ Ty.TyInt Ty.TyInt = Right M.empty
+unify _ Ty.TyFlt Ty.TyFlt = Right M.empty
+unify _ Ty.TyStr Ty.TyStr = Right M.empty
+unify _ Ty.TyBool Ty.TyBool = Right M.empty
+unify sp t1 t2 = Left $ TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)
 
-unifyMany :: [Ty.Type] -> [Ty.Type] -> Solve Subst
-unifyMany [] [] = Right M.empty
-unifyMany (t1:ts1) (t2:ts2) = do
-  s1 <- unify t1 t2
-  s2 <- unifyMany (apply s1 ts1) (apply s1 ts2)
+unifyMany :: Loc.Span -> [Ty.Type] -> [Ty.Type] -> Solve Subst
+unifyMany _ [] [] = Right M.empty
+unifyMany sp (t1:ts1) (t2:ts2) = do
+  s1 <- unify sp t1 t2
+  s2 <- unifyMany sp (apply s1 ts1) (apply s1 ts2)
   Right (compose s2 s1)
-unifyMany _ _ = Left $ solveErr "type mismatch: different arities"
+unifyMany sp _ _ = Left $ TypeError sp "type mismatch: different arities"
 
-bind :: TyVar -> Ty.Type -> Solve Subst
-bind tv t
-  | tv `S.member` tvs t = Left $ solveErr ("infinite type " ++ show tv ++ " ~ " ++ show t)
+bind :: Loc.Span -> TyVar -> Ty.Type -> Solve Subst
+bind sp tv t
+  | tv `S.member` tvs t = Left $ TypeError sp ("infinite type " ++ show tv ++ " ~ " ++ show t)
   | otherwise = Right $ M.singleton tv t
 
 solve :: Constraints -> Solve Subst
 solve [] = Right M.empty
-solve (Constraint t1 t2 : cs) = do
-  s1 <- unify t1 t2
+solve (Constraint sp t1 t2 : cs) = do
+  s1 <- unify sp t1 t2
   s2 <- solve (apply s1 cs)
   Right (compose s2 s1)
-
-solveErr :: String -> TypeError
-solveErr msg = TypeError (Loc.Span p p) msg
-  where p = Loc.Pos "" 0 0
