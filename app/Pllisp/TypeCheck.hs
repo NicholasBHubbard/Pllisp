@@ -14,15 +14,18 @@ import qualified Data.Set as S
 
 -- ENTRY POINT
 
-typecheck :: Res.ResolvedCST -> Either TypeError TResolvedCST
-typecheck exprs = do
+typecheck :: Res.ResolvedCST -> Either [TypeError] TResolvedCST
+typecheck exprs =
   let typeDecls = extractTypeDecls exprs
       ctorCtx = buildCtorContext typeDecls
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
       initialCtx = M.union ctorCtx builtInCtx
-  (typed, _, constraints) <- RWS.runRWST (traverse infer exprs) initialCtx 0
-  subst <- solve constraints
-  Right (apply subst typed)
+      (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) initialCtx 0
+  in case solveAll constraints of
+    Left solveErrs -> Left (inferErrs ++ solveErrs)
+    Right subst
+      | null inferErrs -> Right (apply subst typed)
+      | otherwise      -> Left inferErrs
 
 -- TYPES
 
@@ -34,9 +37,11 @@ type Constraints = [Constraint]
 
 type Context = M.Map CST.Symbol Scheme
 
-type Solve a = Either TypeError a
+-- | Output from inference: constraints to solve and errors encountered
+type InferOutput = (Constraints, [TypeError])
 
-type Infer a = RWS.RWST Context Constraints TyVar (Either TypeError) a
+-- | Inference monad that collects errors instead of failing
+type Infer a = RWS.RWS Context InferOutput TyVar a
 
 type TResolvedCST = [TRExpr]
 
@@ -173,7 +178,9 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
       Just scheme -> do
         t <- instantiate scheme
         pure $ Ty.Typed t (TRVar vb)
-      Nothing -> throwTE sp ("Undefined variable " ++ show (Res.symName vb))
+      Nothing -> do
+        t <- recordError sp ("Undefined variable " ++ show (Res.symName vb))
+        pure $ Ty.Typed t (TRVar vb)
   Res.RIf c t e -> do
     ct <- infer c
     tt <- infer t
@@ -218,10 +225,13 @@ fresh :: Infer Ty.Type
 fresh = RWS.state (\n -> (Ty.TyVar n, n+1))
 
 constrain :: Loc.Span -> Ty.Type -> Ty.Type -> Infer ()
-constrain sp t1 t2 = RWS.tell [Constraint sp t1 t2]
+constrain sp t1 t2 = RWS.tell ([Constraint sp t1 t2], [])
 
-throwTE :: Loc.Span -> String -> Infer a
-throwTE sp msg = RWS.lift . Left $ TypeError sp msg
+-- | Record a type error and return a fresh type variable as placeholder
+recordError :: Loc.Span -> String -> Infer Ty.Type
+recordError sp msg = do
+  RWS.tell ([], [TypeError sp msg])
+  fresh
 
 paramType :: CST.TSymbol -> Infer Ty.Type
 paramType tsym = case CST.symType tsym of
@@ -243,7 +253,7 @@ instantiate (Forall vs t) = do
 
 -- UNIFICATION / SOLVING
 
-unify :: Loc.Span -> Ty.Type -> Ty.Type -> Solve Subst
+unify :: Loc.Span -> Ty.Type -> Ty.Type -> Either [TypeError] Subst
 unify sp (Ty.TyVar v) t = bind sp v t
 unify sp t (Ty.TyVar v) = bind sp v t
 unify sp (Ty.TyFun as1 r1) (Ty.TyFun as2 r2) = unifyMany sp (r1:as1) (r2:as2)
@@ -253,24 +263,45 @@ unify _ Ty.TyInt Ty.TyInt = Right M.empty
 unify _ Ty.TyFlt Ty.TyFlt = Right M.empty
 unify _ Ty.TyStr Ty.TyStr = Right M.empty
 unify _ Ty.TyBool Ty.TyBool = Right M.empty
-unify sp t1 t2 = Left $ TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)
+unify sp t1 t2 = Left [TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)]
 
-unifyMany :: Loc.Span -> [Ty.Type] -> [Ty.Type] -> Solve Subst
+-- | Unify multiple type pairs, collecting all errors
+unifyMany :: Loc.Span -> [Ty.Type] -> [Ty.Type] -> Either [TypeError] Subst
 unifyMany _ [] [] = Right M.empty
-unifyMany sp (t1:ts1) (t2:ts2) = do
-  s1 <- unify sp t1 t2
-  s2 <- unifyMany sp (apply s1 ts1) (apply s1 ts2)
-  Right (compose s2 s1)
-unifyMany sp _ _ = Left $ TypeError sp "type mismatch: different arities"
+unifyMany sp (t1:ts1) (t2:ts2) =
+  case unify sp t1 t2 of
+    Left errs1 ->
+      -- Continue unifying rest to collect more errors
+      case unifyMany sp ts1 ts2 of
+        Left errs2 -> Left (errs1 ++ errs2)
+        Right _    -> Left errs1
+    Right s1 ->
+      case unifyMany sp (apply s1 ts1) (apply s1 ts2) of
+        Left errs -> Left errs
+        Right s2  -> Right (compose s2 s1)
+unifyMany sp _ _ = Left [TypeError sp "type mismatch: different arities"]
 
-bind :: Loc.Span -> TyVar -> Ty.Type -> Solve Subst
+bind :: Loc.Span -> TyVar -> Ty.Type -> Either [TypeError] Subst
 bind sp tv t
-  | tv `S.member` tvs t = Left $ TypeError sp ("infinite type " ++ show tv ++ " ~ " ++ show t)
+  | tv `S.member` tvs t = Left [TypeError sp ("infinite type " ++ show tv ++ " ~ " ++ show t)]
   | otherwise = Right $ M.singleton tv t
 
-solve :: Constraints -> Solve Subst
+solve :: Constraints -> Either [TypeError] Subst
 solve [] = Right M.empty
 solve (Constraint sp t1 t2 : cs) = do
   s1 <- unify sp t1 t2
   s2 <- solve (apply s1 cs)
   Right (compose s2 s1)
+
+-- | Solve all constraints, collecting all type errors instead of failing on the first
+solveAll :: Constraints -> Either [TypeError] Subst
+solveAll [] = Right M.empty
+solveAll constraints = go M.empty constraints []
+  where
+    go subst [] errs
+      | null errs = Right subst
+      | otherwise = Left (reverse errs)
+    go subst (Constraint sp t1 t2 : cs) errs =
+      case unify sp (apply subst t1) (apply subst t2) of
+        Left es -> go subst cs (errs ++ es)
+        Right s -> go (compose s subst) cs errs

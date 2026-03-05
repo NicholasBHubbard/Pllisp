@@ -12,8 +12,8 @@ main = do
     Left err -> putStrLn $ "parse error: " ++ show err
     Right cst ->
       case Resolve.resolve cst of
-        Left errs -> putStrLn $ "resolve error: " ++ show errs
+        Left errs -> mapM_ (putStrLn . ("resolve error: " ++) . Resolve.errMsg) errs
         Right resolved ->
           case TC.typecheck resolved of
-            Left err -> putStrLn $ "type error: " ++ TC.teMsg err
+            Left errs -> mapM_ (putStrLn . ("type error: " ++) . TC.teMsg) errs
             Right typed -> print typed

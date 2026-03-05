@@ -7,6 +7,7 @@ import qualified Pllisp.CST as CST
 import qualified Pllisp.SrcLoc as Loc
 import qualified Pllisp.Type as Ty
 
+import qualified Control.Monad.RWS as RWS
 import qualified Data.Set as S
 
 -- CORE
@@ -38,11 +39,17 @@ data ResolveError = ResolveError
   , errMsg  :: String
   } deriving (Eq, Show)
 
+-- | Resolve monad: Reader for scope, Writer for errors
+type Resolve a = RWS.RWS ResolveScope [ResolveError] () a
+
 resolve :: CST.CST -> Either [ResolveError] ResolvedCST
 resolve cst =
   let ctorNames = S.fromList (extractCtorNames cst)
       initialScope = [S.union BuiltIn.builtInNames ctorNames]
-  in traverse (resolveExpr initialScope) cst
+      (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) initialScope ()
+  in if null errors
+     then Right result
+     else Left errors
 
 extractCtorNames :: CST.CST -> [CST.Symbol]
 extractCtorNames = concatMap go
@@ -50,46 +57,58 @@ extractCtorNames = concatMap go
     go (Loc.Located _ (CST.ExprType _ _ ctors)) = map CST.dcName ctors
     go _ = []
 
-resolveExpr :: ResolveScope -> CST.Expr -> Either [ResolveError] RExpr
-resolveExpr sc (Loc.Located sp expr) = Loc.Located sp <$> case expr of
-  CST.ExprLit l  -> Right (RLit l)
-  CST.ExprBool b -> Right (RBool b)
+resolveExpr :: CST.Expr -> Resolve RExpr
+resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
+  CST.ExprLit l  -> pure (RLit l)
+  CST.ExprBool b -> pure (RBool b)
   CST.ExprSym sym -> do
-    rvar <- resolveSym sc sym sp
+    rvar <- resolveSym sym sp
     pure $ RVar rvar
-  CST.ExprIf c t f -> RIf <$> resolveExpr sc c <*> resolveExpr sc t <*> resolveExpr sc f
+  CST.ExprIf c t f -> RIf <$> resolveExpr c <*> resolveExpr t <*> resolveExpr f
   CST.ExprApp fun args -> do
-    rfun <- resolveExpr sc fun
-    rargs <- traverse (resolveExpr sc) args
+    rfun <- resolveExpr fun
+    rargs <- traverse resolveExpr args
     pure $ RApp rfun rargs
   CST.ExprLam params mRet body -> do
     dupCheck "duplicate lambda parameter" (map CST.symName params) sp
-    rbody <- resolveExpr (S.fromList (map CST.symName params) : sc) body
+    let newScope = S.fromList (map CST.symName params)
+    rbody <- RWS.local (newScope :) (resolveExpr body)
     pure $ RLam params mRet rbody
   CST.ExprLet binds body -> do
     let symNames = map (CST.symName . fst) binds
-        sc' = S.fromList symNames : sc  -- bindings in scope for RHS (recursive)
+        newScope = S.fromList symNames
     dupCheck "duplicate let binding" symNames sp
-    rbinds <- traverse (\(v, rhs) -> do; rrhs <- resolveExpr sc' rhs; pure (v, rrhs)) binds
-    rbody <- resolveExpr sc' body
+    rbinds <- RWS.local (newScope :) $
+      traverse (\(v, rhs) -> (\r -> (v, r)) <$> resolveExpr rhs) binds
+    rbody <- RWS.local (newScope :) (resolveExpr body)
     pure (RLet rbinds rbody)
   CST.ExprType name params ctors -> do
     dupCheck "duplicate type parameter" params sp
     dupCheck "duplicate data constructor" (map CST.dcName ctors) sp
     pure (RType name params ctors)
 
-resolveSym :: ResolveScope -> CST.Symbol -> Loc.Span -> Either [ResolveError] VarBinding
-resolveSym sc sym sp = go 0 sc
-  where go _ [] = Left [ResolveError { errSpan = sp , errMsg = "symbol not in scope: " ++ show sym}]
-        go n (f:fs)
-          | S.member sym f = Right $ VarBinding n sym
-          | otherwise      = go (n+1) fs
+resolveSym :: CST.Symbol -> Loc.Span -> Resolve VarBinding
+resolveSym sym sp = do
+  sc <- RWS.ask
+  case lookupSym 0 sc of
+    Just binding -> pure binding
+    Nothing -> do
+      recordError sp ("symbol not in scope: " ++ show sym)
+      pure $ VarBinding (-1) sym  -- placeholder for unresolved symbol
+  where
+    lookupSym _ [] = Nothing
+    lookupSym n (f:fs)
+      | S.member sym f = Just $ VarBinding n sym
+      | otherwise      = lookupSym (n+1) fs
+
+recordError :: Loc.Span -> String -> Resolve ()
+recordError sp msg = RWS.tell [ResolveError sp msg]
 
 -- HELPERS
 
-dupCheck :: String -> [CST.Symbol] -> Loc.Span -> Either [ResolveError] ()
-dupCheck errMsg syms sp =
+dupCheck :: String -> [CST.Symbol] -> Loc.Span -> Resolve ()
+dupCheck msg syms sp =
   let syms' = S.fromList syms
-  in if S.size syms' == length syms
-     then Right ()
-     else Left [ResolveError sp errMsg]
+  in if S.size syms' /= length syms
+     then recordError sp msg
+     else pure ()
