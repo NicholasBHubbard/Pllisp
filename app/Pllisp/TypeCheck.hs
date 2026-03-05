@@ -12,6 +12,18 @@ import qualified Control.Monad.RWS as RWS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
+-- ENTRY POINT
+
+typecheck :: Res.ResolvedCST -> Either TypeError TResolvedCST
+typecheck exprs = do
+  let typeDecls = extractTypeDecls exprs
+      ctorCtx = buildCtorContext typeDecls
+      builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
+      initialCtx = M.union ctorCtx builtInCtx
+  (typed, _, constraints) <- RWS.runRWST (traverse infer exprs) initialCtx 0
+  subst <- solve constraints
+  Right (apply subst typed)
+
 -- TYPES
 
 type TyVar = Integer
@@ -108,18 +120,6 @@ instance Substitutable TRExprF where
 
 compose :: Subst -> Subst -> Subst
 compose a b = M.map (apply a) (b `M.union` a)
-
--- ENTRY POINT
-
-typecheck :: Res.ResolvedCST -> Either TypeError TResolvedCST
-typecheck exprs = do
-  let typeDecls = extractTypeDecls exprs
-      ctorCtx = buildCtorContext typeDecls
-      builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
-      initialCtx = M.union ctorCtx builtInCtx
-  (typed, _, constraints) <- RWS.runRWST (traverse infer exprs) initialCtx 0
-  subst <- solve constraints
-  Right (apply subst typed)
 
 -- CONTEXT BUILDING
 
