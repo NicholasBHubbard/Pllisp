@@ -24,20 +24,17 @@ typecheck exprs = do
   subst <- solve constraints
   Right (apply subst typed)
 
--- Extract TYPE declarations from resolved expressions
 extractTypeDecls :: [Res.RExpr] -> [(CST.Symbol, [CST.Symbol], [CST.DataCon])]
 extractTypeDecls = foldr go []
   where
     go (Loc.Located _ (Res.RType name params ctors)) acc = (name, params, ctors) : acc
     go _ acc = acc
 
--- Build context with constructor types
 buildCtorContext :: [(CST.Symbol, [CST.Symbol], [CST.DataCon])] -> Context
 buildCtorContext = M.fromList . concatMap buildCtors
   where
     buildCtors (typeName, params, ctors) =
-      let -- Map param names to TyVar indices: a -> 0, b -> 1, etc.
-          paramMap = M.fromList (zip params [0..])
+      let paramMap = M.fromList (zip params [0..])
           paramTyVars = map Ty.TyVar [0 .. fromIntegral (length params - 1)]
           resultTy = Ty.TyCon typeName paramTyVars
           paramSet = S.fromList [0 .. fromIntegral (length params - 1)]
@@ -51,7 +48,6 @@ buildCtorContext = M.fromList . concatMap buildCtors
           scheme = Forall paramSet ctorTy
       in (ctorName, scheme)
 
-    -- Convert TyCon "A" [] to TyVar if "A" is a type parameter
     resolveTypeParams paramMap ty = case ty of
       Ty.TyCon name [] -> case M.lookup name paramMap of
         Just idx -> Ty.TyVar idx

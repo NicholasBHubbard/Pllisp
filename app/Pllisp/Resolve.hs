@@ -44,7 +44,6 @@ resolve cst =
       initialScope = [S.union BuiltIn.builtInNames ctorNames]
   in traverse (resolveExpr initialScope) cst
 
--- Extract constructor names from TYPE declarations
 extractCtorNames :: CST.CST -> [CST.Symbol]
 extractCtorNames = concatMap go
   where
