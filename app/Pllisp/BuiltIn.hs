@@ -49,6 +49,8 @@ builtInTypes = M.fromList
   -- String
   , ("CONCAT", Ty.TyFun [Ty.TyStr, Ty.TyStr] Ty.TyStr)
   , ("STRLEN", Ty.TyFun [Ty.TyStr] Ty.TyInt)
+  -- IO
+  , ("PRINT" Ty.TyFun [Ty.Str])
   -- Conversion
   , ("INT-TO-FLT", Ty.TyFun [Ty.TyInt] Ty.TyFlt)
   , ("FLT-TO-INT", Ty.TyFun [Ty.TyFlt] Ty.TyInt)
