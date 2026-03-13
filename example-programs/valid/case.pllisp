@@ -1,0 +1,14 @@
+(type Maybe (a)
+  (Nothing)
+  (Just a))
+
+# Basic constructor pattern matching
+(case (Just 42)
+  ((Nothing) 0)
+  ((Just x) x))
+
+# Deep / nested pattern matching
+(case (Just (Just 1))
+  ((Nothing) 0)
+  ((Just (Nothing)) 0)
+  ((Just (Just x)) x))

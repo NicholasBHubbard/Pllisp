@@ -22,8 +22,8 @@ import qualified Text.Megaparsec.Char.Lexer as MP.C.L
 
 type Parser = MP.Parsec Void T.Text
 
-parseProgram :: T.Text -> Either (MP.ParseErrorBundle T.Text Void) CST.CST
-parseProgram = MP.parse programParser ""
+parseProgram :: FilePath -> T.Text -> Either (MP.ParseErrorBundle T.Text Void) CST.CST
+parseProgram fp = MP.parse programParser fp
 
 programParser :: Parser CST.CST
 programParser = MP.label "program" $ sc *> MP.many exprParser <* MP.eof
@@ -34,6 +34,7 @@ exprParser = MP.label "expression" $ located $ MP.choice
   , exprLetParser
   , exprIfParser
   , exprTypeParser
+  , exprCaseParser
   , exprAppParser
   , exprBoolParser
   , exprLitParser
@@ -77,6 +78,21 @@ exprTypeParser = MP.label "type" $ MP.try $ parens $ do
   params <- parens (MP.many symbolParser)
   ctors <- MP.many dataConParser
   pure $ CST.ExprType name params ctors
+
+exprCaseParser :: Parser CST.ExprF
+exprCaseParser = MP.label "case" $ MP.try $ parens $ do
+  _ <- ident' "CASE"
+  scrutinee <- exprParser
+  arms <- MP.many $ parens $ (,) <$> patternParser <*> exprParser
+  pure $ CST.ExprCase scrutinee arms
+
+patternParser :: Parser CST.Pattern
+patternParser = MP.label "pattern" $ MP.choice
+  [ MP.try $ parens $ CST.PatCon <$> symbolParser <*> MP.many patternParser
+  , CST.PatBool <$> boolParser
+  , CST.PatLit  <$> litParser
+  , fmap (\s -> if s == "_" then CST.PatWild else CST.PatVar s) symbolParser
+  ]
 
 dataConParser :: Parser CST.DataCon
 dataConParser = MP.label "data constructor" $ parens $ do
@@ -154,7 +170,7 @@ litParser = MP.label "literal value" $ lexeme $ MP.choice
 -- HELPERS
 
 keywords :: [T.Text]
-keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "TYPE"]
+keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "TYPE", "CASE"]
 
 ident :: Parser T.Text
 ident = MP.label "identifier" $ lexeme $ do

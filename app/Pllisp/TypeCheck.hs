@@ -65,6 +65,15 @@ data TRExprF
   | TRIf   TRExpr TRExpr TRExpr
   | TRApp  TRExpr [TRExpr]
   | TRType CST.Symbol [CST.Symbol] [CST.DataCon]
+  | TRCase TRExpr [(TRPattern, TRExpr)]
+  deriving (Eq, Show)
+
+data TRPattern
+  = TRPatLit  CST.Literal
+  | TRPatBool Bool
+  | TRPatVar  CST.Symbol Ty.Type
+  | TRPatWild Ty.Type
+  | TRPatCon  CST.Symbol Ty.Type [TRPattern]
   deriving (Eq, Show)
 
 -- SUBSTITUTION
@@ -104,6 +113,19 @@ instance Substitutable a => Substitutable (Ty.Typed a) where
   tvs (Ty.Typed t a) = tvs t `S.union` tvs a
   apply s (Ty.Typed t a) = Ty.Typed (apply s t) (apply s a)
 
+instance Substitutable TRPattern where
+  tvs (TRPatLit _)       = S.empty
+  tvs (TRPatBool _)      = S.empty
+  tvs (TRPatVar _ t)     = tvs t
+  tvs (TRPatWild t)      = tvs t
+  tvs (TRPatCon _ t ps)  = tvs t `S.union` foldr (S.union . tvs) S.empty ps
+
+  apply _ (TRPatLit l)      = TRPatLit l
+  apply _ (TRPatBool b)     = TRPatBool b
+  apply s (TRPatVar n t)    = TRPatVar n (apply s t)
+  apply s (TRPatWild t)     = TRPatWild (apply s t)
+  apply s (TRPatCon c t ps) = TRPatCon c (apply s t) (map (apply s) ps)
+
 instance Substitutable TRExprF where
   tvs (TRLit _) = S.empty
   tvs (TRBool _) = S.empty
@@ -113,6 +135,7 @@ instance Substitutable TRExprF where
   tvs (TRIf c t e) = tvs c `S.union` tvs t `S.union` tvs e
   tvs (TRApp f as) = tvs f `S.union` tvs as
   tvs (TRType _ _ _) = S.empty
+  tvs (TRCase scr arms) = tvs scr `S.union` foldr S.union S.empty [tvs p `S.union` tvs e | (p, e) <- arms]
 
   apply _ (TRLit l) = TRLit l
   apply _ (TRBool b) = TRBool b
@@ -122,6 +145,7 @@ instance Substitutable TRExprF where
   apply s (TRIf c t e) = TRIf (apply s c) (apply s t) (apply s e)
   apply s (TRApp f as) = TRApp (apply s f) (apply s as)
   apply _ (TRType n ps cs) = TRType n ps cs
+  apply s (TRCase scr arms) = TRCase (apply s scr) [(apply s p, apply s e) | (p, e) <- arms]
 
 compose :: Subst -> Subst -> Subst
 compose a b = M.map (apply a) (b `M.union` a)
@@ -218,6 +242,18 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   Res.RType name params ctors ->
     -- Constructors are registered in context by typecheck, just pass through here
     pure $ Ty.Typed (Ty.TyCon name []) (TRType name params ctors)
+  Res.RCase scrutinee arms -> do
+    scrutExpr <- infer scrutinee
+    let scrutTy = typeOf scrutExpr
+    resultTy <- fresh
+    rarms <- traverse (inferArm scrutTy resultTy) arms
+    pure $ Ty.Typed resultTy (TRCase scrutExpr rarms)
+    where
+      inferArm scrutTy resultTy (pat, body) = do
+        (rpat, bindings) <- inferPattern scrutTy pat sp
+        bodyExpr <- RWS.local (M.union (M.fromList bindings)) (infer body)
+        constrain sp (typeOf bodyExpr) resultTy
+        pure (rpat, bodyExpr)
 
 -- Inference helpers
 
@@ -250,6 +286,42 @@ instantiate (Forall vs t) = do
   ftvs <- traverse (const fresh) vars
   let subst = M.fromList (zip vars ftvs)
   return $ apply subst t
+
+inferPattern :: Ty.Type -> Res.RPattern -> Loc.Span -> Infer (TRPattern, [(CST.Symbol, Scheme)])
+inferPattern ty pat sp = case pat of
+  Res.RPatLit l -> do
+    let litTy = case l of
+          CST.LitInt _ -> Ty.TyInt
+          CST.LitFlt _ -> Ty.TyFlt
+          CST.LitStr _ -> Ty.TyStr
+    constrain sp ty litTy
+    pure (TRPatLit l, [])
+  Res.RPatBool b -> do
+    constrain sp ty Ty.TyBool
+    pure (TRPatBool b, [])
+  Res.RPatWild ->
+    pure (TRPatWild ty, [])
+  Res.RPatVar s ->
+    pure (TRPatVar s ty, [(s, Forall S.empty ty)])
+  Res.RPatCon ctor subpats -> do
+    ctx <- RWS.ask
+    ctorTy <- case M.lookup ctor ctx of
+      Just scheme -> instantiate scheme
+      Nothing     -> recordError sp ("Unknown constructor in pattern: " ++ show ctor)
+    let (argTys, resultTy) = case ctorTy of
+          Ty.TyFun as r -> (as, r)
+          t             -> ([], t)
+    constrain sp ty resultTy
+    if length argTys /= length subpats
+      then do
+        _ <- recordError sp ("Constructor arity mismatch: " ++ show ctor)
+        pure (TRPatCon ctor ty [], [])
+      else do
+        (rpats, bindingss) <- unzip <$> zipWithM (\argTy p -> inferPattern argTy p sp) argTys subpats
+        pure (TRPatCon ctor ty rpats, concat bindingss)
+
+zipWithM :: Monad m => (a -> b -> m c) -> [a] -> [b] -> m [c]
+zipWithM f xs ys = sequence (zipWith f xs ys)
 
 -- UNIFICATION / SOLVING
 

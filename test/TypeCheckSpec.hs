@@ -33,7 +33,7 @@ spec = do
 
 -- Helper to parse, resolve, and typecheck
 parseAndTypecheck :: T.Text -> Either [TC.TypeError] TC.TResolvedCST
-parseAndTypecheck src = case Parser.parseProgram src of
+parseAndTypecheck src = case Parser.parseProgram "<test>" src of
   Left _ -> error "parse error in test"
   Right cst -> case Resolve.resolve cst of
     Left _ -> error "resolve error in test"

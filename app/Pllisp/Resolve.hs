@@ -32,6 +32,15 @@ data RExprF
   | RIf   RExpr RExpr RExpr
   | RApp  RExpr [RExpr]
   | RType CST.Symbol [CST.Symbol] [CST.DataCon]
+  | RCase RExpr [(RPattern, RExpr)]
+  deriving (Eq, Show)
+
+data RPattern
+  = RPatLit  CST.Literal
+  | RPatBool Bool
+  | RPatVar  CST.Symbol
+  | RPatWild
+  | RPatCon  CST.Symbol [RPattern]
   deriving (Eq, Show)
 
 data ResolveError = ResolveError
@@ -86,6 +95,17 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     dupCheck "duplicate type parameter" params sp
     dupCheck "duplicate data constructor" (map CST.dcName ctors) sp
     pure (RType name params ctors)
+  CST.ExprCase scrutinee arms -> do
+    rscrutinee <- resolveExpr scrutinee
+    rarms <- traverse (resolveArm sp) arms
+    pure $ RCase rscrutinee rarms
+    where
+      resolveArm armSp (pat, body) = do
+        (rpat, boundVars) <- resolvePattern pat armSp
+        dupCheck "duplicate pattern variable" boundVars armSp
+        let newScope = S.fromList boundVars
+        rbody <- RWS.local (newScope :) (resolveExpr body)
+        pure (rpat, rbody)
 
 resolveSym :: CST.Symbol -> Loc.Span -> Resolve VarBinding
 resolveSym sym sp = do
@@ -103,6 +123,17 @@ resolveSym sym sp = do
 
 recordError :: Loc.Span -> String -> Resolve ()
 recordError sp msg = RWS.tell [ResolveError sp msg]
+
+resolvePattern :: CST.Pattern -> Loc.Span -> Resolve (RPattern, [CST.Symbol])
+resolvePattern pat sp = case pat of
+  CST.PatLit l    -> pure (RPatLit l, [])
+  CST.PatBool b   -> pure (RPatBool b, [])
+  CST.PatWild     -> pure (RPatWild, [])
+  CST.PatVar s    -> pure (RPatVar s, [s])
+  CST.PatCon ctor subpats -> do
+    _ <- resolveSym ctor sp
+    (rpats, varss) <- unzip <$> traverse (\p -> resolvePattern p sp) subpats
+    pure (RPatCon ctor rpats, concat varss)
 
 -- HELPERS
 

@@ -29,6 +29,6 @@ spec = do
 
 -- Helper to parse and resolve
 parseAndResolve :: T.Text -> Either [Resolve.ResolveError] Resolve.ResolvedCST
-parseAndResolve src = case Parser.parseProgram src of
+parseAndResolve src = case Parser.parseProgram "<test>" src of
   Left _    -> error "parse error in test"
   Right cst -> Resolve.resolve cst

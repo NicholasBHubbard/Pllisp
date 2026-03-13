@@ -35,6 +35,15 @@ data ExprF
   | ExprBool Bool
   | ExprLit Literal
   | ExprType Symbol [Symbol] [DataCon]  -- (TYPE Name (params...) (Ctor args...)...)
+  | ExprCase Expr [(Pattern, Expr)]     -- (CASE scrutinee (pat body)...)
+  deriving (Eq, Show)
+
+data Pattern
+  = PatLit  Literal
+  | PatBool Bool
+  | PatVar  Symbol        -- variable capture
+  | PatWild               -- _ wildcard
+  | PatCon  Symbol [Pattern]  -- (CtorName subpat1 subpat2...)
   deriving (Eq, Show)
 
 data DataCon = DataCon
