@@ -1,0 +1,7 @@
+(type Maybe (a)
+  (Nothing)
+  (Just a))
+
+(let ((x (Just (Just 1))))
+  (case x
+    ((Just (Nothing)) 0)))

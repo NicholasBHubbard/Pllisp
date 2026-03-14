@@ -1,0 +1,2 @@
+# If condition is not Bool
+(if 42 1 2)

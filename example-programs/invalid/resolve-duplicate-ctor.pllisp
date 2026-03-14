@@ -1,0 +1,4 @@
+# Duplicate data constructor
+(type Foo ()
+  (Bar)
+  (Bar))

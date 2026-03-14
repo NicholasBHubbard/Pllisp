@@ -1,0 +1,39 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module BuiltInSpec (spec) where
+
+import Test.Hspec
+
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+
+import qualified Pllisp.BuiltIn as BuiltIn
+import qualified Pllisp.Type as Ty
+
+spec :: Spec
+spec = do
+  describe "builtInNames" $ do
+    it "has 25 entries" $
+      S.size BuiltIn.builtInNames `shouldBe` 25
+
+    it "contains ADD, NOT, PRINT, FLT-TO-STR" $ do
+      S.member "ADD"      BuiltIn.builtInNames `shouldBe` True
+      S.member "NOT"      BuiltIn.builtInNames `shouldBe` True
+      S.member "PRINT"    BuiltIn.builtInNames `shouldBe` True
+      S.member "FLT-TO-STR" BuiltIn.builtInNames `shouldBe` True
+
+  describe "builtInTypes" $ do
+    it "ADD :: Int -> Int -> Int" $
+      M.lookup "ADD" BuiltIn.builtInTypes
+        `shouldBe` Just (Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyInt)
+
+    it "NEG :: Int -> Int" $
+      M.lookup "NEG" BuiltIn.builtInTypes
+        `shouldBe` Just (Ty.TyFun [Ty.TyInt] Ty.TyInt)
+
+  describe "builtInSchemes" $ do
+    it "maps each name to (empty forall, type)" $ do
+      let check name = case M.lookup name BuiltIn.builtInSchemes of
+            Nothing     -> expectationFailure ("missing: " ++ show name)
+            Just (vs, _) -> S.null vs `shouldBe` True
+      mapM_ check (S.toList BuiltIn.builtInNames)

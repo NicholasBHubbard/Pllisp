@@ -97,8 +97,15 @@ test-suite pllisp-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test, app
     main-is:          Spec.hs
-    other-modules:    ResolveSpec,
+    ghc-options:      -fhpc
+    other-modules:    BuiltInSpec,
+                      ErrorSpec,
+                      ExhaustSpec,
+                      ParserSpec,
+                      PropSpec,
+                      ResolveSpec,
                       TypeCheckSpec,
+                      TypeSpec,
                       Pllisp.BuiltIn,
                       Pllisp.CST,
                       Pllisp.Error,
@@ -113,5 +120,6 @@ test-suite pllisp-test
                       megaparsec ^>=9.7.0,
                       mtl        ^>=2.3.2,
                       text       ^>=2.1.2,
-                      hspec      ^>=2.11
+                      hspec      ^>=2.11,
+                      QuickCheck ^>=2.15
     default-language: Haskell2010

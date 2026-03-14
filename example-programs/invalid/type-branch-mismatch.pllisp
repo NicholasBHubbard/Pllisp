@@ -1,0 +1,2 @@
+# If branches return different types
+(if true 1 "string")

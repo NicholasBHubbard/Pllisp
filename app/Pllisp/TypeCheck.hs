@@ -50,11 +50,12 @@ type TRExpr = Loc.Located (Ty.Typed TRExprF)
 data Scheme = Forall (S.Set TyVar) Ty.Type
 
 data Constraint = Constraint Loc.Span Ty.Type Ty.Type
+  deriving (Eq, Show)
 
 data TypeError = TypeError
   { teSpan :: Loc.Span
   , teMsg  :: String
-  }
+  } deriving (Eq, Show)
 
 data TRExprF
   = TRLit  CST.Literal
