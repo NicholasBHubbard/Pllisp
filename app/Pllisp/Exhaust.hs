@@ -38,6 +38,7 @@ checkExpr :: CtorEnv -> TC.TRExpr -> [ExhaustError]
 checkExpr env (Loc.Located sp (Ty.Typed _ expr)) = case expr of
   TC.TRLit _       -> []
   TC.TRBool _      -> []
+  TC.TRUnit        -> []
   TC.TRVar _       -> []
   TC.TRType _ _ _  -> []
   TC.TRLam _ _ body ->

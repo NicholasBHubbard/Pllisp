@@ -21,6 +21,9 @@ spec = do
     it "TyBool" $
       Ty.renderType Ty.TyBool `shouldBe` "%BOOL"
 
+    it "TyUnit" $
+      Ty.renderType Ty.TyUnit `shouldBe` "%UNIT"
+
     it "TyFun 1 arg" $
       Ty.renderType (Ty.TyFun [Ty.TyInt] Ty.TyBool) `shouldBe` "%(%INT -> %BOOL)"
 

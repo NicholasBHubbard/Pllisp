@@ -88,6 +88,16 @@ spec = do
         Left errs -> expectationFailure (show (map TC.teMsg errs))
         Right typed -> topType typed `shouldBe` Ty.TyBool
 
+    it "typechecks unit" $ do
+      case parseAndTypecheck "unit" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyUnit
+
+    it "typechecks PRINT as STR -> UNIT" $ do
+      case parseAndTypecheck "(print \"hello\")" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyUnit
+
     it "typechecks let bindings" $ do
       case parseAndTypecheck "(let ((x 42)) x)" of
         Left errs -> expectationFailure (show (map TC.teMsg errs))
@@ -146,6 +156,9 @@ spec = do
 
     it "unify TyBool with TyBool" $ do
       TC.unify dummySpan Ty.TyBool Ty.TyBool `shouldBe` Right M.empty
+
+    it "unify TyUnit with TyUnit" $ do
+      TC.unify dummySpan Ty.TyUnit Ty.TyUnit `shouldBe` Right M.empty
 
     it "unify TyFun recursive" $ do
       let sp = dummySpan

@@ -36,6 +36,7 @@ exprParser = MP.label "expression" $ located $ MP.choice
   , exprTypeParser
   , exprCaseParser
   , exprAppParser
+  , exprUnitParser
   , exprBoolParser
   , exprLitParser
   , exprSymParser
@@ -118,6 +119,7 @@ typeParserBody = MP.choice
       "FLT"  -> pure Ty.TyFlt
       "STR"  -> pure Ty.TyStr
       "BOOL" -> pure Ty.TyBool
+      "UNIT" -> pure Ty.TyUnit
       other  -> pure (Ty.TyCon other [])
   ]
 
@@ -126,6 +128,13 @@ exprSymParser = MP.label "symbol" $ CST.ExprSym <$> symbolParser
 
 exprBoolParser :: Parser CST.ExprF
 exprBoolParser = MP.label "boolean" $ CST.ExprBool <$> boolParser
+
+exprUnitParser :: Parser CST.ExprF
+exprUnitParser = MP.label "unit" $ do
+  s <- MP.lookAhead ident
+  case s of
+    "UNIT" -> ident *> pure CST.ExprUnit
+    _      -> fail "unit"
 
 exprLitParser :: Parser CST.ExprF
 exprLitParser = MP.label "literal" $ CST.ExprLit <$> litParser
@@ -149,6 +158,7 @@ typeParser = MP.C.char '%' *> (ident >>= \t -> case t of
   "FLT"  -> pure Ty.TyFlt
   "STR"  -> pure Ty.TyStr
   "BOOL" -> pure Ty.TyBool
+  "UNIT" -> pure Ty.TyUnit
   other  -> pure (Ty.TyCon other [])
   )
 
@@ -170,7 +180,7 @@ litParser = MP.label "literal value" $ lexeme $ MP.choice
 -- HELPERS
 
 keywords :: [T.Text]
-keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "TYPE", "CASE"]
+keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE"]
 
 ident :: Parser T.Text
 ident = MP.label "identifier" $ lexeme $ do

@@ -100,6 +100,10 @@ spec = do
       r <- either fail pure $ parseOne "false"
       r `shouldBe` CST.ExprBool False
 
+    it "unit" $ do
+      r <- either fail pure $ parseOne "unit"
+      r `shouldBe` CST.ExprUnit
+
     it "int literal" $ do
       r <- either fail pure $ parseOne "42"
       r `shouldBe` CST.ExprLit (CST.LitInt 42)
@@ -206,6 +210,18 @@ spec = do
       r <- either fail pure $ parseOne "(lam ((x %BOOL)) x)"
       case r of
         CST.ExprLam [CST.TSymbol _ (Just Ty.TyBool)] _ _ -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "%UNIT in lambda param" $ do
+      r <- either fail pure $ parseOne "(lam ((x %UNIT)) x)"
+      case r of
+        CST.ExprLam [CST.TSymbol _ (Just Ty.TyUnit)] _ _ -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "%UNIT as return type" $ do
+      r <- either fail pure $ parseOne "(lam (x) %UNIT x)"
+      case r of
+        CST.ExprLam _ (Just Ty.TyUnit) _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "%Maybe (bare TyCon) in lambda return type" $ do

@@ -33,6 +33,7 @@ data ExprF
   | ExprIf Expr Expr Expr
   | ExprSym Symbol
   | ExprBool Bool
+  | ExprUnit
   | ExprLit Literal
   | ExprType Symbol [Symbol] [DataCon]  -- (TYPE Name (params...) (Ctor args...)...)
   | ExprCase Expr [(Pattern, Expr)]     -- (CASE scrutinee (pat body)...)

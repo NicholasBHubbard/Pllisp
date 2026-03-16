@@ -60,6 +60,7 @@ data TypeError = TypeError
 data TRExprF
   = TRLit  CST.Literal
   | TRBool Bool
+  | TRUnit
   | TRVar  Res.VarBinding
   | TRLam  [(CST.Symbol, Ty.Type)] Ty.Type TRExpr
   | TRLet  [(CST.Symbol, Ty.Type, TRExpr)] TRExpr
@@ -130,6 +131,7 @@ instance Substitutable TRPattern where
 instance Substitutable TRExprF where
   tvs (TRLit _) = S.empty
   tvs (TRBool _) = S.empty
+  tvs TRUnit = S.empty
   tvs (TRVar _) = S.empty
   tvs (TRLam params retTy body) = tvs (map snd params) `S.union` tvs retTy `S.union` tvs body
   tvs (TRLet binds body) = foldr S.union S.empty [tvs t `S.union` tvs e | (_, t, e) <- binds] `S.union` tvs body
@@ -140,6 +142,7 @@ instance Substitutable TRExprF where
 
   apply _ (TRLit l) = TRLit l
   apply _ (TRBool b) = TRBool b
+  apply _ TRUnit = TRUnit
   apply _ (TRVar v) = TRVar v
   apply s (TRLam params retTy body) = TRLam [(n, apply s t) | (n, t) <- params] (apply s retTy) (apply s body)
   apply s (TRLet binds body) = TRLet [(n, apply s t, apply s e) | (n, t, e) <- binds] (apply s body)
@@ -197,6 +200,8 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ Ty.Typed Ty.TyStr (TRLit l)
   Res.RBool b ->
     pure $ Ty.Typed Ty.TyBool (TRBool b)
+  Res.RUnit ->
+    pure $ Ty.Typed Ty.TyUnit TRUnit
   Res.RVar vb -> do
     ctx <- RWS.ask
     case M.lookup (Res.symName vb) ctx of
@@ -336,6 +341,7 @@ unify _ Ty.TyInt Ty.TyInt = Right M.empty
 unify _ Ty.TyFlt Ty.TyFlt = Right M.empty
 unify _ Ty.TyStr Ty.TyStr = Right M.empty
 unify _ Ty.TyBool Ty.TyBool = Right M.empty
+unify _ Ty.TyUnit Ty.TyUnit = Right M.empty
 unify sp t1 t2 = Left [TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)]
 
 -- | Unify multiple type pairs, collecting all errors

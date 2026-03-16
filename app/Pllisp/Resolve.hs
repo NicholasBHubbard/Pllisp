@@ -26,6 +26,7 @@ data VarBinding = VarBinding
 data RExprF
   = RLit  CST.Literal
   | RBool Bool
+  | RUnit
   | RVar  VarBinding
   | RLam  [CST.TSymbol] (Maybe Ty.Type) RExpr
   | RLet  [(CST.TSymbol, RExpr)] RExpr
@@ -70,6 +71,7 @@ resolveExpr :: CST.Expr -> Resolve RExpr
 resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   CST.ExprLit l  -> pure (RLit l)
   CST.ExprBool b -> pure (RBool b)
+  CST.ExprUnit   -> pure RUnit
   CST.ExprSym sym -> do
     rvar <- resolveSym sym sp
     pure $ RVar rvar
