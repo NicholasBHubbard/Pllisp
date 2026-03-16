@@ -68,6 +68,21 @@ spec = do
         Left errs -> expectationFailure (show (map TC.teMsg errs))
         Right typed -> topType typed `shouldBe` Ty.TyFlt
 
+    it "typechecks float comparison (EQF)" $ do
+      case parseAndTypecheck "(eqf 1.0 2.0)" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyBool
+
+    it "typechecks float comparison (LTF)" $ do
+      case parseAndTypecheck "(ltf 1.0 2.0)" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyBool
+
+    it "rejects int where float expected in EQF" $ do
+      case parseAndTypecheck "(eqf 1 2.0)" of
+        Right _ -> expectationFailure "expected type error"
+        Left errs -> length errs `shouldSatisfy` (>= 1)
+
     it "typechecks int literal" $ do
       case parseAndTypecheck "42" of
         Left errs -> expectationFailure (show (map TC.teMsg errs))
