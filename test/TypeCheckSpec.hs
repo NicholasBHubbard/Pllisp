@@ -103,6 +103,16 @@ spec = do
         Left errs -> expectationFailure (show (map TC.teMsg errs))
         Right typed -> topType typed `shouldBe` Ty.TyInt
 
+    it "let binding of applied function infers correct type (not over-generalized)" $ do
+      case parseAndTypecheck "(let ((x (add 1 2))) x)" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyInt
+
+    it "let binding of IO result infers unit" $ do
+      case parseAndTypecheck "(let ((x (print \"hello\"))) x)" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyUnit
+
     it "typechecks if expressions" $ do
       case parseAndTypecheck "(if true 1 2)" of
         Left errs -> expectationFailure (show (map TC.teMsg errs))

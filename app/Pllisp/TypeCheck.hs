@@ -238,9 +238,16 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     freshTys <- traverse (const fresh) names
     let monoSchemes = map (Forall S.empty) freshTys
         recCtx = M.union (M.fromList (zip names monoSchemes)) ctx
-    rhsExprs <- traverse (\(_, rhs) -> RWS.local (const recCtx) (infer rhs)) binds
+    (rhsExprs, (rhsConstraints, _)) <- RWS.listen $
+      traverse (\(_, rhs) -> RWS.local (const recCtx) (infer rhs)) binds
     sequence_ $ zipWith (constrain sp) freshTys (map typeOf rhsExprs)
-    let generalizedSchemes = map (generalize ctx . typeOf) rhsExprs
+    -- Solve RHS constraints eagerly so generalization uses concrete types,
+    -- not raw inference variables (fixes over-generalization of applied fns).
+    let eagerConstraints = rhsConstraints ++ zipWith (Constraint sp) freshTys (map typeOf rhsExprs)
+        concreteFreshTys  = case solveAll eagerConstraints of
+                              Right subst -> map (apply subst) freshTys
+                              Left _      -> map typeOf rhsExprs
+        generalizedSchemes = map (generalize ctx) concreteFreshTys
         bodyCtx = M.union (M.fromList (zip names generalizedSchemes)) ctx
     bodyExpr <- RWS.local (const bodyCtx) (infer body)
     let typedBinds = zip3 names (map typeOf rhsExprs) rhsExprs
