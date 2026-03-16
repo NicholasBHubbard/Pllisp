@@ -36,6 +36,7 @@ builtInTypes = M.fromList
   , ("SUBF", Ty.TyFun [Ty.TyFlt, Ty.TyFlt] Ty.TyFlt)
   , ("MULF", Ty.TyFun [Ty.TyFlt, Ty.TyFlt] Ty.TyFlt)
   , ("DIVF", Ty.TyFun [Ty.TyFlt, Ty.TyFlt] Ty.TyFlt)
+  , ("NEGF", Ty.TyFun [Ty.TyFlt] Ty.TyFlt)
   -- Comparison (Int)
   , ("EQ",  Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool)
   , ("LT",  Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool)
@@ -52,11 +53,14 @@ builtInTypes = M.fromList
   , ("AND", Ty.TyFun [Ty.TyBool, Ty.TyBool] Ty.TyBool)
   , ("OR",  Ty.TyFun [Ty.TyBool, Ty.TyBool] Ty.TyBool)
   , ("NOT", Ty.TyFun [Ty.TyBool] Ty.TyBool)
+  -- Comparison (String)
+  , ("EQS", Ty.TyFun [Ty.TyStr, Ty.TyStr] Ty.TyBool)
   -- String
   , ("CONCAT", Ty.TyFun [Ty.TyStr, Ty.TyStr] Ty.TyStr)
   , ("STRLEN", Ty.TyFun [Ty.TyStr] Ty.TyInt)
   -- IO
-  , ("PRINT", Ty.TyFun [Ty.TyStr] Ty.TyUnit)
+  , ("PRINT",     Ty.TyFun [Ty.TyStr] Ty.TyUnit)
+  , ("READ-LINE", Ty.TyFun [Ty.TyUnit] Ty.TyStr)
   -- Conversion
   , ("INT-TO-FLT", Ty.TyFun [Ty.TyInt] Ty.TyFlt)
   , ("FLT-TO-INT", Ty.TyFun [Ty.TyFlt] Ty.TyInt)

@@ -83,6 +83,26 @@ spec = do
         Right _ -> expectationFailure "expected type error"
         Left errs -> length errs `shouldSatisfy` (>= 1)
 
+    it "typechecks NEGF as FLT -> FLT" $ do
+      case parseAndTypecheck "(negf 1.0)" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyFlt
+
+    it "typechecks EQS as STR -> STR -> BOOL" $ do
+      case parseAndTypecheck "(eqs \"hello\" \"world\")" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyBool
+
+    it "typechecks READ-LINE as UNIT -> STR" $ do
+      case parseAndTypecheck "(read-line unit)" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyStr
+
+    it "rejects int where string expected in EQS" $ do
+      case parseAndTypecheck "(eqs 1 \"x\")" of
+        Right _ -> expectationFailure "expected type error"
+        Left errs -> length errs `shouldSatisfy` (>= 1)
+
     it "typechecks int literal" $ do
       case parseAndTypecheck "42" of
         Left errs -> expectationFailure (show (map TC.teMsg errs))
