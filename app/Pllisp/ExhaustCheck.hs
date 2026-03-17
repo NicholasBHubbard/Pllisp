@@ -10,6 +10,13 @@ import qualified Pllisp.TypeCheck as TC
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
+-- ENTRY POINT
+
+exhaustCheck :: TC.TResolvedCST -> [ExhaustError]
+exhaustCheck typed =
+  let env = buildCtorEnv typed
+  in concatMap (checkExpr env) typed
+
 -- CORE
 
 -- | Maps each type name to its constructors and their arities
@@ -19,11 +26,6 @@ data ExhaustError = ExhaustError
   { exhaSpan :: Loc.Span
   , exhaMsg  :: String
   } deriving (Show)
-
-exhaustCheck :: TC.TResolvedCST -> [ExhaustError]
-exhaustCheck typed =
-  let env = buildCtorEnv typed
-  in concatMap (checkExpr env) typed
 
 buildCtorEnv :: TC.TResolvedCST -> CtorEnv
 buildCtorEnv = M.fromList . concatMap go
