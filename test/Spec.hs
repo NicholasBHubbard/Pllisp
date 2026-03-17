@@ -4,7 +4,7 @@ import Test.Hspec
 
 import qualified BuiltInSpec
 import qualified ErrorSpec
-import qualified ExhaustSpec
+import qualified ExhaustCheckSpec
 import qualified ParserSpec
 import qualified PropSpec
 import qualified ResolveSpec
@@ -18,6 +18,6 @@ main = hspec $ do
   describe "Parser"    ParserSpec.spec
   describe "Resolve"   ResolveSpec.spec
   describe "TypeCheck" TypeCheckSpec.spec
-  describe "Exhaust"   ExhaustSpec.spec
+  describe "Exhaust"   ExhaustCheckSpec.spec
   describe "Error"     ErrorSpec.spec
   describe "Props"     PropSpec.spec

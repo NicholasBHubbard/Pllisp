@@ -10,7 +10,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 
 import qualified Pllisp.CST      as CST
-import qualified Pllisp.Exhaust  as Exhaust
+import qualified Pllisp.ExhaustCheck as Exhaust
 import qualified Pllisp.Type     as Ty
 import qualified Pllisp.TypeCheck as TC
 

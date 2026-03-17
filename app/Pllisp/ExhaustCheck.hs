@@ -1,6 +1,6 @@
 -- MODULE
 
-module Pllisp.Exhaust where
+module Pllisp.ExhaustCheck where
 
 import qualified Pllisp.CST as CST
 import qualified Pllisp.SrcLoc as Loc

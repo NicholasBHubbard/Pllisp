@@ -6,7 +6,7 @@ import qualified Data.Text.IO as T.IO
 import qualified Text.Megaparsec as MP
 
 import qualified Pllisp.Error     as Error
-import qualified Pllisp.Exhaust   as Exhaust
+import qualified Pllisp.ExhaustCheck as Exhaust
 import qualified Pllisp.Parser    as Parser
 import qualified Pllisp.Resolve   as Resolve
 import qualified Pllisp.TypeCheck as TC

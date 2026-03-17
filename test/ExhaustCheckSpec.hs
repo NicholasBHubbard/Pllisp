@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module ExhaustSpec (spec) where
+module ExhaustCheckSpec (spec) where
 
 import Test.Hspec
 
@@ -8,7 +8,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 
 import qualified Pllisp.CST      as CST
-import qualified Pllisp.Exhaust  as Exhaust
+import qualified Pllisp.ExhaustCheck as Exhaust
 import qualified Pllisp.Parser   as Parser
 import qualified Pllisp.Resolve  as Resolve
 import qualified Pllisp.SrcLoc   as Loc
