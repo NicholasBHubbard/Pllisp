@@ -66,6 +66,7 @@ executable pllisp
 
     -- Modules included in this executable, other than Main.
     other-modules:    Pllisp.BuiltIn,
+                      Pllisp.ClosureConvert,
                       Pllisp.CST,
                       Pllisp.Error,
                       Pllisp.ExhaustCheck,
@@ -97,8 +98,9 @@ test-suite pllisp-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test, app
     main-is:          Spec.hs
-    ghc-options:      -fhpc
+    ghc-options:      -fhpc -rtsopts "-with-rtsopts=--read-tix-file=no"
     other-modules:    BuiltInSpec,
+                      ClosureConvertSpec,
                       ErrorSpec,
                       ExhaustCheckSpec,
                       ParserSpec,
@@ -107,6 +109,7 @@ test-suite pllisp-test
                       TypeCheckSpec,
                       TypeSpec,
                       Pllisp.BuiltIn,
+                      Pllisp.ClosureConvert,
                       Pllisp.CST,
                       Pllisp.Error,
                       Pllisp.ExhaustCheck,
