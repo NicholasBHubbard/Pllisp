@@ -51,3 +51,16 @@ data DataCon = DataCon
   { dcName :: Symbol
   , dcArgs :: [Ty.Type]
   } deriving (Eq, Show)
+
+-- PROGRAM STRUCTURE
+
+data Program = Program
+  { progName    :: Maybe Symbol
+  , progImports :: [Import]
+  , progExprs   :: [Expr]
+  } deriving (Eq, Show)
+
+data Import = Import
+  { impModule :: Symbol
+  , impUnqual :: [Symbol]
+  } deriving (Eq, Show)

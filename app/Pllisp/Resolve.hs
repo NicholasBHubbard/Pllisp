@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- MODULE
 
 module Pllisp.Resolve where
@@ -87,7 +89,7 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ RLam params mRet rbody
   CST.ExprLet binds body -> do
     let symNames = map (CST.symName . fst) binds
-        newScope = S.fromList symNames
+        newScope = S.fromList (filter (/= "_") symNames)
     dupCheck "duplicate let binding" symNames sp
     rbinds <- RWS.local (newScope :) $
       traverse (\(v, rhs) -> (\r -> (v, r)) <$> resolveExpr rhs) binds
@@ -141,7 +143,8 @@ resolvePattern pat sp = case pat of
 
 dupCheck :: String -> [CST.Symbol] -> Loc.Span -> Resolve ()
 dupCheck msg syms sp =
-  let syms' = S.fromList syms
-  in if S.size syms' /= length syms
+  let nonWild = filter (/= "_") syms
+      syms' = S.fromList nonWild
+  in if S.size syms' /= length nonWild
      then recordError sp msg
      else pure ()

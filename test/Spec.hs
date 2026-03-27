@@ -11,6 +11,7 @@ import qualified ResolveSpec
 import qualified TypeCheckSpec
 import qualified TypeSpec
 import qualified ClosureConvertSpec
+import qualified ModuleSpec
 
 main :: IO ()
 main = hspec $ do
@@ -23,3 +24,4 @@ main = hspec $ do
   describe "Error"     ErrorSpec.spec
   describe "Props"     PropSpec.spec
   describe "ClosureConvert" ClosureConvertSpec.spec
+  describe "Module"         ModuleSpec.spec

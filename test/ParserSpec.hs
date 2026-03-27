@@ -15,14 +15,15 @@ import qualified Pllisp.Type   as Ty
 parseOne :: T.Text -> Either String CST.ExprF
 parseOne src = case Parser.parseProgram "<test>" src of
   Left err -> Left (show err)
-  Right [] -> Left "no expressions"
-  Right (Loc.Located _ e : _) -> Right e
+  Right prog -> case CST.progExprs prog of
+    []                  -> Left "no expressions"
+    (Loc.Located _ e:_) -> Right e
 
 -- Parse whole program
 parseAll :: T.Text -> Either String [CST.ExprF]
 parseAll src = case Parser.parseProgram "<test>" src of
   Left err -> Left (show err)
-  Right es -> Right (map Loc.locVal es)
+  Right prog -> Right (map Loc.locVal (CST.progExprs prog))
 
 spec :: Spec
 spec = do
@@ -235,6 +236,61 @@ spec = do
       case r of
         CST.ExprType "LIST" ["A"] [CST.DataCon "CONS" [Ty.TyCon "A" [], Ty.TyInt]] -> pure ()
         _ -> expectationFailure (show r)
+
+  describe "module declaration" $ do
+    it "parses module name" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(module Foo)"
+      CST.progName prog `shouldBe` Just "FOO"
+      CST.progExprs prog `shouldBe` []
+
+    it "no module declaration gives Nothing" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "42"
+      CST.progName prog `shouldBe` Nothing
+
+    it "module keyword is reserved" $ do
+      case Parser.parseProgram "<test>" "module" of
+        Left  _ -> pure ()
+        Right _ -> expectationFailure "expected parse error"
+
+  describe "import declaration" $ do
+    it "parses qualified import" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(import Foo)"
+      length (CST.progImports prog) `shouldBe` 1
+      let imp = head (CST.progImports prog)
+      CST.impModule imp `shouldBe` "FOO"
+      CST.impUnqual imp `shouldBe` []
+
+    it "parses import with unqualified symbols" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(import Foo (bar baz))"
+      let imp = head (CST.progImports prog)
+      CST.impModule imp `shouldBe` "FOO"
+      CST.impUnqual imp `shouldBe` ["BAR", "BAZ"]
+
+    it "parses multiple imports" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(import A) (import B (x))"
+      length (CST.progImports prog) `shouldBe` 2
+
+    it "import keyword is reserved" $ do
+      case Parser.parseProgram "<test>" "import" of
+        Left  _ -> pure ()
+        Right _ -> expectationFailure "expected parse error"
+
+  describe "dotted symbols" $ do
+    it "parses Foo.bar as qualified symbol" $ do
+      r <- either fail pure $ parseOne "Foo.bar"
+      r `shouldBe` CST.ExprSym "FOO.BAR"
+
+    it "plain symbol still works" $ do
+      r <- either fail pure $ parseOne "x"
+      r `shouldBe` CST.ExprSym "X"
+
+  describe "full program" $ do
+    it "parses module + imports + exprs" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>"
+        "(module Main) (import Foo) (import Bar (x)) 42"
+      CST.progName prog `shouldBe` Just "MAIN"
+      length (CST.progImports prog) `shouldBe` 2
+      length (CST.progExprs prog) `shouldBe` 1
 
   describe "error cases" $ do
     it "unclosed paren" $ do

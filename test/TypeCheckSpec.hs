@@ -293,7 +293,7 @@ dummySpan = Loc.Span (Loc.Pos "<test>" 1 1) (Loc.Pos "<test>" 1 1)
 parseAndTypecheck :: T.Text -> Either [TC.TypeError] TC.TResolvedCST
 parseAndTypecheck src = case Parser.parseProgram "<test>" src of
   Left _     -> error "parse error in test"
-  Right cst  -> case Resolve.resolve cst of
+  Right prog -> case Resolve.resolve (CST.progExprs prog) of
     Left _       -> error "resolve error in test"
     Right resolved -> TC.typecheck resolved
 

@@ -22,11 +22,29 @@ import qualified Text.Megaparsec.Char.Lexer as MP.C.L
 
 type Parser = MP.Parsec Void T.Text
 
-parseProgram :: FilePath -> T.Text -> Either (MP.ParseErrorBundle T.Text Void) CST.CST
+parseProgram :: FilePath -> T.Text -> Either (MP.ParseErrorBundle T.Text Void) CST.Program
 parseProgram fp = MP.parse programParser fp
 
-programParser :: Parser CST.CST
-programParser = MP.label "program" $ sc *> MP.many exprParser <* MP.eof
+programParser :: Parser CST.Program
+programParser = MP.label "program" $ do
+  sc
+  mName <- MP.optional moduleParser
+  imports <- MP.many importParser
+  exprs <- MP.many exprParser
+  MP.eof
+  pure (CST.Program mName imports exprs)
+
+moduleParser :: Parser CST.Symbol
+moduleParser = MP.label "module declaration" $ MP.try $ parens $ do
+  _ <- ident' "MODULE"
+  symbolParser
+
+importParser :: Parser CST.Import
+importParser = MP.label "import declaration" $ MP.try $ parens $ do
+  _ <- ident' "IMPORT"
+  modName <- symbolParser
+  unquals <- MP.option [] $ parens (MP.many symbolParser)
+  pure (CST.Import modName unquals)
 
 exprParser :: Parser CST.Expr
 exprParser = MP.label "expression" $ located $ MP.choice
@@ -146,11 +164,15 @@ tsymbolParser = MP.label "typed symbol" $ MP.choice
   ]
 
 symbolParser :: Parser CST.Symbol
-symbolParser = MP.label "symbol" $ do
-  s <- ident
-  if s `elem` keywords
+symbolParser = MP.label "symbol" $ lexeme $ do
+  s <- rawIdent
+  mDot <- MP.optional (MP.C.char '.' *> rawIdent)
+  let sym = case mDot of
+        Nothing -> s
+        Just q  -> s <> "." <> q
+  if sym `elem` keywords
     then fail "reserved word"
-    else pure s
+    else pure sym
 
 typeParser :: Parser Ty.Type
 typeParser = MP.C.char '%' *> (ident >>= \t -> case t of
@@ -180,13 +202,16 @@ litParser = MP.label "literal value" $ lexeme $ MP.choice
 -- HELPERS
 
 keywords :: [T.Text]
-keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE"]
+keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE", "MODULE", "IMPORT"]
 
-ident :: Parser T.Text
-ident = MP.label "identifier" $ lexeme $ do
+rawIdent :: Parser T.Text
+rawIdent = do
   first <- MP.C.char '_' <|> MP.C.letterChar
   rest  <- MP.many (MP.C.char '_' <|> MP.C.char '-' <|> MP.C.alphaNumChar)
   pure $ T.toUpper (T.pack (first:rest))
+
+ident :: Parser T.Text
+ident = MP.label "identifier" $ lexeme rawIdent
 
 ident' :: T.Text -> Parser T.Text
 ident' t = do

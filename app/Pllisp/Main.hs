@@ -1,15 +1,24 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main (main) where
 
 import System.Environment (getArgs)
+import System.FilePath (takeDirectory, (</>))
+import System.Directory (doesFileExist)
 
-import qualified Data.Text.IO as T.IO
+import qualified Data.Map.Strict as M
+import qualified Data.Text       as T
+import qualified Data.Text.IO    as T.IO
 import qualified Text.Megaparsec as MP
 
-import qualified Pllisp.Error     as Error
+import qualified Pllisp.CST         as CST
+import qualified Pllisp.Error       as Error
 import qualified Pllisp.ExhaustCheck as Exhaust
-import qualified Pllisp.Parser    as Parser
-import qualified Pllisp.Resolve   as Resolve
-import qualified Pllisp.TypeCheck as TC
+import qualified Pllisp.Module      as Mod
+import qualified Pllisp.Parser      as Parser
+import qualified Pllisp.Resolve     as Resolve
+import qualified Pllisp.SrcLoc      as Loc
+import qualified Pllisp.TypeCheck   as TC
 
 main :: IO ()
 main = do
@@ -24,8 +33,24 @@ compileFile fp = do
   let render kind sp msg = putStr (Error.renderError src kind sp msg)
   case Parser.parseProgram fp src of
     Left  err -> putStr (MP.errorBundlePretty err)
-    Right cst ->
-      case Resolve.resolve cst of
+    Right prog -> do
+      -- Validate module name matches filename
+      case CST.progName prog of
+        Just name -> case Mod.validateModuleName name fp of
+          Just err -> putStrLn err >> pure ()
+          Nothing  -> compileProg fp src render prog
+        Nothing -> compileProg fp src render prog
+
+compileProg :: FilePath -> T.Text -> (String -> Loc.Span -> String -> IO ()) -> CST.Program -> IO ()
+compileProg fp src render prog = do
+  -- Load imported modules
+  importedExports <- loadImports fp (CST.progImports prog)
+  case importedExports of
+    Left err -> putStrLn err
+    Right _exports -> do
+      -- TODO: wire _exports into resolve/typecheck for qualified name resolution
+      let exprs = CST.progExprs prog
+      case Resolve.resolve exprs of
         Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
         Right resolved ->
           case TC.typecheck resolved of
@@ -34,3 +59,33 @@ compileFile fp = do
               case Exhaust.exhaustCheck typed of
                 [] -> print typed
                 errs -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
+
+-- | Load all imported modules and collect their exports.
+loadImports :: FilePath -> [CST.Import] -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)))
+loadImports _ [] = pure (Right M.empty)
+loadImports fp imports = do
+  let searchDir = takeDirectory fp
+  results <- mapM (loadModule searchDir) imports
+  case sequence results of
+    Left err -> pure (Left err)
+    Right pairs -> pure (Right (M.fromList pairs))
+
+loadModule :: FilePath -> CST.Import -> IO (Either String (CST.Symbol, M.Map CST.Symbol TC.Scheme))
+loadModule searchDir imp = do
+  let modName = CST.impModule imp
+      modFile = searchDir </> T.unpack modName ++ ".pll"
+  exists <- doesFileExist modFile
+  if not exists
+    then pure (Left ("module not found: " ++ T.unpack modName ++ " (looked for " ++ modFile ++ ")"))
+    else do
+      src <- T.IO.readFile modFile
+      case Parser.parseProgram modFile src of
+        Left err -> pure (Left ("parse error in module " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
+        Right modProg -> case Resolve.resolve (CST.progExprs modProg) of
+          Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+          Right resolved -> case TC.typecheck resolved of
+            Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+            Right typed ->
+              let exports = Mod.collectExports typed
+                  schemes = M.map (\t -> TC.Forall mempty t) exports
+              in pure (Right (modName, schemes))

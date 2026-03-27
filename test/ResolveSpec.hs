@@ -6,6 +6,7 @@ import Test.Hspec
 
 import qualified Data.Text as T
 
+import qualified Pllisp.CST     as CST
 import qualified Pllisp.Parser  as Parser
 import qualified Pllisp.Resolve as Resolve
 
@@ -87,12 +88,21 @@ spec = do
     it "resolves RType" $ do
       parseAndResolve "(type Foo () (Bar))" `shouldSatisfy` isRight
 
+  describe "_ (wildcard binder)" $ do
+    it "allows multiple _ bindings in let without duplicate error" $ do
+      parseAndResolve "(let ((_ 1) (_ 2)) unit)" `shouldSatisfy` isRight
+
+    it "_ binding is not in scope" $ do
+      case parseAndResolve "(let ((_ 1)) _)" of
+        Right _ -> expectationFailure "expected resolve error: _ not in scope"
+        Left _  -> pure ()
+
 -- Helpers
 
 parseAndResolve :: T.Text -> Either [Resolve.ResolveError] Resolve.ResolvedCST
 parseAndResolve src = case Parser.parseProgram "<test>" src of
   Left _    -> error "parse error in test"
-  Right cst -> Resolve.resolve cst
+  Right prog -> Resolve.resolve (CST.progExprs prog)
 
 isRight :: Either a b -> Bool
 isRight (Right _) = True

@@ -176,7 +176,7 @@ spec = do
 parseCheckExhaust :: T.Text -> [String]
 parseCheckExhaust src = case Parser.parseProgram "<test>" src of
   Left _ -> error "parse error in test"
-  Right cst -> case Resolve.resolve cst of
+  Right prog -> case Resolve.resolve (CST.progExprs prog) of
     Left _ -> error "resolve error in test"
     Right resolved -> case TC.typecheck resolved of
       Left _ -> error "typecheck error in test"
