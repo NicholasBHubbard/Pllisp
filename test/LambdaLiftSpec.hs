@@ -111,6 +111,12 @@ spec = do
       map fst (LL.defParams innerDef) `shouldBe` ["Z"]
       map fst (LL.defParams outerDef) `shouldBe` ["Y"]
 
+    it "outer def body contains MkClosure referencing inner def" $ do
+      let result = ll "(let ((x 1)) (lam (y) (lam (z) x)))"
+          [innerDef, outerDef] = LL.llDefs result
+          Ty.Typed _ (LL.LLMkClosure innerRef _) = LL.defBody outerDef
+      innerRef `shouldBe` LL.defName innerDef
+
   describe "lambda in let binding" $ do
     it "let-bound lambda is lifted" $ do
       let result = ll "(let ((f (lam ((x %INT)) x))) (f 1))"
@@ -167,6 +173,74 @@ spec = do
       let result = ll "(let ((y 1)) (lam (x) (add x y)))"
           [def] = LL.llDefs result
       LL.defEnv def `shouldBe` [("Y", Ty.TyInt)]
+
+  describe "multi-param lambda" $ do
+    it "lifts lambda with multiple params" $ do
+      let result = ll "(lam ((x %INT) (y %INT)) (add x y))"
+          [def] = LL.llDefs result
+      LL.defParams def `shouldBe` [("X", Ty.TyInt), ("Y", Ty.TyInt)]
+      LL.defEnv def `shouldBe` []
+      LL.defRetTy def `shouldBe` Ty.TyInt
+
+    it "MkClosure has correct multi-param function type" $ do
+      let result = ll "(lam ((x %INT) (y %INT)) (add x y))"
+          [Ty.Typed closureTy (LL.LLMkClosure _ _)] = LL.llExprs result
+      closureTy `shouldBe` Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyInt
+
+  describe "multiple free vars" $ do
+    it "env contains all free vars with correct types" $ do
+      let result = ll "(let ((x 1) (y 2)) (lam (z) (add x y)))"
+          [def] = LL.llDefs result
+      L.sortOn fst (LL.defEnv def) `shouldBe` [("X", Ty.TyInt), ("Y", Ty.TyInt)]
+
+    it "MkClosure passes all free var values" $ do
+      let result = ll "(let ((x 1) (y 2)) (lam (z) (add x y)))"
+          [Ty.Typed _ (LL.LLLet _ (Ty.Typed _ (LL.LLMkClosure _ fvArgs)))] = LL.llExprs result
+      length fvArgs `shouldBe` 2
+
+  describe "lambda as argument" $ do
+    it "lambda in application argument position is lifted" $ do
+      -- (add (let ((f (lam ((x %INT)) x))) (f 1)) 2) has a lambda inside a let inside an arg
+      let result = ll "(let ((f (lam ((x %INT)) x))) (add (f 1) 2))"
+      length (LL.llDefs result) `shouldBe` 1
+      -- the let RHS is a MkClosure (lambda was in the let binding, used as arg to add)
+      let [Ty.Typed _ (LL.LLLet [(_, _, rhs)] _)] = LL.llExprs result
+          Ty.Typed _ (LL.LLMkClosure _ _) = rhs
+      return ()
+
+  describe "no-lambda program" $ do
+    it "multi-expression program with no lambdas has empty defs" $ do
+      let result = ll "(let ((x 1)) x) (add 1 2) true"
+      LL.llDefs result `shouldBe` []
+      length (LL.llExprs result) `shouldBe` 3
+
+  describe "pattern conversion" $ do
+    it "case patterns are correctly converted" $ do
+      let result = ll "(type M (a) (N) (J a)) (let ((x (J 1))) (case x ((N) 0) ((J y) y)))"
+          exprs = LL.llExprs result
+          Ty.Typed _ (LL.LLLet _ (Ty.Typed _ (LL.LLCase _ arms))) = last exprs
+          (pat1, _) = head arms
+          (pat2, _) = arms !! 1
+      case pat1 of
+        LL.LLPatCon name _ _ -> name `shouldBe` "N"
+        _ -> expectationFailure "expected LLPatCon for first arm"
+      case pat2 of
+        LL.LLPatCon name _ [LL.LLPatVar yname _] -> do
+          name `shouldBe` "J"
+          yname `shouldBe` "Y"
+        _ -> expectationFailure "expected LLPatCon with LLPatVar for second arm"
+
+    it "wildcard and literal patterns convert" $ do
+      let result = ll "(case 1 (1 true) (_ false))"
+          [Ty.Typed _ (LL.LLCase _ arms)] = LL.llExprs result
+          (pat1, _) = head arms
+          (pat2, _) = arms !! 1
+      case pat1 of
+        LL.LLPatLit (CST.LitInt 1) -> return ()
+        _ -> expectationFailure "expected LLPatLit"
+      case pat2 of
+        LL.LLPatWild _ -> return ()
+        _ -> expectationFailure "expected LLPatWild"
 
   describe "built-ins not in env" $ do
     it "closed lambda using builtins has empty env" $ do
