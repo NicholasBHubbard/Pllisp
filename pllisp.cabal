@@ -67,6 +67,7 @@ executable pllisp
     -- Modules included in this executable, other than Main.
     other-modules:    Pllisp.BuiltIn,
                       Pllisp.ClosureConvert,
+                      Pllisp.Codegen,
                       Pllisp.CST,
                       Pllisp.Error,
                       Pllisp.ExhaustCheck,
@@ -105,6 +106,7 @@ test-suite pllisp-test
     ghc-options:      -fhpc -rtsopts "-with-rtsopts=--read-tix-file=no"
     other-modules:    BuiltInSpec,
                       ClosureConvertSpec,
+                      CodegenSpec,
                       ErrorSpec,
                       ExhaustCheckSpec,
                       LambdaLiftSpec,
@@ -116,6 +118,7 @@ test-suite pllisp-test
                       TypeSpec,
                       Pllisp.BuiltIn,
                       Pllisp.ClosureConvert,
+                      Pllisp.Codegen,
                       Pllisp.CST,
                       Pllisp.Error,
                       Pllisp.ExhaustCheck,
@@ -131,6 +134,7 @@ test-suite pllisp-test
                       megaparsec ^>=9.7.0,
                       mtl        ^>=2.3.2,
                       filepath,
+                      process,
                       text       ^>=2.1.2,
                       hspec      ^>=2.11,
                       QuickCheck ^>=2.15

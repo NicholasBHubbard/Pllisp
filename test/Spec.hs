@@ -11,6 +11,7 @@ import qualified ResolveSpec
 import qualified TypeCheckSpec
 import qualified TypeSpec
 import qualified ClosureConvertSpec
+import qualified CodegenSpec
 import qualified LambdaLiftSpec
 import qualified ModuleSpec
 
@@ -27,3 +28,4 @@ main = hspec $ do
   describe "ClosureConvert" ClosureConvertSpec.spec
   describe "LambdaLift"    LambdaLiftSpec.spec
   describe "Module"         ModuleSpec.spec
+  describe "Codegen"        CodegenSpec.spec
