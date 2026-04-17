@@ -1,0 +1,3 @@
+(import MATH)
+
+(print (int-to-str (Math.square 7)))

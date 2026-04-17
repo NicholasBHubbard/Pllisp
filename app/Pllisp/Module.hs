@@ -50,17 +50,82 @@ desugarTopLevel exprs =
 
 -- | Collect exported symbols from a typechecked program.
 -- Exports include: let binding names (excluding _) and constructor names from type decls.
-collectExports :: TC.TResolvedCST -> M.Map CST.Symbol Ty.Type
-collectExports = M.unions . map collectFromExpr
+collectExports :: TC.TResolvedCST -> M.Map CST.Symbol TC.Scheme
+collectExports typed =
+  let letExports  = M.unions (map collectLetExports typed)
+      typeDecls   = [(n, ps, cs) | Loc.Located _ (Ty.Typed _ (TC.TRType n ps cs)) <- typed]
+      ctorExports = TC.buildCtorContext typeDecls
+  in M.union letExports ctorExports
   where
-    collectFromExpr (Loc.Located _ (Ty.Typed _ (TC.TRLet binds _))) =
-      M.fromList [(n, t) | (n, t, _) <- binds, n /= "_"]
-    collectFromExpr (Loc.Located _ (Ty.Typed _ (TC.TRType _ _ ctors))) =
-      M.fromList [(CST.dcName dc, ctorType dc) | dc <- ctors]
-    collectFromExpr _ = M.empty
+    collectLetExports (Loc.Located _ (Ty.Typed _ (TC.TRLet binds _))) =
+      M.fromList [(n, TC.generalize M.empty t) | (n, t, _) <- binds, n /= "_"]
+    collectLetExports _ = M.empty
 
-    ctorType (CST.DataCon _ []) = Ty.TyUnit  -- placeholder; real type comes from context
-    ctorType (CST.DataCon _ _)  = Ty.TyUnit
+-- MERGE IMPORTED CODE
+
+-- | Merge imported modules' typed ASTs into the local module's typed AST.
+-- Type declarations from imports are prepended. Let-bindings from imports
+-- are prepended into the local module's top-level let so they share scope.
+mergeImportedCode :: [TC.TResolvedCST] -> TC.TResolvedCST -> TC.TResolvedCST
+mergeImportedCode importedModules localTyped =
+  let -- Extract type decls and let-bindings from each imported module
+      (impTypes, impBinds) = mconcat (map splitTyped importedModules)
+      -- Split local typed into types and lets
+      (localTypes, localBinds, localBody) = splitLocal localTyped
+  in impTypes ++ localTypes ++ case impBinds ++ localBinds of
+    []    -> maybeBody localBody
+    binds -> [mkTypedLet binds localBody]
+  where
+    splitTyped :: TC.TResolvedCST -> ([TC.TRExpr], [(CST.Symbol, Ty.Type, TC.TRExpr)])
+    splitTyped exprs =
+      let types = [e | e@(Loc.Located _ (Ty.Typed _ (TC.TRType _ _ _))) <- exprs]
+          binds = concat [bs | Loc.Located _ (Ty.Typed _ (TC.TRLet bs _)) <- exprs]
+      in (types, binds)
+
+    splitLocal :: TC.TResolvedCST -> ([TC.TRExpr], [(CST.Symbol, Ty.Type, TC.TRExpr)], Maybe TC.TRExpr)
+    splitLocal exprs =
+      let types = [e | e@(Loc.Located _ (Ty.Typed _ (TC.TRType _ _ _))) <- exprs]
+          bindsAndBody = [(bs, b) | Loc.Located _ (Ty.Typed _ (TC.TRLet bs b)) <- exprs]
+      in case bindsAndBody of
+        [(bs, body)] -> (types, bs, Just body)
+        _            -> (types, [], Nothing)
+
+    maybeBody Nothing  = []
+    maybeBody (Just b) = [b]
+
+    mkTypedLet binds mBody =
+      let body = case mBody of
+            Just b  -> b
+            Nothing -> Loc.Located dummySp (Ty.Typed Ty.TyUnit TC.TRUnit)
+      in Loc.Located dummySp (Ty.Typed (TC.typeOf body) (TC.TRLet binds body))
+
+    dummySp = Loc.Span (Loc.Pos "<merge>" 0 0) (Loc.Pos "<merge>" 0 0)
+
+-- IMPORT SCOPE BUILDING
+
+-- | Given loaded module exports and import declarations, build:
+-- 1. A set of names for the resolver (qualified + unqualified)
+-- 2. A type context for the typechecker (both forms, so qualified refs typecheck)
+-- 3. A normalization map (qualified → unqualified) for the resolver
+buildImportScope
+  :: M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)  -- module name → exports
+  -> [CST.Import]
+  -> (S.Set CST.Symbol, TC.Context, M.Map CST.Symbol CST.Symbol)
+buildImportScope exports imports =
+  let (resolveNames, tcPairs, normPairs) = mconcat (map buildOne imports)
+  in (S.fromList resolveNames, M.fromList tcPairs, M.fromList normPairs)
+  where
+    buildOne (CST.Import modName unquals) =
+      let modExports = M.findWithDefault M.empty modName exports
+          -- Qualified: MODNAME.NAME → scheme
+          qualNames  = [modName <> "." <> n | (n, _) <- M.toList modExports]
+          qualCtx    = [(modName <> "." <> n, scheme) | (n, scheme) <- M.toList modExports]
+          -- Unqualified: selectively in resolve scope, always in TC context
+          unqualNames = [n | (n, _) <- M.toList modExports, n `elem` unquals]
+          allUnqualCtx = M.toList modExports
+          -- Normalization map: MODNAME.NAME → NAME
+          normMap = [(modName <> "." <> n, n) | (n, _) <- M.toList modExports]
+      in (qualNames ++ unqualNames, qualCtx ++ allUnqualCtx, normMap)
 
 -- DEPENDENCY ORDERING
 

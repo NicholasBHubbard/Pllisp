@@ -14,12 +14,12 @@ import qualified Data.Set as S
 
 -- ENTRY POINT
 
-typecheck :: Res.ResolvedCST -> Either [TypeError] TResolvedCST
-typecheck exprs =
+typecheck :: Context -> Res.ResolvedCST -> Either [TypeError] TResolvedCST
+typecheck importedCtx exprs =
   let typeDecls = extractTypeDecls exprs
       ctorCtx = buildCtorContext typeDecls
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
-      initialCtx = M.union ctorCtx builtInCtx
+      initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx]
       (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) initialCtx 0
   in case solveAll constraints of
     Left solveErrs -> Left (inferErrs ++ solveErrs)
@@ -48,6 +48,7 @@ type TResolvedCST = [TRExpr]
 type TRExpr = Loc.Located (Ty.Typed TRExprF)
 
 data Scheme = Forall (S.Set TyVar) Ty.Type
+  deriving (Eq, Show)
 
 data Constraint = Constraint Loc.Span Ty.Type Ty.Type
   deriving (Eq, Show)

@@ -4,7 +4,9 @@ module CodegenSpec (spec) where
 
 import Test.Hspec
 
-import qualified Data.Text    as T
+import qualified Data.Map.Strict as M
+import qualified Data.Set        as S
+import qualified Data.Text       as T
 import qualified Data.Text.IO as T.IO
 import System.Exit (ExitCode(..))
 import System.Process (readProcessWithExitCode)
@@ -13,6 +15,7 @@ import qualified Pllisp.Codegen        as Codegen
 import qualified Pllisp.ClosureConvert as CC
 import qualified Pllisp.CST            as CST
 import qualified Pllisp.LambdaLift     as LL
+import qualified Pllisp.Module         as Mod
 import qualified Pllisp.Parser         as Parser
 import qualified Pllisp.Resolve        as Resolve
 import qualified Pllisp.TypeCheck      as TC
@@ -570,14 +573,42 @@ spec = do
       run "(print (int-to-str (if (str-contains \"hello\" \"hello\") 1 0)))"
         >>= (`shouldBe` "1")
 
+  describe "module imports" $ do
+    it "unqualified import" $ do
+      let modSrc = "(let ((square (lam ((x %INT)) (mul x x)))) unit)"
+          mainSrc = "(print (int-to-str (square 5)))"
+      runWithModule "MOD" modSrc ["SQUARE"] mainSrc >>= (`shouldBe` "25")
+
+    it "qualified import" $ do
+      let modSrc = "(let ((square (lam ((x %INT)) (mul x x)))) unit)"
+          mainSrc = "(print (int-to-str (Mod.square 7)))"
+      runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "49")
+
+    it "imported type constructors" $ do
+      let modSrc = "(type Box (a) (MkBox a))"
+          mainSrc = T.unlines
+            [ "(let ((b (MkBox 42)))"
+            , "  (case b ((MkBox x) (print (int-to-str x)))))"
+            ]
+      runWithModule "MOD" modSrc ["MKBOX"] mainSrc >>= (`shouldBe` "42")
+
+    it "multiple bindings from one module" $ do
+      let modSrc = T.unlines
+            [ "(let ((double (lam ((x %INT)) (mul 2 x)))"
+            , "      (square (lam ((x %INT)) (mul x x))))"
+            , "  unit)"
+            ]
+          mainSrc = "(print (int-to-str (square (double 3))))"
+      runWithModule "MOD" modSrc ["SQUARE", "DOUBLE"] mainSrc >>= (`shouldBe` "36")
+
 -- HELPERS
 
 pipeline :: T.Text -> T.Text
 pipeline src = case Parser.parseProgram "<test>" src of
   Left e -> error ("parse error: " ++ show e)
-  Right prog -> case Resolve.resolve (CST.progExprs prog) of
+  Right prog -> case Resolve.resolve S.empty (CST.progExprs prog) of
     Left e -> error ("resolve error: " ++ show e)
-    Right resolved -> case TC.typecheck resolved of
+    Right resolved -> case TC.typecheck M.empty resolved of
       Left e -> error ("typecheck error: " ++ show e)
       Right typed ->
         Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
@@ -607,3 +638,46 @@ runWithStdin stdin' extraArgs src = do
         ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
   where
     strip = reverse . dropWhile (== '\n') . reverse
+
+-- | Compile a module + main source and run the result.
+-- modName: uppercase module name, modSrc: module body, unquals: unqualified imports, mainSrc: main body
+runWithModule :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO String
+runWithModule modName modSrc unquals mainSrc = do
+  let ir = importPipeline modName modSrc unquals mainSrc
+  T.IO.writeFile "/tmp/pllisp_test.ll" ir
+  (ec1, _, err1) <- readProcessWithExitCode
+    "clang" ["/tmp/pllisp_test.ll", "-o", "/tmp/pllisp_test_exe", "-lm"] ""
+  case ec1 of
+    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
+    ExitSuccess -> do
+      (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" [] ""
+      case ec2 of
+        ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
+        ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
+
+importPipeline :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> T.Text
+importPipeline modName modSrc unquals mainSrc =
+  -- Compile module
+  let modTyped = case Parser.parseProgram "<mod>" modSrc of
+        Left e -> error ("mod parse: " ++ show e)
+        Right prog -> case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs prog)) of
+          Left e -> error ("mod resolve: " ++ show e)
+          Right resolved -> case TC.typecheck M.empty resolved of
+            Left e -> error ("mod typecheck: " ++ show e)
+            Right typed -> typed
+      modExports = Mod.collectExports modTyped
+      exportMap = M.singleton modName modExports
+      imports = [CST.Import modName unquals]
+      (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap imports
+  -- Compile main with import context
+  in case Parser.parseProgram "<main>" mainSrc of
+    Left e -> error ("main parse: " ++ show e)
+    Right prog ->
+      let exprs = Mod.desugarTopLevel (CST.progExprs prog)
+      in case Resolve.resolveWith resolveScope normMap exprs of
+        Left e -> error ("main resolve: " ++ show e)
+        Right resolved -> case TC.typecheck tcCtx resolved of
+          Left e -> error ("main typecheck: " ++ show e)
+          Right typed ->
+            let merged = Mod.mergeImportedCode [modTyped] typed
+            in Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))

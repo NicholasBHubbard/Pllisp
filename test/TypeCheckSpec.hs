@@ -33,7 +33,7 @@ spec = do
       -- so infer records an error but solveAll succeeds → Left inferErrs path
       let sp    = Loc.Span (Loc.Pos "<test>" 1 1) (Loc.Pos "<test>" 1 1)
           ghost = Loc.Located sp (Resolve.RVar (Resolve.VarBinding (-1) "GHOST"))
-      case TC.typecheck [ghost] of
+      case TC.typecheck M.empty [ghost] of
         Right _ -> expectationFailure "expected type error"
         Left errs -> length errs `shouldSatisfy` (>= 1)
 
@@ -181,6 +181,21 @@ spec = do
         Left errs -> expectationFailure (show (map TC.teMsg errs))
         Right typed -> last (map topType' typed) `shouldBe` Ty.TyInt
 
+  describe "imported context" $ do
+    it "typechecks expression using imported scheme" $ do
+      let importedCtx = M.singleton "FOO.BAR"
+            (TC.Forall S.empty (Ty.TyFun [Ty.TyInt] Ty.TyInt))
+      case parseAndTypecheckWith (S.singleton "FOO.BAR") importedCtx "(Foo.bar 42)" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyInt
+
+    it "rejects mistyped use of imported scheme" $ do
+      let importedCtx = M.singleton "FOO.BAR"
+            (TC.Forall S.empty (Ty.TyFun [Ty.TyInt] Ty.TyInt))
+      case parseAndTypecheckWith (S.singleton "FOO.BAR") importedCtx "(Foo.bar \"hello\")" of
+        Right _ -> expectationFailure "expected type error"
+        Left _  -> pure ()
+
   describe "unification" $ do
     it "unify TyVar left with concrete type" $ do
       let sp = dummySpan
@@ -291,11 +306,14 @@ dummySpan :: Loc.Span
 dummySpan = Loc.Span (Loc.Pos "<test>" 1 1) (Loc.Pos "<test>" 1 1)
 
 parseAndTypecheck :: T.Text -> Either [TC.TypeError] TC.TResolvedCST
-parseAndTypecheck src = case Parser.parseProgram "<test>" src of
+parseAndTypecheck = parseAndTypecheckWith S.empty M.empty
+
+parseAndTypecheckWith :: S.Set CST.Symbol -> M.Map CST.Symbol TC.Scheme -> T.Text -> Either [TC.TypeError] TC.TResolvedCST
+parseAndTypecheckWith importedNames importedCtx src = case Parser.parseProgram "<test>" src of
   Left _     -> error "parse error in test"
-  Right prog -> case Resolve.resolve (CST.progExprs prog) of
+  Right prog -> case Resolve.resolve importedNames (CST.progExprs prog) of
     Left _       -> error "resolve error in test"
-    Right resolved -> TC.typecheck resolved
+    Right resolved -> TC.typecheck importedCtx resolved
 
 topType :: TC.TResolvedCST -> Ty.Type
 topType [] = error "empty TResolvedCST"

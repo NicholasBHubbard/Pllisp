@@ -5,6 +5,7 @@ module ModuleSpec (spec) where
 import Test.Hspec
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set        as S
 import qualified Data.Text       as T
 
 import qualified Pllisp.CST      as CST
@@ -89,9 +90,9 @@ spec = do
       length (CST.progExprs prog) `shouldBe` 1
 
   describe "export collection" $ do
-    it "collects let binding types" $ do
+    it "collects let binding schemes" $ do
       let exports = collectExports "(let ((x 1)) x)"
-      M.lookup "X" exports `shouldBe` Just Ty.TyInt
+      M.lookup "X" exports `shouldBe` Just (TC.Forall S.empty Ty.TyInt)
 
     it "excludes _ bindings from exports" $ do
       let exports = collectExports "(let ((_ 1)) unit)"
@@ -100,6 +101,15 @@ spec = do
     it "collects type constructor exports" $ do
       let exports = collectExports "(type Foo () (Bar))"
       M.member "BAR" exports `shouldBe` True
+
+    it "constructor exports have proper schemes" $ do
+      let exports = collectExports "(type M (a) (N) (J a))"
+      case M.lookup "J" exports of
+        Just (TC.Forall _ (Ty.TyFun _ _)) -> pure ()
+        other -> expectationFailure ("expected TyFun scheme for J, got: " ++ show other)
+      case M.lookup "N" exports of
+        Just (TC.Forall _ (Ty.TyCon "M" _)) -> pure ()
+        other -> expectationFailure ("expected TyCon M for N, got: " ++ show other)
 
   describe "dependency ordering" $ do
     it "orders independent modules" $ do
@@ -126,6 +136,64 @@ spec = do
         Left _  -> pure ()
         Right _ -> expectationFailure "expected cycle error"
 
+  describe "buildImportScope" $ do
+    it "builds qualified names from exports" $ do
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+          imports = [CST.Import "FOO" []]
+          (resolveScope, tcCtx, normMap) = Mod.buildImportScope exports imports
+      S.member "FOO.BAR" resolveScope `shouldBe` True
+      S.member "BAR" resolveScope `shouldBe` False
+      M.member "FOO.BAR" tcCtx `shouldBe` True
+      -- Unqualified always in TC context (needed for normalized names)
+      M.member "BAR" tcCtx `shouldBe` True
+      M.lookup "FOO.BAR" normMap `shouldBe` Just "BAR"
+
+    it "adds unqualified names from impUnqual" $ do
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+          imports = [CST.Import "FOO" ["BAR"]]
+          (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
+      S.member "FOO.BAR" resolveScope `shouldBe` True
+      S.member "BAR" resolveScope `shouldBe` True
+      M.member "FOO.BAR" tcCtx `shouldBe` True
+      M.member "BAR" tcCtx `shouldBe` True
+
+    it "handles multiple imports" $ do
+      let exports = M.fromList
+            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
+            , ("B", M.singleton "Y" (TC.Forall S.empty Ty.TyStr))
+            ]
+          imports = [CST.Import "A" ["X"], CST.Import "B" []]
+          (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
+      S.member "A.X" resolveScope `shouldBe` True
+      S.member "X" resolveScope `shouldBe` True
+      S.member "B.Y" resolveScope `shouldBe` True
+      S.member "Y" resolveScope `shouldBe` False
+      -- TC context has all unqualified + qualified: A.X, X, B.Y, Y
+      M.size tcCtx `shouldBe` 4
+
+  describe "mergeImportedCode" $ do
+    it "prepends imported type decls" $ do
+      let importedTyped = typecheckSrc "(type M (a) (N) (J a))"
+          localTyped    = typecheckSrc "42"
+          merged = Mod.mergeImportedCode [importedTyped] localTyped
+      -- First element should be the type decl
+      case head merged of
+        Loc.Located _ (Ty.Typed _ (TC.TRType "M" _ _)) -> pure ()
+        other -> expectationFailure ("expected TRType M, got: " ++ show other)
+
+    it "merges imported let bindings into local let" $ do
+      let importedTyped = typecheckSrc "(let ((x 1)) x)"
+          localTyped    = typecheckSrc "(let ((y 2)) y)"
+          merged = Mod.mergeImportedCode [importedTyped] localTyped
+      -- Should have one let with both X and Y bindings
+      let letExprs = [binds | Loc.Located _ (Ty.Typed _ (TC.TRLet binds _)) <- merged]
+      case letExprs of
+        [binds] -> do
+          let names = [n | (n, _, _) <- binds, n /= "_"]
+          elem "X" names `shouldBe` True
+          elem "Y" names `shouldBe` True
+        other -> expectationFailure ("expected 1 merged let, got " ++ show (length other))
+
   describe "module name validation" $ do
     it "accepts matching name and filename" $ do
       Mod.validateModuleName "FOO" "Foo.pll" `shouldBe` Nothing
@@ -146,11 +214,20 @@ parse src = case Parser.parseProgram "<test>" src of
   Left err  -> error (show err)
   Right prog -> prog
 
-collectExports :: T.Text -> M.Map CST.Symbol Ty.Type
+typecheckSrc :: T.Text -> TC.TResolvedCST
+typecheckSrc src = case Parser.parseProgram "<test>" src of
+  Left _    -> error "parse error in test"
+  Right prog -> case Resolve.resolve S.empty (CST.progExprs prog) of
+    Left _       -> error "resolve error in test"
+    Right resolved -> case TC.typecheck M.empty resolved of
+      Left _     -> error "typecheck error in test"
+      Right typed -> typed
+
+collectExports :: T.Text -> M.Map CST.Symbol TC.Scheme
 collectExports src = case Parser.parseProgram "<test>" src of
   Left _    -> error "parse error in test"
-  Right prog -> case Resolve.resolve (CST.progExprs prog) of
+  Right prog -> case Resolve.resolve S.empty (CST.progExprs prog) of
     Left _       -> error "resolve error in test"
-    Right resolved -> case TC.typecheck resolved of
+    Right resolved -> case TC.typecheck M.empty resolved of
       Left _     -> error "typecheck error in test"
       Right typed -> Mod.collectExports typed

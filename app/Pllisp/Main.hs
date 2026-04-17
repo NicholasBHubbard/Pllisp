@@ -9,6 +9,7 @@ import System.Directory (doesFileExist)
 import System.Process (readProcessWithExitCode)
 
 import qualified Data.Map.Strict as M
+import qualified Data.Set        as S
 import qualified Data.Text       as T
 import qualified Data.Text.IO    as T.IO
 import qualified Text.Megaparsec as MP
@@ -48,23 +49,23 @@ compileFile fp = do
 
 compileProg :: FilePath -> T.Text -> (String -> Loc.Span -> String -> IO ()) -> CST.Program -> IO ()
 compileProg fp src render prog = do
-  -- Load imported modules
-  importedExports <- loadImports fp (CST.progImports prog)
-  case importedExports of
+  importResult <- loadImports fp (CST.progImports prog)
+  case importResult of
     Left err -> putStrLn err
-    Right _exports -> do
-      -- TODO: wire _exports into resolve/typecheck for qualified name resolution
-      let exprs = CST.progExprs prog
-      case Resolve.resolve exprs of
+    Right (exportMap, importedTypedModules) -> do
+      let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap (CST.progImports prog)
+          exprs = Mod.desugarTopLevel (CST.progExprs prog)
+      case Resolve.resolveWith resolveScope normMap exprs of
         Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
         Right resolved ->
-          case TC.typecheck resolved of
+          case TC.typecheck tcCtx resolved of
             Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
             Right typed ->
               case Exhaust.exhaustCheck typed of
                 errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
                 [] -> do
-                  let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
+                  let merged = Mod.mergeImportedCode importedTypedModules typed
+                      ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
                       base = dropExtension fp
                       llFile = base ++ ".ll"
                       exeFile = base
@@ -78,17 +79,22 @@ compileProg fp src render prog = do
                     ExitSuccess ->
                       putStrLn ("compiled: " ++ exeFile)
 
--- | Load all imported modules and collect their exports.
-loadImports :: FilePath -> [CST.Import] -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)))
-loadImports _ [] = pure (Right M.empty)
+-- | Load all imported modules, returning their export maps and typed ASTs.
+loadImports :: FilePath -> [CST.Import]
+  -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme), [TC.TResolvedCST]))
+loadImports _ [] = pure (Right (M.empty, []))
 loadImports fp imports = do
   let searchDir = takeDirectory fp
   results <- mapM (loadModule searchDir) imports
   case sequence results of
     Left err -> pure (Left err)
-    Right pairs -> pure (Right (M.fromList pairs))
+    Right triples ->
+      let exportMap = M.fromList [(n, e) | (n, e, _) <- triples]
+          typedMods = [t | (_, _, t) <- triples]
+      in pure (Right (exportMap, typedMods))
 
-loadModule :: FilePath -> CST.Import -> IO (Either String (CST.Symbol, M.Map CST.Symbol TC.Scheme))
+loadModule :: FilePath -> CST.Import
+  -> IO (Either String (CST.Symbol, M.Map CST.Symbol TC.Scheme, TC.TResolvedCST))
 loadModule searchDir imp = do
   let modName = CST.impModule imp
       modFile = searchDir </> T.unpack modName ++ ".pll"
@@ -99,11 +105,10 @@ loadModule searchDir imp = do
       src <- T.IO.readFile modFile
       case Parser.parseProgram modFile src of
         Left err -> pure (Left ("parse error in module " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
-        Right modProg -> case Resolve.resolve (CST.progExprs modProg) of
+        Right modProg -> case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs modProg)) of
           Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-          Right resolved -> case TC.typecheck resolved of
+          Right resolved -> case TC.typecheck M.empty resolved of
             Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
             Right typed ->
               let exports = Mod.collectExports typed
-                  schemes = M.map (\t -> TC.Forall mempty t) exports
-              in pure (Right (modName, schemes))
+              in pure (Right (modName, exports, typed))

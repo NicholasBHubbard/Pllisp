@@ -4,11 +4,14 @@ module ResolveSpec (spec) where
 
 import Test.Hspec
 
-import qualified Data.Text as T
+import qualified Data.Map.Strict as M
+import qualified Data.Set        as S
+import qualified Data.Text       as T
 
 import qualified Pllisp.CST     as CST
 import qualified Pllisp.Parser  as Parser
 import qualified Pllisp.Resolve as Resolve
+import qualified Pllisp.SrcLoc  as Loc
 
 spec :: Spec
 spec = do
@@ -88,6 +91,30 @@ spec = do
     it "resolves RType" $ do
       parseAndResolve "(type Foo () (Bar))" `shouldSatisfy` isRight
 
+  describe "imported names" $ do
+    it "resolves imported qualified name" $ do
+      parseAndResolveWith (S.singleton "FOO.BAR") "(let ((x Foo.bar)) x)"
+        `shouldSatisfy` isRight
+
+    it "rejects unimported qualified name" $ do
+      parseAndResolveWith S.empty "(let ((x Foo.bar)) x)"
+        `shouldSatisfy` (not . isRight)
+
+    it "resolves unqualified imported name" $ do
+      parseAndResolveWith (S.fromList ["FOO.BAR", "BAR"]) "(let ((x bar)) x)"
+        `shouldSatisfy` isRight
+
+    it "normalizes qualified name to unqualified via normMap" $ do
+      let scope = S.singleton "FOO.BAR"
+          normMap = M.singleton "FOO.BAR" "BAR"
+      case parseAndResolveWithNorm scope normMap "(let ((x Foo.bar)) x)" of
+        Left e -> expectationFailure ("resolve failed: " ++ show e)
+        Right [Loc.Located _ (Resolve.RLet [(_, rhs)] _)] ->
+          case Loc.locVal rhs of
+            Resolve.RVar vb -> Resolve.symName vb `shouldBe` "BAR"
+            other -> expectationFailure ("expected RVar, got: " ++ show other)
+        Right other -> expectationFailure ("unexpected shape: " ++ show other)
+
   describe "_ (wildcard binder)" $ do
     it "allows multiple _ bindings in let without duplicate error" $ do
       parseAndResolve "(let ((_ 1) (_ 2)) unit)" `shouldSatisfy` isRight
@@ -100,9 +127,17 @@ spec = do
 -- Helpers
 
 parseAndResolve :: T.Text -> Either [Resolve.ResolveError] Resolve.ResolvedCST
-parseAndResolve src = case Parser.parseProgram "<test>" src of
+parseAndResolve = parseAndResolveWith S.empty
+
+parseAndResolveWith :: S.Set CST.Symbol -> T.Text -> Either [Resolve.ResolveError] Resolve.ResolvedCST
+parseAndResolveWith imported src = case Parser.parseProgram "<test>" src of
   Left _    -> error "parse error in test"
-  Right prog -> Resolve.resolve (CST.progExprs prog)
+  Right prog -> Resolve.resolve imported (CST.progExprs prog)
+
+parseAndResolveWithNorm :: S.Set CST.Symbol -> M.Map CST.Symbol CST.Symbol -> T.Text -> Either [Resolve.ResolveError] Resolve.ResolvedCST
+parseAndResolveWithNorm imported normMap src = case Parser.parseProgram "<test>" src of
+  Left _    -> error "parse error in test"
+  Right prog -> Resolve.resolveWith imported normMap (CST.progExprs prog)
 
 isRight :: Either a b -> Bool
 isRight (Right _) = True

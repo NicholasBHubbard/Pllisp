@@ -5,6 +5,8 @@ module ClosureConvertSpec (spec) where
 import Test.Hspec
 
 import qualified Data.List       as L
+import qualified Data.Map.Strict as M
+import qualified Data.Set        as S
 import qualified Data.Text       as T
 
 import qualified Pllisp.CST      as CST
@@ -130,8 +132,8 @@ spec = do
 cc :: T.Text -> CC.CCProgram
 cc src = case Parser.parseProgram "<test>" src of
   Left _    -> error "parse error in test"
-  Right prog -> case Resolve.resolve (CST.progExprs prog) of
+  Right prog -> case Resolve.resolve S.empty (CST.progExprs prog) of
     Left _       -> error "resolve error in test"
-    Right resolved -> case TC.typecheck resolved of
+    Right resolved -> case TC.typecheck M.empty resolved of
       Left _     -> error "typecheck error in test"
       Right typed -> CC.closureConvert typed

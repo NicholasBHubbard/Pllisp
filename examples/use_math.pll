@@ -1,0 +1,3 @@
+(import MATH (SQUARE DOUBLE))
+
+(print (int-to-str (square (double 3))))

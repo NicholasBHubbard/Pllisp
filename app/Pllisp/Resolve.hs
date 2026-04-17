@@ -10,6 +10,7 @@ import qualified Pllisp.SrcLoc as Loc
 import qualified Pllisp.Type as Ty
 
 import qualified Control.Monad.RWS as RWS
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
 -- CORE
@@ -51,14 +52,17 @@ data ResolveError = ResolveError
   , errMsg  :: String
   } deriving (Eq, Show)
 
--- | Resolve monad: Reader for scope, Writer for errors
-type Resolve a = RWS.RWS ResolveScope [ResolveError] () a
+-- | Resolve monad: Reader for (scope, normalization map), Writer for errors
+type Resolve a = RWS.RWS (ResolveScope, M.Map CST.Symbol CST.Symbol) [ResolveError] () a
 
-resolve :: CST.CST -> Either [ResolveError] ResolvedCST
-resolve cst =
+resolve :: S.Set CST.Symbol -> CST.CST -> Either [ResolveError] ResolvedCST
+resolve importedNames = resolveWith importedNames M.empty
+
+resolveWith :: S.Set CST.Symbol -> M.Map CST.Symbol CST.Symbol -> CST.CST -> Either [ResolveError] ResolvedCST
+resolveWith importedNames normMap cst =
   let ctorNames = S.fromList (extractCtorNames cst)
-      initialScope = [S.union BuiltIn.builtInNames ctorNames]
-      (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) initialScope ()
+      initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, importedNames]]
+      (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) (initialScope, normMap) ()
   in if null errors
      then Right result
      else Left errors
@@ -85,15 +89,15 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   CST.ExprLam params mRet body -> do
     dupCheck "duplicate lambda parameter" (map CST.symName params) sp
     let newScope = S.fromList (map CST.symName params)
-    rbody <- RWS.local (newScope :) (resolveExpr body)
+    rbody <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExpr body)
     pure $ RLam params mRet rbody
   CST.ExprLet binds body -> do
     let symNames = map (CST.symName . fst) binds
         newScope = S.fromList (filter (/= "_") symNames)
     dupCheck "duplicate let binding" symNames sp
-    rbinds <- RWS.local (newScope :) $
+    rbinds <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) $
       traverse (\(v, rhs) -> (\r -> (v, r)) <$> resolveExpr rhs) binds
-    rbody <- RWS.local (newScope :) (resolveExpr body)
+    rbody <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExpr body)
     pure (RLet rbinds rbody)
   CST.ExprType name params ctors -> do
     dupCheck "duplicate type parameter" params sp
@@ -108,17 +112,20 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
         (rpat, boundVars) <- resolvePattern pat armSp
         dupCheck "duplicate pattern variable" boundVars armSp
         let newScope = S.fromList boundVars
-        rbody <- RWS.local (newScope :) (resolveExpr body)
+        rbody <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExpr body)
         pure (rpat, rbody)
 
 resolveSym :: CST.Symbol -> Loc.Span -> Resolve VarBinding
 resolveSym sym sp = do
-  sc <- RWS.ask
+  (sc, normMap) <- RWS.ask
   case lookupSym 0 sc of
-    Just binding -> pure binding
+    Just binding ->
+      -- Normalize qualified names: MATH.SQUARE → SQUARE
+      let name = M.findWithDefault (symName binding) (symName binding) normMap
+      in pure (binding { symName = name })
     Nothing -> do
       recordError sp ("symbol not in scope: " ++ show sym)
-      pure $ VarBinding (-1) sym  -- placeholder for unresolved symbol
+      pure $ VarBinding (-1) sym
   where
     lookupSym _ [] = Nothing
     lookupSym n (f:fs)

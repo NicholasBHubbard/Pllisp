@@ -1,0 +1,5 @@
+(module MATH)
+
+(let ((square (lam ((x %INT)) (mul x x)))
+      (double (lam ((x %INT)) (mul 2 x))))
+  unit)
