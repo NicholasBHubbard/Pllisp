@@ -89,6 +89,7 @@ executable pllisp
                       filepath,
                       megaparsec ^>=9.7.0,
                       mtl        ^>=2.3.2,
+                      process,
                       text       ^>=2.1.2
 
 

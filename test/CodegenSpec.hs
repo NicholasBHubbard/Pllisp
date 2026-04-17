@@ -383,6 +383,45 @@ spec = do
       run "(let ((id (lam (x) x))) (print (int-to-str (id 42))))"
         >>= (`shouldBe` "42")
 
+  describe "recursive closures" $ do
+    it "recursive sum" $
+      run (T.unlines
+        [ "(let ((sum (lam ((n %INT))"
+        , "  (if (eq n 0) 0 (add n (sum (sub n 1)))))))"
+        , "  (print (int-to-str (sum 5))))"
+        ]) >>= (`shouldBe` "15")
+    it "recursive countdown" $
+      run (T.unlines
+        [ "(let ((countdown (lam ((n %INT))"
+        , "  (if (eq n 0)"
+        , "    (print \"done\")"
+        , "    (let ((_ (print (int-to-str n))))"
+        , "      (countdown (sub n 1)))))))"
+        , "  (countdown 3))"
+        ]) >>= (`shouldBe` "3\n2\n1\ndone")
+    it "recursive with captured variable" $
+      run (T.unlines
+        [ "(let ((base 10))"
+        , "  (let ((f (lam ((n %INT))"
+        , "    (if (eq n 0) base (f (sub n 1))))))"
+        , "    (print (int-to-str (f 5)))))"
+        ]) >>= (`shouldBe` "10")
+    it "recursive factorial" $
+      run (T.unlines
+        [ "(let ((fact (lam ((n %INT))"
+        , "  (if (eq n 0) 1 (mul n (fact (sub n 1)))))))"
+        , "  (print (int-to-str (fact 6))))"
+        ]) >>= (`shouldBe` "720")
+    it "recursive with dummy arg (loop pattern)" $
+      run (T.unlines
+        [ "(let ((n 3))"
+        , "  (let ((loop (lam ((dummy %INT))"
+        , "    (if (eq n 0) unit"
+        , "      (let ((_ (print (int-to-str n))))"
+        , "        unit)))))"
+        , "    (loop 0)))"
+        ]) >>= (`shouldBe` "3")
+
   describe "ADT edge cases" $ do
     it "constructor with two fields" $
       run (T.unlines
@@ -474,6 +513,63 @@ spec = do
         , "    (_ (print \"other\"))))"
         ]) >>= (`shouldBe` "five")
 
+  describe "new built-ins" $ do
+    it "str-contains found" $
+      run "(print (int-to-str (if (str-contains \"hello world\" \"world\") 1 0)))"
+        >>= (`shouldBe` "1")
+    it "str-contains not found" $
+      run "(print (int-to-str (if (str-contains \"hello world\" \"xyz\") 1 0)))"
+        >>= (`shouldBe` "0")
+    it "str-contains empty needle" $
+      run "(print (int-to-str (if (str-contains \"hello\" \"\") 1 0)))"
+        >>= (`shouldBe` "1")
+    it "str-contains empty haystack" $
+      run "(print (int-to-str (if (str-contains \"\" \"a\") 1 0)))"
+        >>= (`shouldBe` "0")
+    it "substr" $
+      run "(print (substr \"hello world\" 6 5))" >>= (`shouldBe` "world")
+    it "substr from start" $
+      run "(print (substr \"hello\" 0 3))" >>= (`shouldBe` "hel")
+    it "substr zero length" $
+      run "(print (concat \"[\" (concat (substr \"hello\" 0 0) \"]\")))"
+        >>= (`shouldBe` "[]")
+    it "argc" $
+      run "(print (int-to-str (argc unit)))" >>= (`shouldBe` "1")
+    it "argv 0" $
+      runWith ["foo", "bar"] "(print (argv 1))" >>= (`shouldBe` "foo")
+    it "read-line and is-eof" $
+      runWithInput "hello\n" (T.unlines
+        [ "(let ((line (read-line unit)))"
+        , "  (print line))"
+        ]) >>= (`shouldBe` "hello")
+    it "is-eof after exhausted input" $
+      runWithInput "" (T.unlines
+        [ "(let ((line (read-line unit)))"
+        , "  (print (int-to-str (if (is-eof unit) 1 0))))"
+        ]) >>= (`shouldBe` "1")
+    it "read-line multiple lines" $
+      runWithInput "first\nsecond\n" (T.unlines
+        [ "(let ((a (read-line unit)))"
+        , "  (let ((b (read-line unit)))"
+        , "    (let ((_ (print a)))"
+        , "      (print b))))"
+        ]) >>= (`shouldBe` "first\nsecond")
+    it "is-eof false before exhaustion" $
+      runWithInput "hello\n" (T.unlines
+        [ "(let ((_ (print (int-to-str (if (is-eof unit) 1 0)))))"
+        , "  (let ((line (read-line unit)))"
+        , "    (print line)))"
+        ]) >>= (`shouldBe` "0\nhello")
+    it "argc with extra args" $
+      runWith ["x", "y"] "(print (int-to-str (argc unit)))" >>= (`shouldBe` "3")
+    it "argv second arg" $
+      runWith ["hello", "world"] "(print (argv 2))" >>= (`shouldBe` "world")
+    it "substr full string" $
+      run "(print (substr \"hello\" 0 5))" >>= (`shouldBe` "hello")
+    it "str-contains self" $
+      run "(print (int-to-str (if (str-contains \"hello\" \"hello\") 1 0)))"
+        >>= (`shouldBe` "1")
+
 -- HELPERS
 
 pipeline :: T.Text -> T.Text
@@ -487,22 +583,27 @@ pipeline src = case Parser.parseProgram "<test>" src of
         Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
 
 run :: T.Text -> IO String
-run src = do
+run = runWith []
+
+runWith :: [String] -> T.Text -> IO String
+runWith = runWithStdin ""
+
+runWithInput :: String -> T.Text -> IO String
+runWithInput stdin' = runWithStdin stdin' []
+
+runWithStdin :: String -> [String] -> T.Text -> IO String
+runWithStdin stdin' extraArgs src = do
   let ir = pipeline src
   T.IO.writeFile "/tmp/pllisp_test.ll" ir
   (ec1, _, err1) <- readProcessWithExitCode
-    "llc" ["/tmp/pllisp_test.ll", "-o", "/tmp/pllisp_test.o", "-filetype=obj"] ""
+    "clang" ["/tmp/pllisp_test.ll", "-o", "/tmp/pllisp_test_exe", "-lm"] ""
   case ec1 of
-    ExitFailure _ -> error ("llc failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
+    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do
-      (ec2, _, err2) <- readProcessWithExitCode
-        "gcc" ["/tmp/pllisp_test.o", "-o", "/tmp/pllisp_test_exe", "-lm"] ""
+      (ec2, out, err2) <- readProcessWithExitCode
+        "/tmp/pllisp_test_exe" extraArgs stdin'
       case ec2 of
-        ExitFailure _ -> error ("gcc link failed:\n" ++ err2)
-        ExitSuccess -> do
-          (ec3, out, err3) <- readProcessWithExitCode "/tmp/pllisp_test_exe" [] ""
-          case ec3 of
-            ExitSuccess   -> pure (strip out)
-            ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err3)
+        ExitSuccess   -> pure (strip out)
+        ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
   where
     strip = reverse . dropWhile (== '\n') . reverse

@@ -58,9 +58,15 @@ builtInTypes = M.fromList
   -- String
   , ("CONCAT", Ty.TyFun [Ty.TyStr, Ty.TyStr] Ty.TyStr)
   , ("STRLEN", Ty.TyFun [Ty.TyStr] Ty.TyInt)
+  , ("SUBSTR", Ty.TyFun [Ty.TyStr, Ty.TyInt, Ty.TyInt] Ty.TyStr)
+  , ("STR-CONTAINS", Ty.TyFun [Ty.TyStr, Ty.TyStr] Ty.TyBool)
   -- IO
   , ("PRINT",     Ty.TyFun [Ty.TyStr] Ty.TyUnit)
   , ("READ-LINE", Ty.TyFun [Ty.TyUnit] Ty.TyStr)
+  , ("IS-EOF",    Ty.TyFun [Ty.TyUnit] Ty.TyBool)
+  -- CLI
+  , ("ARGC", Ty.TyFun [Ty.TyUnit] Ty.TyInt)
+  , ("ARGV", Ty.TyFun [Ty.TyInt] Ty.TyStr)
   -- Conversion
   , ("INT-TO-FLT", Ty.TyFun [Ty.TyInt] Ty.TyFlt)
   , ("FLT-TO-INT", Ty.TyFun [Ty.TyFlt] Ty.TyInt)

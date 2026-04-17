@@ -3,22 +3,27 @@
 module Main (main) where
 
 import System.Environment (getArgs)
-import System.FilePath (takeDirectory, (</>))
+import System.Exit (ExitCode(..), exitFailure)
+import System.FilePath (takeDirectory, dropExtension, (</>))
 import System.Directory (doesFileExist)
+import System.Process (readProcessWithExitCode)
 
 import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 import qualified Data.Text.IO    as T.IO
 import qualified Text.Megaparsec as MP
 
-import qualified Pllisp.CST         as CST
-import qualified Pllisp.Error       as Error
-import qualified Pllisp.ExhaustCheck as Exhaust
-import qualified Pllisp.Module      as Mod
-import qualified Pllisp.Parser      as Parser
-import qualified Pllisp.Resolve     as Resolve
-import qualified Pllisp.SrcLoc      as Loc
-import qualified Pllisp.TypeCheck   as TC
+import qualified Pllisp.Codegen        as Codegen
+import qualified Pllisp.ClosureConvert as CC
+import qualified Pllisp.CST            as CST
+import qualified Pllisp.Error          as Error
+import qualified Pllisp.ExhaustCheck   as Exhaust
+import qualified Pllisp.LambdaLift     as LL
+import qualified Pllisp.Module         as Mod
+import qualified Pllisp.Parser         as Parser
+import qualified Pllisp.Resolve        as Resolve
+import qualified Pllisp.SrcLoc         as Loc
+import qualified Pllisp.TypeCheck      as TC
 
 main :: IO ()
 main = do
@@ -57,8 +62,21 @@ compileProg fp src render prog = do
             Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
             Right typed ->
               case Exhaust.exhaustCheck typed of
-                [] -> print typed
-                errs -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
+                errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
+                [] -> do
+                  let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
+                      base = dropExtension fp
+                      llFile = base ++ ".ll"
+                      exeFile = base
+                  T.IO.writeFile llFile ir
+                  (ec, _, err') <- readProcessWithExitCode
+                    "clang" [llFile, "-o", exeFile, "-lm"] ""
+                  case ec of
+                    ExitFailure _ -> do
+                      putStrLn ("clang failed:\n" ++ err')
+                      exitFailure
+                    ExitSuccess ->
+                      putStrLn ("compiled: " ++ exeFile)
 
 -- | Load all imported modules and collect their exports.
 loadImports :: FilePath -> [CST.Import] -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)))

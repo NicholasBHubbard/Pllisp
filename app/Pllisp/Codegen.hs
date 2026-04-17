@@ -76,9 +76,14 @@ externDecls = T.unlines
   , "declare i32 @strcmp(ptr, ptr)"
   , "declare ptr @strcpy(ptr, ptr)"
   , "declare ptr @strcat(ptr, ptr)"
+  , "declare ptr @strstr(ptr, ptr)"
+  , "declare ptr @memcpy(ptr, ptr, i64)"
   , "declare i32 @snprintf(ptr, i64, ptr, ...)"
   , "declare ptr @fgets(ptr, i32, ptr)"
+  , "declare i32 @feof(ptr)"
   , "@stdin = external global ptr"
+  , "@__argc = private global i32 0"
+  , "@__argv = private global ptr null"
   ]
 
 fmtConstants :: T.Text
@@ -225,6 +230,10 @@ genMain exprs = do
   savedBlock  <- gets csBlock
   modify' (\s -> s { csVars = M.empty, csInstrs = [], csBlock = "entry" })
 
+  -- Store argc/argv into globals
+  emit "store i32 %argc, ptr @__argc"
+  emit "store ptr %argv, ptr @__argv"
+
   mapM_ genTopExpr exprs
   emit "ret i32 0"
 
@@ -232,7 +241,7 @@ genMain exprs = do
   modify' (\s -> s { csVars = savedVars, csInstrs = savedInstrs, csBlock = savedBlock })
 
   pure $ T.unlines $
-    [ "define i32 @main() {"
+    [ "define i32 @main(i32 %argc, ptr %argv) {"
     , "entry:" ]
     ++ instrs
     ++ [ "}" ]
@@ -252,9 +261,22 @@ genExpr (Ty.Typed t expr) = case expr of
 
   LL.LLLet binds body -> do
     savedVars <- gets csVars
-    forM_ binds $ \(name, _, rhs) -> do
-      op <- genExpr rhs
-      bindVar name op
+    -- Pass 1: pre-allocate closures so recursive references work
+    forM_ binds $ \(name, _, rhs) -> case Ty.val rhs of
+      LL.LLMkClosure _ envArgs -> do
+        let totalSize = slotSize * (1 + length envArgs)
+        closure <- fresh
+        emit (closure <> " = call ptr @malloc(i64 " <> tshow totalSize <> ")")
+        bindVar name closure
+      _ -> pure ()
+    -- Pass 2: fill in closures and generate other bindings
+    forM_ binds $ \(name, _, rhs) -> case Ty.val rhs of
+      LL.LLMkClosure fnName envArgs -> do
+        closure <- lookupVar name
+        fillClosure closure fnName envArgs
+      _ -> do
+        op <- genExpr rhs
+        bindVar name op
     result <- genExpr body
     modify' (\s -> s { csVars = savedVars })
     pure result
@@ -326,19 +348,18 @@ genMkClosure name envArgs = do
   let totalSize = slotSize * (1 + length envArgs)
   closure <- fresh
   emit (closure <> " = call ptr @malloc(i64 " <> tshow totalSize <> ")")
+  fillClosure closure name envArgs
+  pure closure
 
-  -- Store function pointer at offset 0
+fillClosure :: T.Text -> CST.Symbol -> [LL.LLExpr] -> CgM ()
+fillClosure closure name envArgs = do
   emit ("store ptr @" <> sanitize name <> ", ptr " <> closure)
-
-  -- Store env values at subsequent offsets
   forM_ (zip [1..] envArgs) $ \(i, envExpr) -> do
     envOp <- genExpr envExpr
     ptr <- fresh
     emit (ptr <> " = getelementptr i8, ptr " <> closure
       <> ", i64 " <> tshow (slotSize * (i :: Int)))
     emit ("store " <> llvmType (Ty.ty envExpr) <> " " <> envOp <> ", ptr " <> ptr)
-
-  pure closure
 
 genClosureCall :: T.Text -> [(Ty.Type, T.Text)] -> Ty.Type -> CgM T.Text
 genClosureCall closureOp argResults resTy = do
@@ -584,6 +605,30 @@ genBuiltIn name args _resTy = case name of
     emit (r <> " = call i64 @strlen(ptr " <> s <> ")")
     pure r
 
+  "SUBSTR" -> do
+    let [(_, s), (_, start), (_, len)] = args
+    buf <- fresh
+    len1 <- fresh
+    emit (len1 <> " = add i64 " <> len <> ", 1")
+    emit (buf <> " = call ptr @malloc(i64 " <> len1 <> ")")
+    srcPtr <- fresh
+    emit (srcPtr <> " = getelementptr i8, ptr " <> s <> ", i64 " <> start)
+    d <- fresh
+    emit (d <> " = call ptr @memcpy(ptr " <> buf <> ", ptr " <> srcPtr <> ", i64 " <> len <> ")")
+    -- Null-terminate
+    termPtr <- fresh
+    emit (termPtr <> " = getelementptr i8, ptr " <> buf <> ", i64 " <> len)
+    emit ("store i8 0, ptr " <> termPtr)
+    pure buf
+
+  "STR-CONTAINS" -> do
+    let [(_, haystack), (_, needle)] = args
+    result <- fresh
+    emit (result <> " = call ptr @strstr(ptr " <> haystack <> ", ptr " <> needle <> ")")
+    r <- fresh
+    emit (r <> " = icmp ne ptr " <> result <> ", null")
+    pure r
+
   -- IO
   "PRINT" -> do
     let [(_, s)] = args
@@ -598,15 +643,68 @@ genBuiltIn name args _resTy = case name of
     emit (stdinVal <> " = load ptr, ptr @stdin")
     d <- fresh
     emit (d <> " = call ptr @fgets(ptr " <> buf <> ", i32 1024, ptr " <> stdinVal <> ")")
-    -- Strip trailing newline
+    -- Check for EOF (fgets returns null)
+    isNull <- fresh
+    emit (isNull <> " = icmp eq ptr " <> d <> ", null")
+    eofLbl <- freshLabel "readline.eof"
+    okLbl  <- freshLabel "readline.ok"
+    doneLbl <- freshLabel "readline.done"
+    emit ("br i1 " <> isNull <> ", label %" <> eofLbl <> ", label %" <> okLbl)
+    -- EOF: null-terminate at position 0
+    emitLabel eofLbl
+    emit ("store i8 0, ptr " <> buf)
+    emit ("br label %" <> doneLbl)
+    -- OK: strip trailing newline
+    emitLabel okLbl
     len <- fresh
     emit (len <> " = call i64 @strlen(ptr " <> buf <> ")")
+    hasChars <- fresh
+    emit (hasChars <> " = icmp sgt i64 " <> len <> ", 0")
+    stripLbl <- freshLabel "readline.strip"
+    emit ("br i1 " <> hasChars <> ", label %" <> stripLbl <> ", label %" <> doneLbl)
+    emitLabel stripLbl
     lenM1 <- fresh
     emit (lenM1 <> " = sub i64 " <> len <> ", 1")
     lastPtr <- fresh
     emit (lastPtr <> " = getelementptr i8, ptr " <> buf <> ", i64 " <> lenM1)
+    lastChar <- fresh
+    emit (lastChar <> " = load i8, ptr " <> lastPtr)
+    isNl <- fresh
+    emit (isNl <> " = icmp eq i8 " <> lastChar <> ", 10")
+    nlLbl <- freshLabel "readline.nl"
+    emit ("br i1 " <> isNl <> ", label %" <> nlLbl <> ", label %" <> doneLbl)
+    emitLabel nlLbl
     emit ("store i8 0, ptr " <> lastPtr)
+    emit ("br label %" <> doneLbl)
+    emitLabel doneLbl
     pure buf
+
+  "IS-EOF" -> do
+    stdinVal <- fresh
+    emit (stdinVal <> " = load ptr, ptr @stdin")
+    r <- fresh
+    emit (r <> " = call i32 @feof(ptr " <> stdinVal <> ")")
+    result <- fresh
+    emit (result <> " = icmp ne i32 " <> r <> ", 0")
+    pure result
+
+  -- CLI
+  "ARGC" -> do
+    r <- fresh
+    emit (r <> " = load i32, ptr @__argc")
+    result <- fresh
+    emit (result <> " = sext i32 " <> r <> " to i64")
+    pure result
+
+  "ARGV" -> do
+    let [(_, idx)] = args
+    argvPtr <- fresh
+    emit (argvPtr <> " = load ptr, ptr @__argv")
+    elemPtr <- fresh
+    emit (elemPtr <> " = getelementptr ptr, ptr " <> argvPtr <> ", i64 " <> idx)
+    r <- fresh
+    emit (r <> " = load ptr, ptr " <> elemPtr)
+    pure r
 
   -- Conversion
   "INT-TO-FLT" -> do

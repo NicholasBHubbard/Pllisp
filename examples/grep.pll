@@ -1,0 +1,16 @@
+(let ((pattern (if (lt (argc unit) 2)
+                 (let ((_ (print "usage: grep <pattern>"))) "")
+                 (argv 1))))
+  (let ((loop (lam ((dummy %INT))
+    (if (is-eof unit)
+      unit
+      (let ((line (read-line unit)))
+        (if (is-eof unit)
+          unit
+          (let ((_ (if (str-contains line pattern)
+                     (print line)
+                     unit)))
+            (loop 0))))))))
+    (if (lt (argc unit) 2)
+      unit
+      (loop 0))))
