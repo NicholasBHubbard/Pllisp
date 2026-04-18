@@ -231,6 +231,12 @@ spec = do
         CST.ExprLam _ (Just (Ty.TyCon "MAYBE" [])) _ -> pure ()
         _ -> expectationFailure (show r)
 
+    it "%(List %INT) parameterized type in lambda param" $ do
+      r <- either fail pure $ parseOne "(lam ((x %(List %INT))) x)"
+      case r of
+        CST.ExprLam [CST.TSymbol _ (Just (Ty.TyCon "LIST" [Ty.TyInt]))] _ _ -> pure ()
+        _ -> expectationFailure (show r)
+
     it "type var in constructor arg" $ do
       r <- either fail pure $ parseOne "(type List (a) (Cons a %INT))"
       case r of
@@ -291,6 +297,47 @@ spec = do
       CST.progName prog `shouldBe` Just "MAIN"
       length (CST.progImports prog) `shouldBe` 2
       length (CST.progExprs prog) `shouldBe` 1
+
+  describe "rx literal" $ do
+    it "simple rx" $ do
+      r <- either fail pure $ parseOne "/foo/"
+      r `shouldBe` CST.ExprLit (CST.LitRx "foo" "")
+
+    it "rx with flags" $ do
+      r <- either fail pure $ parseOne "/foo/gi"
+      r `shouldBe` CST.ExprLit (CST.LitRx "foo" "gi")
+
+    it "rx with backslash sequences" $ do
+      r <- either fail pure $ parseOne "/\\d+/"
+      r `shouldBe` CST.ExprLit (CST.LitRx "\\d+" "")
+
+    it "rx with escaped slash" $ do
+      r <- either fail pure $ parseOne "/foo\\/bar/"
+      r `shouldBe` CST.ExprLit (CST.LitRx "foo/bar" "")
+
+    it "empty rx" $ do
+      r <- either fail pure $ parseOne "//"
+      r `shouldBe` CST.ExprLit (CST.LitRx "" "")
+
+    it "rx with all flag types" $ do
+      r <- either fail pure $ parseOne "/test/imsx"
+      r `shouldBe` CST.ExprLit (CST.LitRx "test" "imsx")
+
+    it "rx with \\Q\\E quoting" $ do
+      r <- either fail pure $ parseOne "/\\Qfoo.bar\\E/"
+      r `shouldBe` CST.ExprLit (CST.LitRx "\\Qfoo.bar\\E" "")
+
+    it "rx as function argument" $ do
+      r <- either fail pure $ parseOne "(rx-match /hello/ \"world\")"
+      case r of
+        CST.ExprApp _ [Loc.Located _ (CST.ExprLit (CST.LitRx "hello" "")), _] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "%RX type annotation" $ do
+      r <- either fail pure $ parseOne "(lam ((r %RX)) r)"
+      case r of
+        CST.ExprLam [CST.TSymbol "R" (Just Ty.TyRx)] _ _ -> pure ()
+        _ -> expectationFailure (show r)
 
   describe "error cases" $ do
     it "unclosed paren" $ do

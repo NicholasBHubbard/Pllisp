@@ -128,6 +128,16 @@ spec = do
         Left errs -> expectationFailure (show (map TC.teMsg errs))
         Right typed -> topType typed `shouldBe` Ty.TyUnit
 
+    it "typechecks rx literal" $ do
+      case parseAndTypecheck "/foo/" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyRx
+
+    it "typechecks rx literal with flags" $ do
+      case parseAndTypecheck "/\\d+/i" of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyRx
+
     it "typechecks PRINT as STR -> UNIT" $ do
       case parseAndTypecheck "(print \"hello\")" of
         Left errs -> expectationFailure (show (map TC.teMsg errs))
@@ -219,6 +229,9 @@ spec = do
 
     it "unify TyUnit with TyUnit" $ do
       TC.unify dummySpan Ty.TyUnit Ty.TyUnit `shouldBe` Right M.empty
+
+    it "unify TyRx with TyRx" $ do
+      TC.unify dummySpan Ty.TyRx Ty.TyRx `shouldBe` Right M.empty
 
     it "unify TyFun recursive" $ do
       let sp = dummySpan

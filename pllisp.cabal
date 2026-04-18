@@ -47,6 +47,8 @@ build-type:         Simple
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    README.md
+data-dir:           stdlib
+data-files:         PRELUDE.pll
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
@@ -76,8 +78,11 @@ executable pllisp
                       Pllisp.Parser,
                       Pllisp.Resolve,
                       Pllisp.SrcLoc,
+                      Pllisp.Stdlib,
                       Pllisp.Type,
-                      Pllisp.TypeCheck
+                      Pllisp.TypeCheck,
+                      Paths_pllisp
+    autogen-modules:  Paths_pllisp
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -128,8 +133,11 @@ test-suite pllisp-test
                       Pllisp.Parser,
                       Pllisp.Resolve,
                       Pllisp.SrcLoc,
+                      Pllisp.Stdlib,
                       Pllisp.Type,
-                      Pllisp.TypeCheck
+                      Pllisp.TypeCheck,
+                      Paths_pllisp
+    autogen-modules:  Paths_pllisp
     build-depends:    base       ^>=4.21.0.0,
                       containers ^>=0.7,
                       megaparsec ^>=9.7.0,

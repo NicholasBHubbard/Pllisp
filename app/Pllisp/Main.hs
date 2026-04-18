@@ -22,6 +22,7 @@ import qualified Pllisp.ExhaustCheck   as Exhaust
 import qualified Pllisp.LambdaLift     as LL
 import qualified Pllisp.Module         as Mod
 import qualified Pllisp.Parser         as Parser
+import qualified Pllisp.Stdlib         as Stdlib
 import qualified Pllisp.Resolve        as Resolve
 import qualified Pllisp.SrcLoc         as Loc
 import qualified Pllisp.TypeCheck      as TC
@@ -53,8 +54,9 @@ compileProg fp src render prog = do
   case importResult of
     Left err -> putStrLn err
     Right (exportMap, importedTypedModules) -> do
+      preludeDecls <- Stdlib.loadPrelude
       let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap (CST.progImports prog)
-          exprs = Mod.desugarTopLevel (CST.progExprs prog)
+          exprs = preludeDecls ++ Mod.desugarTopLevel (CST.progExprs prog)
       case Resolve.resolveWith resolveScope normMap exprs of
         Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
         Right resolved ->
@@ -71,7 +73,7 @@ compileProg fp src render prog = do
                       exeFile = base
                   T.IO.writeFile llFile ir
                   (ec, _, err') <- readProcessWithExitCode
-                    "clang" [llFile, "-o", exeFile, "-lm"] ""
+                    "clang" [llFile, "-o", exeFile, "-lm", "-lpcre2-8"] ""
                   case ec of
                     ExitFailure _ -> do
                       putStrLn ("clang failed:\n" ++ err')
@@ -105,10 +107,12 @@ loadModule searchDir imp = do
       src <- T.IO.readFile modFile
       case Parser.parseProgram modFile src of
         Left err -> pure (Left ("parse error in module " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
-        Right modProg -> case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs modProg)) of
-          Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-          Right resolved -> case TC.typecheck M.empty resolved of
-            Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
-            Right typed ->
-              let exports = Mod.collectExports typed
-              in pure (Right (modName, exports, typed))
+        Right modProg -> do
+          preludeDecls <- Stdlib.loadPrelude
+          case Resolve.resolve S.empty (preludeDecls ++ Mod.desugarTopLevel (CST.progExprs modProg)) of
+            Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+            Right resolved -> case TC.typecheck M.empty resolved of
+              Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+              Right typed ->
+                let exports = Mod.collectExports typed
+                in pure (Right (modName, exports, typed))

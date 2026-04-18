@@ -9,6 +9,7 @@ import qualified Pllisp.CST as CST
 import qualified Pllisp.LambdaLift as LL
 import qualified Pllisp.Type as Ty
 
+import Data.Bits ((.|.))
 import Control.Monad (forM_, void)
 import Control.Monad.State.Strict
 import qualified Data.Map.Strict as M
@@ -59,6 +60,7 @@ codegen prog = evalState go initState
         ++ [ fmtConstants ]
         ++ strDecls
         ++ [ "" ]
+        ++ [ rxHelperDefs ]
         ++ defTexts
         ++ [ mainText ]
 
@@ -84,6 +86,17 @@ externDecls = T.unlines
   , "@stdin = external global ptr"
   , "@__argc = private global i32 0"
   , "@__argv = private global ptr null"
+  , "declare ptr @realloc(ptr, i64)"
+  -- PCRE2 (8-bit)
+  , "declare ptr @pcre2_compile_8(ptr, i64, i32, ptr, ptr, ptr)"
+  , "declare ptr @pcre2_match_data_create_from_pattern_8(ptr, ptr)"
+  , "declare i32 @pcre2_match_8(ptr, ptr, i64, i64, i32, ptr, ptr)"
+  , "declare ptr @pcre2_get_ovector_pointer_8(ptr)"
+  , "declare i32 @pcre2_get_ovector_count_8(ptr)"
+  , "declare void @pcre2_match_data_free_8(ptr)"
+  , "declare void @pcre2_code_free_8(ptr)"
+  , "declare i32 @pcre2_substitute_8(ptr, ptr, i64, i64, i32, ptr, ptr, ptr, i64, ptr, ptr)"
+  , "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)"
   ]
 
 fmtConstants :: T.Text
@@ -127,6 +140,7 @@ llvmType Ty.TyFlt       = "double"
 llvmType Ty.TyStr       = "ptr"
 llvmType Ty.TyBool      = "i1"
 llvmType Ty.TyUnit      = "i8"
+llvmType Ty.TyRx     = "ptr"
 llvmType (Ty.TyFun _ _) = "ptr"
 llvmType (Ty.TyCon _ _) = "ptr"
 llvmType (Ty.TyVar _)   = "ptr"
@@ -291,6 +305,28 @@ genLit :: CST.Literal -> CgM T.Text
 genLit (CST.LitInt n) = pure (tshow n)
 genLit (CST.LitFlt f) = pure (T.pack (showFlt f))
 genLit (CST.LitStr s) = addStrLit s
+genLit (CST.LitRx pat flags) = do
+  patPtr <- addStrLit pat
+  let compileOpts = flagsToCompileOpts flags
+  -- pcre2_compile_8(pattern, PCRE2_ZERO_TERMINATED, options, &errcode, &erroffset, NULL)
+  errcode <- fresh
+  emit (errcode <> " = alloca i32")
+  erroff <- fresh
+  emit (erroff <> " = alloca i64")
+  compiled <- fresh
+  emit (compiled <> " = call ptr @pcre2_compile_8(ptr " <> patPtr
+    <> ", i64 -1, i32 " <> tshow compileOpts
+    <> ", ptr " <> errcode <> ", ptr " <> erroff <> ", ptr null)")
+  pure compiled
+
+flagsToCompileOpts :: T.Text -> Int
+flagsToCompileOpts = T.foldl' addFlag 0
+  where
+    addFlag acc 'i' = acc .|. 0x8    -- PCRE2_CASELESS
+    addFlag acc 'm' = acc .|. 0x400  -- PCRE2_MULTILINE
+    addFlag acc 's' = acc .|. 0x20   -- PCRE2_DOTALL
+    addFlag acc 'x' = acc .|. 0x80   -- PCRE2_EXTENDED
+    addFlag acc _   = acc            -- unknown flags (e.g. 'g') ignored
 
 showFlt :: Double -> String
 showFlt f =
@@ -737,6 +773,57 @@ genBuiltIn name args _resTy = case name of
       <> ", i64 32, ptr @fmt.flt, double " <> op <> ")")
     pure buf
 
+  -- Rx
+  "RX-MATCH" -> do
+    let [(_, pat), (_, subj)] = args
+    r <- fresh
+    emit (r <> " = call i32 @pll_rx_match(ptr " <> pat <> ", ptr " <> subj <> ")")
+    result <- fresh
+    emit (result <> " = icmp ne i32 " <> r <> ", 0")
+    pure result
+
+  "RX-FIND" -> do
+    let [(_, pat), (_, subj)] = args
+    r <- fresh
+    emit (r <> " = call ptr @pll_rx_find(ptr " <> pat <> ", ptr " <> subj <> ")")
+    pure r
+
+  "RX-SUB" -> do
+    let [(_, pat), (_, repl), (_, subj)] = args
+    r <- fresh
+    emit (r <> " = call ptr @pll_rx_sub(ptr " <> pat <> ", ptr " <> repl <> ", ptr " <> subj <> ")")
+    pure r
+
+  "RX-GSUB" -> do
+    let [(_, pat), (_, repl), (_, subj)] = args
+    r <- fresh
+    emit (r <> " = call ptr @pll_rx_gsub(ptr " <> pat <> ", ptr " <> repl <> ", ptr " <> subj <> ")")
+    pure r
+
+  "RX-SPLIT" -> do
+    let [(_, pat), (_, subj)] = args
+    r <- fresh
+    emit (r <> " = call ptr @pll_rx_split(ptr " <> pat <> ", ptr " <> subj <> ")")
+    pure r
+
+  "RX-CAPTURES" -> do
+    let [(_, pat), (_, subj)] = args
+    r <- fresh
+    emit (r <> " = call ptr @pll_rx_captures(ptr " <> pat <> ", ptr " <> subj <> ")")
+    pure r
+
+  "RX-COMPILE" -> do
+    let [(_, s)] = args
+    errcode <- fresh
+    emit (errcode <> " = alloca i32")
+    erroff <- fresh
+    emit (erroff <> " = alloca i64")
+    compiled <- fresh
+    emit (compiled <> " = call ptr @pcre2_compile_8(ptr " <> s
+      <> ", i64 -1, i32 0"
+      <> ", ptr " <> errcode <> ", ptr " <> erroff <> ", ptr null)")
+    pure compiled
+
   _ -> error ("Codegen: unknown built-in: " <> T.unpack name)
 
 -- Helpers for binary ops
@@ -760,3 +847,341 @@ fltCmp :: T.Text -> [(Ty.Type, T.Text)] -> CgM T.Text
 fltCmp p [(_, a), (_, b)] = do
   r <- fresh; emit (r <> " = fcmp " <> p <> " double " <> a <> ", " <> b); pure r
 fltCmp _ _ = error "fltCmp: expected 2 args"
+
+-- RX HELPER FUNCTIONS (embedded LLVM IR)
+-- These implement the 6 rx built-ins using PCRE2, defined as functions
+-- within the generated module so we don't need a separate C file.
+-- All helpers receive a pre-compiled PCRE2 rx (ptr) as first argument.
+
+rxHelperDefs :: T.Text
+rxHelperDefs = T.unlines
+  -- pll_rx_match: does compiled rx match subject? returns i32 (0/1)
+  [ "define i32 @pll_rx_match(ptr %re, ptr %subj) {"
+  , "entry:"
+  , "  %null = icmp eq ptr %re, null"
+  , "  br i1 %null, label %fail, label %try"
+  , "try:"
+  , "  %md = call ptr @pcre2_match_data_create_from_pattern_8(ptr %re, ptr null)"
+  , "  %rc = call i32 @pcre2_match_8(ptr %re, ptr %subj, i64 -1, i64 0, i32 0, ptr %md, ptr null)"
+  , "  call void @pcre2_match_data_free_8(ptr %md)"
+  , "  %ok = icmp sgt i32 %rc, -1"
+  , "  %r = zext i1 %ok to i32"
+  , "  br label %done"
+  , "fail:"
+  , "  br label %done"
+  , "done:"
+  , "  %ret = phi i32 [ %r, %try ], [ 0, %fail ]"
+  , "  ret i32 %ret"
+  , "}"
+  , ""
+  -- pll_rx_find: first match as new string, or ""
+  , "define ptr @pll_rx_find(ptr %re, ptr %subj) {"
+  , "entry:"
+  , "  %null = icmp eq ptr %re, null"
+  , "  br i1 %null, label %nomatch, label %try"
+  , "try:"
+  , "  %md = call ptr @pcre2_match_data_create_from_pattern_8(ptr %re, ptr null)"
+  , "  %rc = call i32 @pcre2_match_8(ptr %re, ptr %subj, i64 -1, i64 0, i32 0, ptr %md, ptr null)"
+  , "  %miss = icmp slt i32 %rc, 0"
+  , "  br i1 %miss, label %nomatch.md, label %hit"
+  , "nomatch.md:"
+  , "  call void @pcre2_match_data_free_8(ptr %md)"
+  , "  br label %nomatch"
+  , "nomatch:"
+  , "  %e0 = call ptr @malloc(i64 1)"
+  , "  store i8 0, ptr %e0"
+  , "  ret ptr %e0"
+  , "hit:"
+  , "  %ov = call ptr @pcre2_get_ovector_pointer_8(ptr %md)"
+  , "  %s = load i64, ptr %ov"
+  , "  %ep = getelementptr i64, ptr %ov, i32 1"
+  , "  %e = load i64, ptr %ep"
+  , "  %len = sub i64 %e, %s"
+  , "  %len1 = add i64 %len, 1"
+  , "  %buf = call ptr @malloc(i64 %len1)"
+  , "  %src = getelementptr i8, ptr %subj, i64 %s"
+  , "  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %src, i64 %len, i1 false)"
+  , "  %term = getelementptr i8, ptr %buf, i64 %len"
+  , "  store i8 0, ptr %term"
+  , "  call void @pcre2_match_data_free_8(ptr %md)"
+  , "  ret ptr %buf"
+  , "}"
+  , ""
+  -- pll_rx_sub: replace first
+  , "define ptr @pll_rx_sub(ptr %re, ptr %repl, ptr %subj) {"
+  , "entry:"
+  , "  %null = icmp eq ptr %re, null"
+  , "  br i1 %null, label %copyret, label %comp.ok"
+  , "copyret:"
+  , "  %sl0 = call i64 @strlen(ptr %subj)"
+  , "  %sl01 = add i64 %sl0, 1"
+  , "  %cp0 = call ptr @malloc(i64 %sl01)"
+  , "  %_d0 = call ptr @strcpy(ptr %cp0, ptr %subj)"
+  , "  ret ptr %cp0"
+  , "comp.ok:"
+  , "  %olen = alloca i64"
+  , "  %sl = call i64 @strlen(ptr %subj)"
+  , "  %rl = call i64 @strlen(ptr %repl)"
+  , "  %isz = add i64 %sl, 256"
+  , "  %isz2 = add i64 %isz, %rl"
+  , "  store i64 %isz2, ptr %olen"
+  , "  %buf = call ptr @malloc(i64 %isz2)"
+  , "  %rc = call i32 @pcre2_substitute_8(ptr %re, ptr %subj, i64 -1, i64 0, i32 4096, ptr null, ptr null, ptr %repl, i64 -1, ptr %buf, ptr %olen)"
+  , "  %nomem = icmp eq i32 %rc, -48"
+  , "  br i1 %nomem, label %retry, label %check"
+  , "retry:"
+  , "  %need = load i64, ptr %olen"
+  , "  %need1 = add i64 %need, 1"
+  , "  %buf2 = call ptr @realloc(ptr %buf, i64 %need1)"
+  , "  store i64 %need1, ptr %olen"
+  , "  %_rc2 = call i32 @pcre2_substitute_8(ptr %re, ptr %subj, i64 -1, i64 0, i32 0, ptr null, ptr null, ptr %repl, i64 -1, ptr %buf2, ptr %olen)"
+  , "  ret ptr %buf2"
+  , "check:"
+  , "  %err = icmp slt i32 %rc, 0"
+  , "  br i1 %err, label %fail, label %ok"
+  , "fail:"
+  , "  call void @free(ptr %buf)"
+  , "  %sl1 = call i64 @strlen(ptr %subj)"
+  , "  %sl11 = add i64 %sl1, 1"
+  , "  %cp1 = call ptr @malloc(i64 %sl11)"
+  , "  %_d1 = call ptr @strcpy(ptr %cp1, ptr %subj)"
+  , "  ret ptr %cp1"
+  , "ok:"
+  , "  ret ptr %buf"
+  , "}"
+  , ""
+  -- pll_rx_gsub: replace all
+  , "define ptr @pll_rx_gsub(ptr %re, ptr %repl, ptr %subj) {"
+  , "entry:"
+  , "  %null = icmp eq ptr %re, null"
+  , "  br i1 %null, label %copyret, label %comp.ok"
+  , "copyret:"
+  , "  %sl0 = call i64 @strlen(ptr %subj)"
+  , "  %sl01 = add i64 %sl0, 1"
+  , "  %cp0 = call ptr @malloc(i64 %sl01)"
+  , "  %_d0 = call ptr @strcpy(ptr %cp0, ptr %subj)"
+  , "  ret ptr %cp0"
+  , "comp.ok:"
+  , "  %olen = alloca i64"
+  , "  %sl = call i64 @strlen(ptr %subj)"
+  , "  %rl = call i64 @strlen(ptr %repl)"
+  , "  %sl2 = shl i64 %sl, 1"
+  , "  %isz = add i64 %rl, 256"
+  , "  %isz2 = add i64 %isz, %sl2"
+  , "  store i64 %isz2, ptr %olen"
+  , "  %buf = call ptr @malloc(i64 %isz2)"
+  , "  %rc = call i32 @pcre2_substitute_8(ptr %re, ptr %subj, i64 -1, i64 0, i32 4352, ptr null, ptr null, ptr %repl, i64 -1, ptr %buf, ptr %olen)"
+  , "  %nomem = icmp eq i32 %rc, -48"
+  , "  br i1 %nomem, label %retry, label %check"
+  , "retry:"
+  , "  %need = load i64, ptr %olen"
+  , "  %need1 = add i64 %need, 1"
+  , "  %buf2 = call ptr @realloc(ptr %buf, i64 %need1)"
+  , "  store i64 %need1, ptr %olen"
+  , "  %_rc2 = call i32 @pcre2_substitute_8(ptr %re, ptr %subj, i64 -1, i64 0, i32 256, ptr null, ptr null, ptr %repl, i64 -1, ptr %buf2, ptr %olen)"
+  , "  ret ptr %buf2"
+  , "check:"
+  , "  %err = icmp slt i32 %rc, 0"
+  , "  br i1 %err, label %fail, label %ok"
+  , "fail:"
+  , "  call void @free(ptr %buf)"
+  , "  %sl1 = call i64 @strlen(ptr %subj)"
+  , "  %sl11 = add i64 %sl1, 1"
+  , "  %cp1 = call ptr @malloc(i64 %sl11)"
+  , "  %_d1 = call ptr @strcpy(ptr %cp1, ptr %subj)"
+  , "  ret ptr %cp1"
+  , "ok:"
+  , "  ret ptr %buf"
+  , "}"
+  , ""
+  -- pll_rx_split: split subject on pattern, return List
+  , "define ptr @pll_rx_split(ptr %re, ptr %subj) {"
+  , "entry:"
+  , "  %null = icmp eq ptr %re, null"
+  , "  br i1 %null, label %cfail, label %init"
+  , "cfail:"
+  , "  %fl = call i64 @strlen(ptr %subj)"
+  , "  %fl1 = add i64 %fl, 1"
+  , "  %fcp = call ptr @malloc(i64 %fl1)"
+  , "  %_fd = call ptr @strcpy(ptr %fcp, ptr %subj)"
+  , "  %fnil = call ptr @malloc(i64 8)"
+  , "  store i32 0, ptr %fnil"
+  , "  %fcons = call ptr @malloc(i64 24)"
+  , "  store i32 1, ptr %fcons"
+  , "  %fp1 = getelementptr i8, ptr %fcons, i64 8"
+  , "  store ptr %fcp, ptr %fp1"
+  , "  %fp2 = getelementptr i8, ptr %fcons, i64 16"
+  , "  store ptr %fnil, ptr %fp2"
+  , "  br label %done"
+  , "init:"
+  , "  %pa0 = call ptr @malloc(i64 128)"
+  , "  %md = call ptr @pcre2_match_data_create_from_pattern_8(ptr %re, ptr null)"
+  , "  %slen = call i64 @strlen(ptr %subj)"
+  , "  br label %loop"
+  , "loop:"
+  , "  %cap = phi i64 [ 16, %init ], [ %cap.n, %store ]"
+  , "  %cnt = phi i64 [ 0, %init ], [ %cnt.n, %store ]"
+  , "  %pa = phi ptr [ %pa0, %init ], [ %pa.n, %store ]"
+  , "  %pos = phi i64 [ 0, %init ], [ %pos.n, %store ]"
+  , "  %rc = call i32 @pcre2_match_8(ptr %re, ptr %subj, i64 %slen, i64 %pos, i32 0, ptr %md, ptr null)"
+  , "  %miss = icmp slt i32 %rc, 0"
+  , "  br i1 %miss, label %tail, label %found"
+  , "tail:"
+  , "  %tl = sub i64 %slen, %pos"
+  , "  %tl1 = add i64 %tl, 1"
+  , "  %tb = call ptr @malloc(i64 %tl1)"
+  , "  %ts = getelementptr i8, ptr %subj, i64 %pos"
+  , "  call void @llvm.memcpy.p0.p0.i64(ptr %tb, ptr %ts, i64 %tl, i1 false)"
+  , "  %tt = getelementptr i8, ptr %tb, i64 %tl"
+  , "  store i8 0, ptr %tt"
+  , "  %tfit = icmp ult i64 %cnt, %cap"
+  , "  br i1 %tfit, label %tstore, label %tgrow"
+  , "tgrow:"
+  , "  %tbsz = shl i64 %cap, 4"
+  , "  %tpa = call ptr @realloc(ptr %pa, i64 %tbsz)"
+  , "  br label %tstore"
+  , "tstore:"
+  , "  %tpa2 = phi ptr [ %pa, %tail ], [ %tpa, %tgrow ]"
+  , "  %tsl = getelementptr ptr, ptr %tpa2, i64 %cnt"
+  , "  store ptr %tb, ptr %tsl"
+  , "  %tcnt = add i64 %cnt, 1"
+  , "  br label %build"
+  , "found:"
+  , "  %ov = call ptr @pcre2_get_ovector_pointer_8(ptr %md)"
+  , "  %ms = load i64, ptr %ov"
+  , "  %mep = getelementptr i64, ptr %ov, i32 1"
+  , "  %me = load i64, ptr %mep"
+  , "  %pl = sub i64 %ms, %pos"
+  , "  %pl1 = add i64 %pl, 1"
+  , "  %pb = call ptr @malloc(i64 %pl1)"
+  , "  %ps = getelementptr i8, ptr %subj, i64 %pos"
+  , "  call void @llvm.memcpy.p0.p0.i64(ptr %pb, ptr %ps, i64 %pl, i1 false)"
+  , "  %pt = getelementptr i8, ptr %pb, i64 %pl"
+  , "  store i8 0, ptr %pt"
+  , "  %fit = icmp ult i64 %cnt, %cap"
+  , "  br i1 %fit, label %store, label %grow"
+  , "grow:"
+  , "  %gcap = shl i64 %cap, 1"
+  , "  %gbsz = shl i64 %cap, 4"
+  , "  %gpa = call ptr @realloc(ptr %pa, i64 %gbsz)"
+  , "  br label %store"
+  , "store:"
+  , "  %pa.n = phi ptr [ %pa, %found ], [ %gpa, %grow ]"
+  , "  %cap.n = phi i64 [ %cap, %found ], [ %gcap, %grow ]"
+  , "  %sl = getelementptr ptr, ptr %pa.n, i64 %cnt"
+  , "  store ptr %pb, ptr %sl"
+  , "  %adv = icmp ugt i64 %me, %pos"
+  , "  %pp1 = add i64 %pos, 1"
+  , "  %pos.n = select i1 %adv, i64 %me, i64 %pp1"
+  , "  %cnt.n = add i64 %cnt, 1"
+  , "  %pastend = icmp ugt i64 %pos.n, %slen"
+  , "  br i1 %pastend, label %build, label %loop"
+  , "build:"
+  , "  %bpa = phi ptr [ %tpa2, %tstore ], [ %pa.n, %store ]"
+  , "  %bcnt = phi i64 [ %tcnt, %tstore ], [ %cnt.n, %store ]"
+  , "  call void @pcre2_match_data_free_8(ptr %md)"
+  , "  %nil = call ptr @malloc(i64 8)"
+  , "  store i32 0, ptr %nil"
+  , "  %noparts = icmp eq i64 %bcnt, 0"
+  , "  br i1 %noparts, label %cleanup, label %bloop"
+  , "bloop:"
+  , "  %bi = phi i64 [ %bcnt, %build ], [ %bi1, %bloop ]"
+  , "  %bl = phi ptr [ %nil, %build ], [ %bc, %bloop ]"
+  , "  %bi1 = sub i64 %bi, 1"
+  , "  %bsl = getelementptr ptr, ptr %bpa, i64 %bi1"
+  , "  %be = load ptr, ptr %bsl"
+  , "  %bc = call ptr @malloc(i64 24)"
+  , "  store i32 1, ptr %bc"
+  , "  %bp1 = getelementptr i8, ptr %bc, i64 8"
+  , "  store ptr %be, ptr %bp1"
+  , "  %bp2 = getelementptr i8, ptr %bc, i64 16"
+  , "  store ptr %bl, ptr %bp2"
+  , "  %bdn = icmp eq i64 %bi1, 0"
+  , "  br i1 %bdn, label %cleanup, label %bloop"
+  , "cleanup:"
+  , "  %result = phi ptr [ %nil, %build ], [ %bc, %bloop ]"
+  , "  call void @free(ptr %bpa)"
+  , "  br label %done"
+  , "done:"
+  , "  %ret = phi ptr [ %fcons, %cfail ], [ %result, %cleanup ]"
+  , "  ret ptr %ret"
+  , "}"
+  , ""
+  -- pll_rx_captures: capture groups from first match
+  , "define ptr @pll_rx_captures(ptr %re, ptr %subj) {"
+  , "entry:"
+  , "  %null = icmp eq ptr %re, null"
+  , "  br i1 %null, label %nil0, label %try"
+  , "nil0:"
+  , "  %n0 = call ptr @malloc(i64 8)"
+  , "  store i32 0, ptr %n0"
+  , "  br label %done"
+  , "try:"
+  , "  %md = call ptr @pcre2_match_data_create_from_pattern_8(ptr %re, ptr null)"
+  , "  %rc = call i32 @pcre2_match_8(ptr %re, ptr %subj, i64 -1, i64 0, i32 0, ptr %md, ptr null)"
+  , "  %miss = icmp slt i32 %rc, 0"
+  , "  br i1 %miss, label %nil1, label %matched"
+  , "nil1:"
+  , "  call void @pcre2_match_data_free_8(ptr %md)"
+  , "  %n1 = call ptr @malloc(i64 8)"
+  , "  store i32 0, ptr %n1"
+  , "  br label %done"
+  , "matched:"
+  , "  %ov = call ptr @pcre2_get_ovector_pointer_8(ptr %md)"
+  , "  %ng = call i32 @pcre2_get_ovector_count_8(ptr %md)"
+  , "  %nil.m = call ptr @malloc(i64 8)"
+  , "  store i32 0, ptr %nil.m"
+  , "  %last = sub i32 %ng, 1"
+  , "  %nogrp = icmp eq i32 %last, 0"
+  , "  br i1 %nogrp, label %free, label %linit"
+  , "linit:"
+  , "  %ii = zext i32 %last to i64"
+  , "  br label %cloop"
+  , "cloop:"
+  , "  %ci = phi i64 [ %ii, %linit ], [ %ci1, %cmerge ]"
+  , "  %cl = phi ptr [ %nil.m, %linit ], [ %cc, %cmerge ]"
+  , "  %ci32 = trunc i64 %ci to i32"
+  , "  %idx = shl i32 %ci32, 1"
+  , "  %idxl = zext i32 %idx to i64"
+  , "  %sp = getelementptr i64, ptr %ov, i64 %idxl"
+  , "  %sv = load i64, ptr %sp"
+  , "  %unset = icmp eq i64 %sv, -1"
+  , "  br i1 %unset, label %cempty, label %cextract"
+  , "cempty:"
+  , "  %eb = call ptr @malloc(i64 1)"
+  , "  store i8 0, ptr %eb"
+  , "  br label %cmerge"
+  , "cextract:"
+  , "  %idx1 = or i32 %idx, 1"
+  , "  %idx1l = zext i32 %idx1 to i64"
+  , "  %ep = getelementptr i64, ptr %ov, i64 %idx1l"
+  , "  %ev = load i64, ptr %ep"
+  , "  %cl2 = sub i64 %ev, %sv"
+  , "  %cl21 = add i64 %cl2, 1"
+  , "  %cb = call ptr @malloc(i64 %cl21)"
+  , "  %cs = getelementptr i8, ptr %subj, i64 %sv"
+  , "  call void @llvm.memcpy.p0.p0.i64(ptr %cb, ptr %cs, i64 %cl2, i1 false)"
+  , "  %ct = getelementptr i8, ptr %cb, i64 %cl2"
+  , "  store i8 0, ptr %ct"
+  , "  br label %cmerge"
+  , "cmerge:"
+  , "  %ce = phi ptr [ %eb, %cempty ], [ %cb, %cextract ]"
+  , "  %cc = call ptr @malloc(i64 24)"
+  , "  store i32 1, ptr %cc"
+  , "  %cp1 = getelementptr i8, ptr %cc, i64 8"
+  , "  store ptr %ce, ptr %cp1"
+  , "  %cp2 = getelementptr i8, ptr %cc, i64 16"
+  , "  store ptr %cl, ptr %cp2"
+  , "  %ci1 = sub i64 %ci, 1"
+  , "  %ci1m = and i64 %ci1, 4294967295"
+  , "  %cdn = icmp eq i64 %ci1m, 0"
+  , "  br i1 %cdn, label %free, label %cloop"
+  , "free:"
+  , "  %fl2 = phi ptr [ %nil.m, %matched ], [ %cc, %cmerge ]"
+  , "  call void @pcre2_match_data_free_8(ptr %md)"
+  , "  br label %done"
+  , "done:"
+  , "  %ret = phi ptr [ %n0, %nil0 ], [ %n1, %nil1 ], [ %fl2, %free ]"
+  , "  ret ptr %ret"
+  , "}"
+  ]

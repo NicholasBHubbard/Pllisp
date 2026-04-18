@@ -137,8 +137,9 @@ typeParserBody = MP.choice
       "FLT"  -> pure Ty.TyFlt
       "STR"  -> pure Ty.TyStr
       "BOOL" -> pure Ty.TyBool
-      "UNIT" -> pure Ty.TyUnit
-      other  -> pure (Ty.TyCon other [])
+      "UNIT"  -> pure Ty.TyUnit
+      "RX"    -> pure Ty.TyRx
+      other   -> pure (Ty.TyCon other [])
   ]
 
 exprSymParser :: Parser CST.ExprF
@@ -175,14 +176,7 @@ symbolParser = MP.label "symbol" $ lexeme $ do
     else pure sym
 
 typeParser :: Parser Ty.Type
-typeParser = MP.C.char '%' *> (ident >>= \t -> case t of
-  "INT"  -> pure Ty.TyInt
-  "FLT"  -> pure Ty.TyFlt
-  "STR"  -> pure Ty.TyStr
-  "BOOL" -> pure Ty.TyBool
-  "UNIT" -> pure Ty.TyUnit
-  other  -> pure (Ty.TyCon other [])
-  )
+typeParser = MP.C.char '%' *> typeParserBody
 
 boolParser :: Parser Bool
 boolParser = MP.label "boolean value" $ do
@@ -197,7 +191,20 @@ litParser = MP.label "literal value" $ lexeme $ MP.choice
   [ CST.LitFlt <$> MP.try MP.C.L.float
   , CST.LitInt <$> MP.C.L.decimal
   , CST.LitStr . T.pack <$> (MP.C.char '"' *> MP.manyTill MP.C.L.charLiteral (MP.C.char '"'))
+  , rxLitParser
   ]
+
+rxLitParser :: Parser CST.Literal
+rxLitParser = do
+  _ <- MP.C.char '/'
+  chunks <- MP.manyTill rxChunk (MP.C.char '/')
+  flags <- T.pack <$> MP.many MP.C.lowerChar
+  pure (CST.LitRx (T.pack (concat chunks)) flags)
+  where
+    rxChunk =
+          (MP.C.string "\\/" *> pure "/")                                -- \/ → literal /
+      <|> ((\c -> ['\\', c]) <$> (MP.C.char '\\' *> MP.anySingle))      -- \X → \X
+      <|> ((:[]) <$> MP.anySingle)                                       -- X → X
 
 -- HELPERS
 

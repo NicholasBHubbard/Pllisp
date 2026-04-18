@@ -199,6 +199,8 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ Ty.Typed Ty.TyFlt (TRLit l)
   Res.RLit l@(CST.LitStr _) ->
     pure $ Ty.Typed Ty.TyStr (TRLit l)
+  Res.RLit l@(CST.LitRx _ _) ->
+    pure $ Ty.Typed Ty.TyRx (TRLit l)
   Res.RBool b ->
     pure $ Ty.Typed Ty.TyBool (TRBool b)
   Res.RUnit ->
@@ -305,9 +307,10 @@ inferPattern :: Ty.Type -> Res.RPattern -> Loc.Span -> Infer (TRPattern, [(CST.S
 inferPattern ty pat sp = case pat of
   Res.RPatLit l -> do
     let litTy = case l of
-          CST.LitInt _ -> Ty.TyInt
-          CST.LitFlt _ -> Ty.TyFlt
-          CST.LitStr _ -> Ty.TyStr
+          CST.LitInt _     -> Ty.TyInt
+          CST.LitFlt _     -> Ty.TyFlt
+          CST.LitStr _     -> Ty.TyStr
+          CST.LitRx _ _ -> Ty.TyRx
     constrain sp ty litTy
     pure (TRPatLit l, [])
   Res.RPatBool b -> do
@@ -350,6 +353,7 @@ unify _ Ty.TyFlt Ty.TyFlt = Right M.empty
 unify _ Ty.TyStr Ty.TyStr = Right M.empty
 unify _ Ty.TyBool Ty.TyBool = Right M.empty
 unify _ Ty.TyUnit Ty.TyUnit = Right M.empty
+unify _ Ty.TyRx Ty.TyRx = Right M.empty
 unify sp t1 t2 = Left [TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)]
 
 -- | Unify multiple type pairs, collecting all errors

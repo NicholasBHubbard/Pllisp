@@ -103,7 +103,8 @@ checkArgPos env ctor arity rows i =
 patternType :: TC.TRPattern -> Ty.Type
 patternType (TC.TRPatLit (CST.LitInt _)) = Ty.TyInt
 patternType (TC.TRPatLit (CST.LitFlt _)) = Ty.TyFlt
-patternType (TC.TRPatLit (CST.LitStr _)) = Ty.TyStr
+patternType (TC.TRPatLit (CST.LitStr _))     = Ty.TyStr
+patternType (TC.TRPatLit (CST.LitRx _ _)) = Ty.TyRx
 patternType (TC.TRPatBool _)             = Ty.TyBool
 patternType (TC.TRPatVar _ t)            = t
 patternType (TC.TRPatWild t)             = t

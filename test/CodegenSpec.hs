@@ -17,6 +17,7 @@ import qualified Pllisp.CST            as CST
 import qualified Pllisp.LambdaLift     as LL
 import qualified Pllisp.Module         as Mod
 import qualified Pllisp.Parser         as Parser
+import qualified Pllisp.Stdlib         as Stdlib
 import qualified Pllisp.Resolve        as Resolve
 import qualified Pllisp.TypeCheck      as TC
 
@@ -573,6 +574,108 @@ spec = do
       run "(print (int-to-str (if (str-contains \"hello\" \"hello\") 1 0)))"
         >>= (`shouldBe` "1")
 
+  describe "built-in List type" $ do
+    it "constructs Nil" $
+      run "(case Nil ((Nil) (print \"empty\")))" >>= (`shouldBe` "empty")
+
+    it "constructs Cons and pattern matches" $
+      run (T.unlines
+        [ "(let ((xs (Cons 1 (Cons 2 (Cons 3 Nil)))))"
+        , "  (case xs"
+        , "    ((Cons h _) (print (int-to-str h)))))"
+        ]) >>= (`shouldBe` "1")
+
+    it "recursive list traversal" $
+      run (T.unlines
+        [ "(let ((sum (lam ((xs %(List %INT))) (case xs"
+        , "    ((Nil) 0)"
+        , "    ((Cons h t) (add h (sum t)))))))"
+        , "  (print (int-to-str (sum (Cons 10 (Cons 20 (Cons 30 Nil)))))))"
+        ]) >>= (`shouldBe` "60")
+
+  describe "rx" $ do
+    it "rx-match positive" $
+      run "(print (int-to-str (if (rx-match /^[0-9]+$/ \"12345\") 1 0)))"
+        >>= (`shouldBe` "1")
+
+    it "rx-match negative" $
+      run "(print (int-to-str (if (rx-match /^[0-9]+$/ \"abc\") 1 0)))"
+        >>= (`shouldBe` "0")
+
+    it "rx-find extracts first match" $
+      run "(print (rx-find /[0-9]+/ \"foo123bar456\"))"
+        >>= (`shouldBe` "123")
+
+    it "rx-find no match returns empty string" $
+      run "(print (concat \"[\" (concat (rx-find /[0-9]+/ \"abc\") \"]\")))"
+        >>= (`shouldBe` "[]")
+
+    it "rx-sub replaces first match" $
+      run "(print (rx-sub /[0-9]+/ \"X\" \"a1b2c3\"))"
+        >>= (`shouldBe` "aXb2c3")
+
+    it "rx-gsub replaces all matches" $
+      run "(print (rx-gsub /[0-9]+/ \"X\" \"a1b2c3\"))"
+        >>= (`shouldBe` "aXbXcX")
+
+    it "rx-sub with backreference" $
+      run "(print (rx-sub /(\\w+)@(\\w+)/ \"$2/$1\" \"user@host\"))"
+        >>= (`shouldBe` "host/user")
+
+    it "rx-split on comma" $ do
+      run (T.unlines
+        [ "(let ((parts (rx-split /,/ \"a,b,c\")))"
+        , "  (case parts"
+        , "    ((Cons a _) (print a))))"
+        ]) >>= (`shouldBe` "a")
+
+    it "rx-split prints all parts" $ do
+      run (T.unlines
+        [ "(let ((print-list (lam ((xs %(List %STR))) (case xs"
+        , "    ((Nil) unit)"
+        , "    ((Cons h t) (let ((_ (print h))) (print-list t)))))))"
+        , "  (print-list (rx-split /,/ \"x,y,z\")))"
+        ]) >>= (`shouldBe` "x\ny\nz")
+
+    it "rx-captures extracts groups" $ do
+      run (T.unlines
+        [ "(let ((caps (rx-captures /(\\w+)@(\\w+)/ \"user@host\")))"
+        , "  (case caps"
+        , "    ((Cons user rest) (case rest"
+        , "      ((Cons host _) (print (concat user (concat \"@\" host))))))))"
+        ]) >>= (`shouldBe` "user@host")
+
+    it "rx-captures no match returns Nil" $ do
+      run (T.unlines
+        [ "(case (rx-captures /(\\d+)/ \"abc\")"
+        , "  ((Nil) (print \"none\"))"
+        , "  ((Cons _ _) (print \"found\")))"
+        ]) >>= (`shouldBe` "none")
+
+    it "rx with case-insensitive flag" $
+      run "(print (int-to-str (if (rx-match /hello/i \"HELLO\") 1 0)))"
+        >>= (`shouldBe` "1")
+
+    it "rx stored in let binding" $
+      run "(let ((re /[0-9]+/)) (print (rx-find re \"abc123\")))"
+        >>= (`shouldBe` "123")
+
+    it "rx-compile from string" $
+      run "(let ((re (rx-compile \"[0-9]+\"))) (print (rx-find re \"abc123\")))"
+        >>= (`shouldBe` "123")
+
+    it "rx-compile used in match" $
+      run "(let ((re (rx-compile \"^hello$\"))) (print (int-to-str (if (rx-match re \"hello\") 1 0))))"
+        >>= (`shouldBe` "1")
+
+    it "rx with \\Q\\E literal quoting" $
+      run "(print (int-to-str (if (rx-match /\\Qfoo.bar\\E/ \"foo.bar\") 1 0)))"
+        >>= (`shouldBe` "1")
+
+    it "rx \\Q\\E does not match metachar" $
+      run "(print (int-to-str (if (rx-match /\\Qfoo.bar\\E/ \"fooXbar\") 1 0)))"
+        >>= (`shouldBe` "0")
+
   describe "module imports" $ do
     it "unqualified import" $ do
       let modSrc = "(let ((square (lam ((x %INT)) (mul x x)))) unit)"
@@ -603,15 +706,19 @@ spec = do
 
 -- HELPERS
 
-pipeline :: T.Text -> T.Text
-pipeline src = case Parser.parseProgram "<test>" src of
-  Left e -> error ("parse error: " ++ show e)
-  Right prog -> case Resolve.resolve S.empty (CST.progExprs prog) of
-    Left e -> error ("resolve error: " ++ show e)
-    Right resolved -> case TC.typecheck M.empty resolved of
-      Left e -> error ("typecheck error: " ++ show e)
-      Right typed ->
-        Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
+pipeline :: T.Text -> IO T.Text
+pipeline src = do
+  preludeDecls <- Stdlib.loadPrelude
+  case Parser.parseProgram "<test>" src of
+    Left e -> error ("parse error: " ++ show e)
+    Right prog ->
+      let exprs = preludeDecls ++ CST.progExprs prog
+      in case Resolve.resolve S.empty exprs of
+        Left e -> error ("resolve error: " ++ show e)
+        Right resolved -> case TC.typecheck M.empty resolved of
+          Left e -> error ("typecheck error: " ++ show e)
+          Right typed ->
+            pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
 
 run :: T.Text -> IO String
 run = runWith []
@@ -624,10 +731,11 @@ runWithInput stdin' = runWithStdin stdin' []
 
 runWithStdin :: String -> [String] -> T.Text -> IO String
 runWithStdin stdin' extraArgs src = do
-  let ir = pipeline src
+  ir <- pipeline src
   T.IO.writeFile "/tmp/pllisp_test.ll" ir
   (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll", "-o", "/tmp/pllisp_test_exe", "-lm"] ""
+    "clang" ["/tmp/pllisp_test.ll",
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8"] ""
   case ec1 of
     ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do
@@ -643,10 +751,11 @@ runWithStdin stdin' extraArgs src = do
 -- modName: uppercase module name, modSrc: module body, unquals: unqualified imports, mainSrc: main body
 runWithModule :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO String
 runWithModule modName modSrc unquals mainSrc = do
-  let ir = importPipeline modName modSrc unquals mainSrc
+  ir <- importPipeline modName modSrc unquals mainSrc
   T.IO.writeFile "/tmp/pllisp_test.ll" ir
   (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll", "-o", "/tmp/pllisp_test_exe", "-lm"] ""
+    "clang" ["/tmp/pllisp_test.ll",
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8"] ""
   case ec1 of
     ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do
@@ -655,29 +764,31 @@ runWithModule modName modSrc unquals mainSrc = do
         ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
         ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
 
-importPipeline :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> T.Text
-importPipeline modName modSrc unquals mainSrc =
+importPipeline :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO T.Text
+importPipeline modName modSrc unquals mainSrc = do
+  preludeDecls <- Stdlib.loadPrelude
   -- Compile module
   let modTyped = case Parser.parseProgram "<mod>" modSrc of
         Left e -> error ("mod parse: " ++ show e)
-        Right prog -> case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs prog)) of
-          Left e -> error ("mod resolve: " ++ show e)
-          Right resolved -> case TC.typecheck M.empty resolved of
-            Left e -> error ("mod typecheck: " ++ show e)
-            Right typed -> typed
+        Right prog ->
+          let exprs = preludeDecls ++ Mod.desugarTopLevel (CST.progExprs prog)
+          in case Resolve.resolve S.empty exprs of
+            Left e -> error ("mod resolve: " ++ show e)
+            Right resolved -> case TC.typecheck M.empty resolved of
+              Left e -> error ("mod typecheck: " ++ show e)
+              Right typed -> typed
       modExports = Mod.collectExports modTyped
       exportMap = M.singleton modName modExports
       imports = [CST.Import modName unquals]
       (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap imports
-  -- Compile main with import context
-  in case Parser.parseProgram "<main>" mainSrc of
+  case Parser.parseProgram "<main>" mainSrc of
     Left e -> error ("main parse: " ++ show e)
     Right prog ->
-      let exprs = Mod.desugarTopLevel (CST.progExprs prog)
+      let exprs = preludeDecls ++ Mod.desugarTopLevel (CST.progExprs prog)
       in case Resolve.resolveWith resolveScope normMap exprs of
         Left e -> error ("main resolve: " ++ show e)
         Right resolved -> case TC.typecheck tcCtx resolved of
           Left e -> error ("main typecheck: " ++ show e)
           Right typed ->
             let merged = Mod.mergeImportedCode [modTyped] typed
-            in Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+            in pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
