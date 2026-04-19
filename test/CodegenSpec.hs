@@ -912,6 +912,166 @@ spec = do
         , "  (print (int-to-str (f 10 &key x 5))))"
         ]) >>= (`shouldBe` "15")
 
+  describe "typeclasses" $ do
+    it "basic class + instance + method call" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(print (show 42))"
+        ]) >>= (`shouldBe` "42")
+
+    it "class method with multiple args" $
+      run (T.unlines
+        [ "(cls EQUAL (a) (equal %a %a %BOOL))"
+        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eq x y))))"
+        , "(print (int-to-str (if (equal 1 1) 1 0)))"
+        ]) >>= (`shouldBe` "1")
+
+    it "multiple instances of same class" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(inst SHOW %STR (show (lam ((x %STR)) x)))"
+        , "(print (show 42))"
+        ]) >>= (`shouldBe` "42")
+
+    it "different instances dispatched by type" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(inst SHOW %STR (show (lam ((x %STR)) (concat \"[\" (concat x \"]\")))))"
+        , "(print (show \"hi\"))"
+        ]) >>= (`shouldBe` "[hi]")
+
+    it "class with multiple methods" $
+      run (T.unlines
+        [ "(cls EQUAL (a)"
+        , "  (equal %a %a %BOOL)"
+        , "  (nequal %a %a %BOOL))"
+        , "(inst EQUAL %INT"
+        , "  (equal (lam ((x %INT) (y %INT)) (eq x y)))"
+        , "  (nequal (lam ((x %INT) (y %INT)) (not (eq x y)))))"
+        , "(print (int-to-str (if (nequal 1 2) 1 0)))"
+        ]) >>= (`shouldBe` "1")
+
+    it "class method used in let binding" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(let ((result (show 99)))"
+        , "  (print result))"
+        ]) >>= (`shouldBe` "99")
+
+    it "class method in if branches" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(print (if TRUE (show 1) (show 2)))"
+        ]) >>= (`shouldBe` "1")
+
+    it "instance for float type" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %FLT (show (lam ((x %FLT)) (flt-to-str x))))"
+        , "(print (show 3.14))"
+        ]) >>= (`shouldBe` "3.14")
+
+    it "method used with ADT" $
+      run (T.unlines
+        [ "(TYPE Color () (Red) (Green) (Blue))"
+        , "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %Color (show (lam ((c %Color)) (case c"
+        , "  ((Red) \"red\")"
+        , "  ((Green) \"green\")"
+        , "  ((Blue) \"blue\")))))"
+        , "(print (show Red))"
+        ]) >>= (`shouldBe` "red")
+
+    it "method result passed to another function" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(print (concat \"val=\" (show 7)))"
+        ]) >>= (`shouldBe` "val=7")
+
+    it "class method in nested let" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(let ((a (show 1)))"
+        , "  (let ((b (show 2)))"
+        , "    (print (concat a b))))"
+        ]) >>= (`shouldBe` "12")
+
+    it "two different classes" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(cls EQUAL (a) (equal %a %a %BOOL))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eq x y))))"
+        , "(print (concat (show 42) (if (equal 1 1) \" yes\" \" no\")))"
+        ]) >>= (`shouldBe` "42 yes")
+
+    it "polymorphic function with class method" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(let ((print-show (lam (x) (print (show x)))))"
+        , "  (print-show 42))"
+        ]) >>= (`shouldBe` "42")
+
+    it "polymorphic function called multiple times same type" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(let ((to-str (lam (x) (show x))))"
+        , "  (let ((_ (print (to-str 1))))"
+        , "    (print (to-str 2))))"
+        ]) >>= (`shouldBe` "1\n2")
+
+    it "polymorphic function called with different types" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(inst SHOW %STR (show (lam ((x %STR)) (concat \"[\" (concat x \"]\")))))"
+        , "(let ((display (lam (x) (show x))))"
+        , "  (let ((_ (print (display 42))))"
+        , "    (print (display \"hi\"))))"
+        ]) >>= (`shouldBe` "42\n[hi]")
+
+    it "polymorphic function with multi-method class" $
+      run (T.unlines
+        [ "(cls EQUAL (a)"
+        , "  (equal %a %a %BOOL)"
+        , "  (nequal %a %a %BOOL))"
+        , "(inst EQUAL %INT"
+        , "  (equal (lam ((x %INT) (y %INT)) (eq x y)))"
+        , "  (nequal (lam ((x %INT) (y %INT)) (not (eq x y)))))"
+        , "(let ((check (lam (x y) (if (equal x y) (print \"eq\") (print \"neq\")))))"
+        , "  (check 1 1))"
+        ]) >>= (`shouldBe` "eq")
+
+    it "polymorphic with multiple classes" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(cls EQUAL (a) (equal %a %a %BOOL))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eq x y))))"
+        , "(let ((show-eq (lam (x y)"
+        , "  (if (equal x y) (show x) (concat (show x) (concat \" != \" (show y)))))))"
+        , "  (print (show-eq 1 1)))"
+        ]) >>= (`shouldBe` "1")
+
+    it "polymorphic function with ADT instance" $
+      run (T.unlines
+        [ "(TYPE Color () (Red) (Green) (Blue))"
+        , "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %Color (show (lam ((c %Color)) (case c"
+        , "  ((Red) \"red\") ((Green) \"green\") ((Blue) \"blue\")))))"
+        , "(let ((display (lam (x) (print (show x)))))"
+        , "  (display Red))"
+        ]) >>= (`shouldBe` "red")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

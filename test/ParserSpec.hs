@@ -339,6 +339,33 @@ spec = do
         CST.ExprLam (CST.LamList [CST.TSymbol "R" (Just Ty.TyRx)] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
+  describe "typeclasses" $ do
+    it "cls with one method" $ do
+      r <- either fail pure $ parseOne "(cls SHOW (a) (show %a %STR))"
+      case r of
+        CST.ExprCls "SHOW" ["A"]
+          [CST.ClassMethod "SHOW" [Ty.TyCon "A" []] Ty.TyStr] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "cls with multi-arg method" $ do
+      r <- either fail pure $ parseOne "(cls EQUAL (a) (equal %a %a %BOOL))"
+      case r of
+        CST.ExprCls "EQUAL" ["A"]
+          [CST.ClassMethod "EQUAL" [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "inst with one method" $ do
+      r <- either fail pure $ parseOne "(inst SHOW %INT (show (lam ((x %INT)) x)))"
+      case r of
+        CST.ExprInst "SHOW" Ty.TyInt [("SHOW", _)] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "inst with parameterized type" $ do
+      r <- either fail pure $ parseOne "(inst SHOW %(List %INT) (show (lam ((x %(List %INT))) x)))"
+      case r of
+        CST.ExprInst "SHOW" (Ty.TyCon "LIST" [Ty.TyInt]) [("SHOW", _)] -> pure ()
+        _ -> expectationFailure (show r)
+
   describe "error cases" $ do
     it "unclosed paren" $ do
       case Parser.parseProgram "<test>" "(add 1 2" of

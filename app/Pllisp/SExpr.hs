@@ -84,6 +84,8 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
   SList (Loc.Located _ (SAtom "IF")   : rest) -> Loc.Located sp <$> toIf sp rest
   SList (Loc.Located _ (SAtom "TYPE") : rest) -> Loc.Located sp <$> toTypeDecl sp rest
   SList (Loc.Located _ (SAtom "CASE") : rest) -> Loc.Located sp <$> toCase sp rest
+  SList (Loc.Located _ (SAtom "CLS")  : rest) -> Loc.Located sp <$> toCls sp rest
+  SList (Loc.Located _ (SAtom "INST") : rest) -> Loc.Located sp <$> toInst sp rest
   SList [Loc.Located _ (SAtom dotName), arg]
     | Just field <- T.stripPrefix "." dotName -> do
         arg' <- toExpr arg
@@ -256,6 +258,48 @@ toArm (Loc.Located _ (SList [pat, body])) = do
   body' <- toExpr body
   Right (pat', body')
 toArm (Loc.Located sp _) = Left $ ConvertError sp "invalid case arm"
+
+-- TYPECLASSES
+
+toCls :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
+toCls sp (Loc.Located _ (SAtom name) : Loc.Located _ (SList tvars) : methods)
+  | null tvars = Left $ ConvertError sp "cls requires at least one type variable"
+  | null methods = Left $ ConvertError sp "cls requires at least one method"
+  | otherwise = do
+      tvars' <- mapM toAtomName tvars
+      methods' <- mapM (toClassMethod sp) methods
+      Right $ CST.ExprCls name tvars' methods'
+toCls sp _ = Left $ ConvertError sp "invalid cls: expected (cls Name (tyvars...) methods...)"
+
+toClassMethod :: Loc.Span -> SExpr -> Either ConvertError CST.ClassMethod
+toClassMethod sp (Loc.Located _ (SList (Loc.Located _ (SAtom name) : tys)))
+  | length tys < 2 = Left $ ConvertError sp "class method must have at least one arg type and a return type"
+  | otherwise = do
+      tys' <- mapM toMethodType tys
+      let argTys = init tys'
+          retTy  = last tys'
+      Right $ CST.ClassMethod name argTys retTy
+toClassMethod sp _ = Left $ ConvertError sp "invalid class method signature"
+
+toMethodType :: SExpr -> Either ConvertError Ty.Type
+toMethodType (Loc.Located _ (SType inner)) = toType inner
+toMethodType (Loc.Located _ (SAtom name)) = Right (Ty.TyCon name [])
+toMethodType (Loc.Located sp _) = Left $ ConvertError sp "invalid type in method signature"
+
+toInst :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
+toInst sp (Loc.Located _ (SAtom className) : Loc.Located _ (SType tyExpr) : methods)
+  | null methods = Left $ ConvertError sp "inst requires at least one method"
+  | otherwise = do
+      ty <- toType tyExpr
+      methods' <- mapM toInstMethod methods
+      Right $ CST.ExprInst className ty methods'
+toInst sp _ = Left $ ConvertError sp "invalid inst: expected (inst ClassName %Type methods...)"
+
+toInstMethod :: SExpr -> Either ConvertError (CST.Symbol, CST.Expr)
+toInstMethod (Loc.Located _ (SList [Loc.Located _ (SAtom name), body])) = do
+  body' <- toExpr body
+  Right (name, body')
+toInstMethod (Loc.Located sp _) = Left $ ConvertError sp "invalid instance method: expected (name expr)"
 
 -- PATTERNS
 

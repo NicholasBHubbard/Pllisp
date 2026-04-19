@@ -39,6 +39,8 @@ data RExprF
   | RCase RExpr [(RPattern, RExpr)]
   | RFieldAccess CST.Symbol RExpr
   | RKeyArg CST.Symbol RExpr
+  | RCls CST.Symbol [CST.Symbol] [CST.ClassMethod]
+  | RInst CST.Symbol Ty.Type [(CST.Symbol, RExpr)]
   deriving (Eq, Show)
 
 data RLamList = RLamList
@@ -75,7 +77,8 @@ resolve importedNames = resolveWith importedNames M.empty
 resolveWith :: S.Set CST.Symbol -> M.Map CST.Symbol CST.Symbol -> CST.CST -> Either [ResolveError] ResolvedCST
 resolveWith importedNames normMap cst =
   let ctorNames = S.fromList (extractCtorNames cst)
-      initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, importedNames]]
+      classMethodNames = S.fromList (extractClassMethodNames cst)
+      initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, classMethodNames, importedNames]]
       (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) (initialScope, normMap) ()
   in if null errors
      then Right result
@@ -85,6 +88,12 @@ extractCtorNames :: CST.CST -> [CST.Symbol]
 extractCtorNames = concatMap go
   where
     go (Loc.Located _ (CST.ExprType _ _ ctors)) = map CST.dcName ctors
+    go _ = []
+
+extractClassMethodNames :: CST.CST -> [CST.Symbol]
+extractClassMethodNames = concatMap go
+  where
+    go (Loc.Located _ (CST.ExprCls _ _ methods)) = map CST.cmName methods
     go _ = []
 
 resolveExpr :: CST.Expr -> Resolve RExpr
@@ -122,6 +131,13 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     dupCheck "duplicate type parameter" params sp
     dupCheck "duplicate data constructor" (map CST.dcName ctors) sp
     pure (RType name params ctors)
+  CST.ExprCls name tvars methods -> do
+    pure $ RCls name tvars methods
+  CST.ExprInst className ty methods -> do
+    rmethods <- traverse (\(mname, body) -> do
+      rbody <- resolveExpr body
+      pure (mname, rbody)) methods
+    pure $ RInst className ty rmethods
   CST.ExprFieldAccess field subExpr -> do
     rexpr <- resolveExpr subExpr
     pure $ RFieldAccess field rexpr

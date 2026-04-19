@@ -53,6 +53,8 @@ exprParser = MP.label "expression" $ located $ MP.choice
   , exprLetParser
   , exprIfParser
   , exprTypeParser
+  , exprClsParser
+  , exprInstParser
   , exprCaseParser
   , exprAppParser
   , exprUnitParser
@@ -155,6 +157,29 @@ exprCaseParser = MP.label "case" $ MP.try $ parens $ do
   scrutinee <- exprParser
   arms <- MP.many $ parens $ (,) <$> patternParser <*> exprParser
   pure $ CST.ExprCase scrutinee arms
+
+exprClsParser :: Parser CST.ExprF
+exprClsParser = MP.label "cls" $ MP.try $ parens $ do
+  _ <- ident' "CLS"
+  name <- symbolParser
+  tvars <- parens (MP.many symbolParser)
+  methods <- MP.many classMethodParser
+  pure $ CST.ExprCls name tvars methods
+  where
+    classMethodParser = parens $ do
+      mname <- symbolParser
+      tys <- MP.many typeParser
+      pure $ CST.ClassMethod mname (init tys) (last tys)
+
+exprInstParser :: Parser CST.ExprF
+exprInstParser = MP.label "inst" $ MP.try $ parens $ do
+  _ <- ident' "INST"
+  className <- symbolParser
+  ty <- typeParser
+  methods <- MP.many instMethodParser
+  pure $ CST.ExprInst className ty methods
+  where
+    instMethodParser = parens $ (,) <$> symbolParser <*> exprParser
 
 patternParser :: Parser CST.Pattern
 patternParser = MP.label "pattern" $ MP.choice

@@ -22,15 +22,22 @@ typecheck importedCtx exprs =
   let typeDecls = extractTypeDecls exprs
       ctorCtx = buildCtorContext typeDecls
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
-      initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx]
+      -- Build class method schemes and instance env
+      classDecls = extractClassDecls exprs
+      (classEnv, methodEnv, methodCtx) = buildClassContext classDecls
+      initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx, methodCtx]
       fieldMap = buildFieldMap typeDecls
-      env = InferEnv initialCtx fieldMap M.empty
+      -- Type-check instance method bodies in a first pass
+      instDecls = extractInstDecls exprs
+      (instanceEnv, instErrs) = buildInstanceEnv classEnv methodEnv initialCtx fieldMap instDecls
+      env = InferEnv initialCtx fieldMap M.empty methodEnv instanceEnv
       (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) env 0
   in case solveAll constraints of
-    Left solveErrs -> Left (inferErrs ++ solveErrs)
+    Left solveErrs -> Left (instErrs ++ inferErrs ++ solveErrs)
     Right subst
-      | null inferErrs -> Right (apply subst typed)
-      | otherwise      -> Left inferErrs
+      | not (null instErrs) -> Left instErrs
+      | not (null inferErrs) -> Left inferErrs
+      | otherwise -> Right (dictPass classEnv methodEnv instanceEnv (apply subst typed))
 
 -- TYPES
 
@@ -63,10 +70,30 @@ data FuncInfoExtra
 
 type FuncInfoMap = M.Map CST.Symbol FuncInfo
 
+-- | Info about a typeclass method: which class, original arg types, return type.
+data MethodInfo = MethodInfo
+  { miClass  :: CST.Symbol
+  , miArgTys :: [Ty.Type]    -- uses TyCon "A" [] for class type vars
+  , miRetTy  :: Ty.Type
+  } deriving (Eq, Show)
+
+type MethodEnv = M.Map CST.Symbol MethodInfo
+
+-- | Info about a typeclass instance: concrete type + typed method impls.
+data InstanceInfo = InstanceInfo
+  { iiType    :: Ty.Type
+  , iiMethods :: M.Map CST.Symbol TRExpr
+  } deriving (Show)
+
+type ClassEnv = M.Map CST.Symbol [CST.Symbol]     -- class name -> type var names
+type InstanceEnv = M.Map CST.Symbol [InstanceInfo] -- class name -> instances
+
 data InferEnv = InferEnv
-  { ieCtx    :: !Context
-  , ieFields :: !FieldMap
-  , ieFuncs  :: !FuncInfoMap
+  { ieCtx       :: !Context
+  , ieFields    :: !FieldMap
+  , ieFuncs     :: !FuncInfoMap
+  , ieMethods   :: !MethodEnv
+  , ieInstances :: !InstanceEnv
   }
 
 -- | Inference monad that collects errors instead of failing
@@ -236,6 +263,381 @@ buildFieldMap = M.fromList . concatMap go
       | (idx, fname) <- zip [0..] fieldNames]
     ctorFields _ = []
 
+-- TYPECLASS CONTEXT BUILDING
+
+extractClassDecls :: [Res.RExpr] -> [(CST.Symbol, [CST.Symbol], [CST.ClassMethod])]
+extractClassDecls = foldr go []
+  where
+    go (Loc.Located _ (Res.RCls name tvars methods)) acc = (name, tvars, methods) : acc
+    go _ acc = acc
+
+extractInstDecls :: [Res.RExpr] -> [(CST.Symbol, Ty.Type, [(CST.Symbol, Res.RExpr)])]
+extractInstDecls = foldr go []
+  where
+    go (Loc.Located _ (Res.RInst className ty methods)) acc = (className, ty, methods) : acc
+    go _ acc = acc
+
+-- | Build class environment (class -> type vars), method environment (method -> info),
+-- and method context (method -> polymorphic scheme).
+buildClassContext :: [(CST.Symbol, [CST.Symbol], [CST.ClassMethod])]
+                  -> (ClassEnv, MethodEnv, Context)
+buildClassContext decls =
+  let classEnv = M.fromList [(name, tvars) | (name, tvars, _) <- decls]
+      methodPairs = concatMap buildMethods decls
+      methodEnv = M.fromList [(name, info) | (name, info, _) <- methodPairs]
+      methodCtx = M.fromList [(name, scheme) | (name, _, scheme) <- methodPairs]
+  in (classEnv, methodEnv, methodCtx)
+  where
+    buildMethods (className, tvars, methods) =
+      let paramMap = M.fromList (zip tvars [0..])
+          paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
+      in map (buildMethod className paramMap paramSet) methods
+
+    buildMethod className paramMap paramSet (CST.ClassMethod mname argTys retTy) =
+      let resolvedArgs = map (resolveTypeParams' paramMap) argTys
+          resolvedRet  = resolveTypeParams' paramMap retTy
+          funTy = Ty.TyFun resolvedArgs resolvedRet
+          scheme = Forall paramSet funTy
+      in (mname, MethodInfo className argTys retTy, scheme)
+
+    resolveTypeParams' paramMap ty = case ty of
+      Ty.TyCon name [] -> case M.lookup name paramMap of
+        Just idx -> Ty.TyVar idx
+        Nothing  -> ty
+      Ty.TyCon name args -> Ty.TyCon name (map (resolveTypeParams' paramMap) args)
+      Ty.TyFun args ret -> Ty.TyFun (map (resolveTypeParams' paramMap) args) (resolveTypeParams' paramMap ret)
+      _ -> ty
+
+-- | Type-check instance method bodies and build the instance environment.
+buildInstanceEnv :: ClassEnv -> MethodEnv -> Context -> FieldMap
+                 -> [(CST.Symbol, Ty.Type, [(CST.Symbol, Res.RExpr)])]
+                 -> (InstanceEnv, [TypeError])
+buildInstanceEnv _classEnv methodEnv ctx fieldMap instDecls =
+  let results = map checkInst instDecls
+      instEnv = M.fromListWith (++) [(cls, [inst]) | (cls, inst, _) <- results]
+      errs = concatMap (\(_, _, es) -> es) results
+  in (instEnv, errs)
+  where
+    checkInst (className, instTy, methods) =
+      let env = InferEnv ctx fieldMap M.empty methodEnv M.empty
+          (typedMethods, _, (constraints, inferErrs)) =
+            RWS.runRWS (traverse (checkMethod className instTy) methods) env 0
+          (solveErrs, resolvedMethods) = case solveAll constraints of
+            Left es -> (es, typedMethods)
+            Right subst -> ([], map (\(n, e) -> (n, apply subst e)) typedMethods)
+          methodMap = M.fromList resolvedMethods
+          inst = InstanceInfo instTy methodMap
+      in (className, inst, inferErrs ++ solveErrs)
+
+    checkMethod _className _instTy (mname, body) = do
+      typed <- infer body
+      pure (mname, typed)
+
+-- DICTIONARY PASSING
+
+data DictNeed = DictNeed
+  { dnClass    :: !CST.Symbol
+  , dnTyVar    :: !Ty.Type
+  , dnParamIdx :: !Int
+  }
+
+type DictNeedsMap = M.Map CST.Symbol [DictNeed]
+type DictParamCtx = M.Map (CST.Symbol, Integer) CST.Symbol
+
+dictSp :: Loc.Span
+dictSp = Loc.Span (Loc.Pos "<dict>" 0 0) (Loc.Pos "<dict>" 0 0)
+
+-- | Haskell-style dictionary passing for typeclass methods.
+-- Monomorphic calls: inline instance implementation (static dispatch).
+-- Polymorphic calls: add dictionary parameters and extract methods from dicts.
+dictPass :: ClassEnv -> MethodEnv -> InstanceEnv -> TResolvedCST -> TResolvedCST
+dictPass classEnv methodEnv instanceEnv typed
+  | M.null classEnv = typed
+  | otherwise =
+    let dictTypes = genDictTypes classEnv methodEnv
+        dictBinds = genDictBinds classEnv methodEnv instanceEnv
+        rewritten = map (dpRewrite classEnv methodEnv instanceEnv M.empty M.empty) typed
+    in dictTypes ++ injectDictBinds dictBinds rewritten
+
+typeToName :: Ty.Type -> T.Text
+typeToName Ty.TyInt = "INT"
+typeToName Ty.TyFlt = "FLT"
+typeToName Ty.TyStr = "STR"
+typeToName Ty.TyBool = "BOOL"
+typeToName Ty.TyUnit = "UNIT"
+typeToName Ty.TyRx = "RX"
+typeToName (Ty.TyCon n []) = n
+typeToName (Ty.TyCon n ts) = n <> "_" <> T.intercalate "_" (map typeToName ts)
+typeToName _ = "X"
+
+classMethodOrder :: CST.Symbol -> MethodEnv -> [(CST.Symbol, MethodInfo)]
+classMethodOrder className me =
+  [(n, mi) | (n, mi) <- M.toList me, miClass mi == className]
+
+-- Generate dictionary type declarations (one per class)
+genDictTypes :: ClassEnv -> MethodEnv -> [TRExpr]
+genDictTypes classEnv me =
+  [mkDictType cn tvs me | (cn, tvs) <- M.toList classEnv]
+
+mkDictType :: CST.Symbol -> [CST.Symbol] -> MethodEnv -> TRExpr
+mkDictType className tvars me =
+  let dn = "__DICT_" <> className
+      cn = "__Dict" <> className
+      pm = M.fromList (zip tvars [0..])
+      methods = classMethodOrder className me
+      fTys = [Ty.TyFun (map (rTV pm) (miArgTys mi)) (rTV pm (miRetTy mi))
+             | (_, mi) <- methods]
+      fNames = map fst methods
+      ctor = CST.DataCon cn fTys (Just fNames)
+  in Loc.Located dictSp (Ty.Typed (Ty.TyCon dn []) (TRType dn tvars [ctor]))
+  where
+    rTV pm (Ty.TyCon n []) | Just i <- M.lookup n pm = Ty.TyVar i
+    rTV pm (Ty.TyCon n as) = Ty.TyCon n (map (rTV pm) as)
+    rTV pm (Ty.TyFun as r) = Ty.TyFun (map (rTV pm) as) (rTV pm r)
+    rTV _ t = t
+
+-- Generate dictionary instance let-bindings (one per instance)
+genDictBinds :: ClassEnv -> MethodEnv -> InstanceEnv -> [(CST.Symbol, Ty.Type, TRExpr)]
+genDictBinds ce me ie =
+  concatMap (\(cn, insts) -> map (mkDictBind cn ce me) insts) (M.toList ie)
+
+mkDictBind :: CST.Symbol -> ClassEnv -> MethodEnv -> InstanceInfo -> (CST.Symbol, Ty.Type, TRExpr)
+mkDictBind className ce me inst =
+  let iTy = iiType inst
+      dName = "__DICT_" <> className
+      cName = "__Dict" <> className
+      iName = "__inst_" <> className <> "_" <> typeToName iTy
+      dTy = Ty.TyCon dName [iTy]
+      tvars = M.findWithDefault [] className ce
+      pm = M.fromList (zip tvars [0..])
+      methods = classMethodOrder className me
+      impls = [case M.lookup mn (iiMethods inst) of
+                  Just e -> e
+                  Nothing -> error ("dictPass: missing " ++ T.unpack mn)
+              | (mn, _) <- methods]
+      fTys = [Ty.TyFun (map (sTV pm iTy) (miArgTys mi)) (sTV pm iTy (miRetTy mi))
+             | (_, mi) <- methods]
+      cTy = if null fTys then dTy else Ty.TyFun fTys dTy
+      cRef = Loc.Located dictSp (Ty.Typed cTy (TRVar (Res.VarBinding 0 cName)))
+      app = if null impls then cRef
+            else Loc.Located dictSp (Ty.Typed dTy (TRApp cRef impls))
+  in (iName, dTy, app)
+  where
+    sTV pm ct (Ty.TyCon n []) | Just _ <- M.lookup n pm = ct
+    sTV pm ct (Ty.TyCon n as) = Ty.TyCon n (map (sTV pm ct) as)
+    sTV pm ct (Ty.TyFun as r) = Ty.TyFun (map (sTV pm ct) as) (sTV pm ct r)
+    sTV _ _ t = t
+
+-- Inject dict bindings into the first TRLet
+injectDictBinds :: [(CST.Symbol, Ty.Type, TRExpr)] -> TResolvedCST -> TResolvedCST
+injectDictBinds [] es = es
+injectDictBinds db es = go es
+  where
+    go [] = []
+    go (Loc.Located sp (Ty.Typed ty (TRLet bs b)) : rest) =
+      Loc.Located sp (Ty.Typed ty (TRLet (db ++ bs) b)) : rest
+    go (e : rest) = e : go rest
+
+-- Analyze a lambda body for class method calls on type variables
+analyzeNeeds :: MethodEnv -> [(CST.Symbol, Ty.Type)] -> TRExpr -> [DictNeed]
+analyzeNeeds me params body = dedup (go body)
+  where
+    dedup = foldr (\dn acc -> if any (sameDN dn) acc then acc else dn : acc) []
+    sameDN a b = dnClass a == dnClass b && sameTyV (dnTyVar a) (dnTyVar b)
+    sameTyV (Ty.TyVar a) (Ty.TyVar b) = a == b
+    sameTyV _ _ = False
+
+    go (Loc.Located _ (Ty.Typed _ node)) = case node of
+      TRApp (Loc.Located _ (Ty.Typed fty (TRVar vb))) args ->
+        (case M.lookup (Res.symName vb) me of
+          Just mi ->
+            let iT = resolveInstanceType mi fty
+            in case iT of
+              Ty.TyVar v -> case paramIdx v of
+                Just idx -> [DictNeed (miClass mi) iT idx]
+                Nothing -> []
+              _ -> []
+          Nothing -> []) ++ concatMap go args
+      TRApp f as -> go f ++ concatMap go as
+      TRLam _ _ b -> go b
+      TRLet bs b -> concatMap (\(_, _, e) -> go e) bs ++ go b
+      TRIf c t e -> go c ++ go t ++ go e
+      TRCase s as -> go s ++ concatMap (\(_, e) -> go e) as
+      _ -> []
+
+    paramIdx v = lookup v [(n, i) | (i, (_, Ty.TyVar n)) <- zip [0..] params]
+
+-- Main AST rewriter
+dpRewrite :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx -> TRExpr -> TRExpr
+dpRewrite ce me ie nm dpc expr@(Loc.Located sp (Ty.Typed ty node)) = case node of
+  TRApp fexpr args -> dpApp ce me ie nm dpc sp ty fexpr args
+  TRLam params retTy body -> dpLam ce me ie nm dpc sp params retTy body
+  TRLet binds body -> dpLetExpr ce me ie nm dpc sp ty binds body
+  TRIf c t e -> Loc.Located sp (Ty.Typed ty (TRIf (rw c) (rw t) (rw e)))
+  TRCase scr arms -> Loc.Located sp (Ty.Typed ty (TRCase (rw scr) [(p, rw e) | (p, e) <- arms]))
+  _ -> expr
+  where rw = dpRewrite ce me ie nm dpc
+
+-- Rewrite function application: method calls and dict-parameterized function calls
+dpApp :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+      -> Loc.Span -> Ty.Type -> TRExpr -> [TRExpr] -> TRExpr
+dpApp ce me ie nm dpc sp ty fexpr args =
+  let args' = map (dpRewrite ce me ie nm dpc) args
+  in case fexpr of
+    Loc.Located fsp (Ty.Typed fty (TRVar vb))
+      -- Class method call
+      | Just mi <- M.lookup (Res.symName vb) me ->
+        let iT = resolveInstanceType mi fty
+        in case iT of
+          Ty.TyVar v ->
+            -- Polymorphic: extract from dict param
+            case M.lookup (miClass mi, v) dpc of
+              Just dpn ->
+                let ext = mkMethodExtract sp dpn (miClass mi) (Res.symName vb) iT ce me
+                in Loc.Located sp (Ty.Typed ty (TRApp ext args'))
+              Nothing -> Loc.Located sp (Ty.Typed ty (TRApp fexpr args'))
+          _ ->
+            -- Monomorphic: inline instance impl (static dispatch)
+            case lookupInstance ie (miClass mi) iT (Res.symName vb) of
+              Just impl ->
+                let Loc.Located _ (Ty.Typed _ implBody) = impl
+                in Loc.Located sp (Ty.Typed ty (TRApp (Loc.Located fsp (Ty.Typed fty implBody)) args'))
+              Nothing -> Loc.Located sp (Ty.Typed ty (TRApp fexpr args'))
+
+      -- Call to a dict-parameterized function
+      | Just needs <- M.lookup (Res.symName vb) nm ->
+        let dArgs = map (mkDictArgForCall ie dpc fty) needs
+            allArgs = dArgs ++ args'
+            newFty = Ty.TyFun (map typeOf allArgs) ty
+            newF = Loc.Located fsp (Ty.Typed newFty (TRVar vb))
+        in Loc.Located sp (Ty.Typed ty (TRApp newF allArgs))
+
+    -- Regular call
+    _ -> Loc.Located sp (Ty.Typed ty (TRApp (dpRewrite ce me ie nm dpc fexpr) args'))
+
+-- Rewrite lambda: add dict params if body uses class methods on type variables
+dpLam :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+      -> Loc.Span -> [(CST.Symbol, Ty.Type)] -> Ty.Type -> TRExpr -> TRExpr
+dpLam ce me ie nm dpc sp params retTy body =
+  let needs = analyzeNeeds me params body
+  in if null needs
+     then
+       let body' = dpRewrite ce me ie nm dpc body
+       in Loc.Located sp (Ty.Typed (Ty.TyFun (map snd params) retTy) (TRLam params retTy body'))
+     else
+       let dParams = [(dpNameFor dn, dpTypeFor dn) | dn <- needs]
+           newDpc = foldl (\ctx dn -> case dnTyVar dn of
+                             Ty.TyVar v -> M.insert (dnClass dn, v) (dpNameFor dn) ctx
+                             _ -> ctx) dpc needs
+           body' = dpRewrite ce me ie nm newDpc body
+           allParams = dParams ++ params
+           newTy = Ty.TyFun (map snd allParams) retTy
+       in Loc.Located sp (Ty.Typed newTy (TRLam allParams retTy body'))
+
+-- Rewrite let: build needs map, rewrite bindings and body
+dpLetExpr :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+          -> Loc.Span -> Ty.Type -> [(CST.Symbol, Ty.Type, TRExpr)] -> TRExpr -> TRExpr
+dpLetExpr ce me ie parentNm dpc sp ty binds body =
+  let localNeeds = M.fromList
+        [(name, needs)
+        | (name, _, Loc.Located _ (Ty.Typed _ (TRLam params _ lb))) <- binds
+        , let needs = analyzeNeeds me params lb
+        , not (null needs)]
+      nm = M.union localNeeds parentNm
+      binds' = map (dpBind ce me ie nm dpc) binds
+      body' = dpRewrite ce me ie nm dpc body
+  in Loc.Located sp (Ty.Typed ty (TRLet binds' body'))
+
+dpBind :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+       -> (CST.Symbol, Ty.Type, TRExpr) -> (CST.Symbol, Ty.Type, TRExpr)
+dpBind ce me ie nm dpc (name, ty, Loc.Located sp (Ty.Typed lamTy (TRLam params retTy body))) =
+  let needs = analyzeNeeds me params body
+  in if null needs
+     then (name, ty, dpRewrite ce me ie nm dpc (Loc.Located sp (Ty.Typed lamTy (TRLam params retTy body))))
+     else
+       let dParams = [(dpNameFor dn, dpTypeFor dn) | dn <- needs]
+           newDpc = foldl (\ctx dn -> case dnTyVar dn of
+                             Ty.TyVar v -> M.insert (dnClass dn, v) (dpNameFor dn) ctx
+                             _ -> ctx) dpc needs
+           body' = dpRewrite ce me ie nm newDpc body
+           allParams = dParams ++ params
+           newTy = Ty.TyFun (map snd allParams) retTy
+       in (name, newTy, Loc.Located sp (Ty.Typed newTy (TRLam allParams retTy body')))
+dpBind ce me ie nm dpc (name, ty, expr) =
+  (name, ty, dpRewrite ce me ie nm dpc expr)
+
+dpNameFor :: DictNeed -> CST.Symbol
+dpNameFor dn = "__dict_" <> dnClass dn
+
+dpTypeFor :: DictNeed -> Ty.Type
+dpTypeFor dn = Ty.TyCon ("__DICT_" <> dnClass dn) [dnTyVar dn]
+
+-- Extract a method from a dictionary via case pattern match
+mkMethodExtract :: Loc.Span -> CST.Symbol -> CST.Symbol -> CST.Symbol -> Ty.Type
+               -> ClassEnv -> MethodEnv -> TRExpr
+mkMethodExtract sp dictName className methodName tyVar ce me =
+  let dtn = "__DICT_" <> className
+      ctn = "__Dict" <> className
+      dTy = Ty.TyCon dtn [tyVar]
+      tvars = M.findWithDefault [] className ce
+      pm = M.fromList (zip tvars [0..])
+      methods = classMethodOrder className me
+      mIdx = findIdx methodName (map fst methods)
+      fTys = [Ty.TyFun (map (rTV pm tyVar) (miArgTys mi)) (rTV pm tyVar (miRetTy mi))
+             | (_, mi) <- methods]
+      mTy = fTys !! mIdx
+      pats = [if i == mIdx then TRPatVar "__m" ft else TRPatWild ft
+             | (i, ft) <- zip [0..] fTys]
+      pat = TRPatCon ctn dTy pats
+      scr = Loc.Located sp (Ty.Typed dTy (TRVar (Res.VarBinding 0 dictName)))
+      bdy = Loc.Located sp (Ty.Typed mTy (TRVar (Res.VarBinding 0 "__m")))
+  in Loc.Located sp (Ty.Typed mTy (TRCase scr [(pat, bdy)]))
+  where
+    rTV pm tv (Ty.TyCon n []) | Just _ <- M.lookup n pm = tv
+    rTV pm tv (Ty.TyCon n as) = Ty.TyCon n (map (rTV pm tv) as)
+    rTV pm tv (Ty.TyFun as r) = Ty.TyFun (map (rTV pm tv) as) (rTV pm tv r)
+    rTV _ _ t = t
+    findIdx x xs = go' 0 xs where
+      go' _ [] = 0
+      go' i (y:ys) | x == y = i | otherwise = go' (i+1) ys
+
+-- Create a dict argument reference for a call site
+mkDictArgForCall :: InstanceEnv -> DictParamCtx -> Ty.Type -> DictNeed -> TRExpr
+mkDictArgForCall _ie dpc callFty dn =
+  case callFty of
+    Ty.TyFun argTys _ | dnParamIdx dn < length argTys ->
+      let cTy = argTys !! dnParamIdx dn
+      in case cTy of
+        Ty.TyVar v ->
+          -- Still polymorphic at call site: pass through our dict param
+          case M.lookup (dnClass dn, v) dpc of
+            Just dpn ->
+              let dictTy = Ty.TyCon ("__DICT_" <> dnClass dn) [cTy]
+              in Loc.Located dictSp (Ty.Typed dictTy (TRVar (Res.VarBinding 0 dpn)))
+            Nothing -> error ("dictPass: no dict for " ++ T.unpack (dnClass dn))
+        _ ->
+          -- Concrete type: reference the instance dict
+          let iName = "__inst_" <> dnClass dn <> "_" <> typeToName cTy
+              dictTy = Ty.TyCon ("__DICT_" <> dnClass dn) [cTy]
+          in Loc.Located dictSp (Ty.Typed dictTy (TRVar (Res.VarBinding 0 iName)))
+    _ -> error "dictPass: unexpected function type at call site"
+
+-- | Determine the concrete type for the class type variable from the resolved function type.
+resolveInstanceType :: MethodInfo -> Ty.Type -> Ty.Type
+resolveInstanceType minfo fty = case fty of
+  Ty.TyFun (argTy : _) _ -> argTy  -- first arg determines instance type
+  _ -> fty
+
+-- | Look up an instance for a class and concrete type, returning a specific method.
+lookupInstance :: InstanceEnv -> CST.Symbol -> Ty.Type -> CST.Symbol -> Maybe TRExpr
+lookupInstance ienv className instTy methodName =
+  case M.lookup className ienv of
+    Nothing -> Nothing
+    Just insts ->
+      case filter (\ii -> iiType ii == instTy) insts of
+        (ii : _) -> M.lookup methodName (iiMethods ii)
+        [] -> Nothing
+
 -- INFERENCE
 
 infer :: Res.RExpr -> Infer TRExpr
@@ -367,6 +769,12 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
       localCtx (const bodyCtx) (infer body)
     let typedBinds = zip3 names (map typeOf rhsExprs) rhsExprs
     pure $ Ty.Typed (typeOf bodyExpr) (TRLet typedBinds bodyExpr)
+  Res.RCls name _tvars _methods ->
+    -- Class info is extracted in pre-pass, just pass through
+    pure $ Ty.Typed Ty.TyUnit TRUnit
+  Res.RInst _className _ty _methods ->
+    -- Instance info is extracted in pre-pass, just pass through
+    pure $ Ty.Typed Ty.TyUnit TRUnit
   Res.RType name params ctors ->
     -- Constructors are registered in context by typecheck, just pass through here
     pure $ Ty.Typed (Ty.TyCon name []) (TRType name params ctors)

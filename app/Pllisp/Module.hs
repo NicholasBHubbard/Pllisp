@@ -29,6 +29,8 @@ desugarTopLevel exprs =
   where
     classifyExpr :: CST.Expr -> ([CST.Expr], [(CST.TSymbol, CST.Expr)]) -> ([CST.Expr], [(CST.TSymbol, CST.Expr)])
     classifyExpr loc@(Loc.Located _ (CST.ExprType _ _ _)) (ts, bs) = (loc : ts, bs)
+    classifyExpr loc@(Loc.Located _ (CST.ExprCls _ _ _)) (ts, bs) = (loc : ts, bs)
+    classifyExpr loc@(Loc.Located _ (CST.ExprInst _ _ _)) (ts, bs) = (loc : ts, bs)
     classifyExpr (Loc.Located _ (CST.ExprLet letBinds body)) (ts, bs) =
       (ts, letBinds ++ [(wildSym, body)] ++ bs)
     classifyExpr expr (ts, bs) =

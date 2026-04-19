@@ -497,6 +497,72 @@ spec = do
     it "rejects &rest param written as default pair" $
       shouldFailSExpr "(lam (&rest (a 0)) 1)"
 
+  describe "typeclasses" $ do
+    -- cls
+    it "cls with one method" $ do
+      prog <- viaSExpr "(cls SHOW (a) (show %a %STR))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprCls "SHOW" ["A"]
+          [CST.ClassMethod "SHOW" [Ty.TyCon "A" []] Ty.TyStr])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "cls with multi-arg method" $ do
+      prog <- viaSExpr "(cls EQUAL (a) (equal %a %a %BOOL))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprCls "EQUAL" ["A"]
+          [CST.ClassMethod "EQUAL" [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "cls with multiple methods" $ do
+      prog <- viaSExpr "(cls NUM (a) (add %a %a %a) (neg %a %a))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprCls "NUM" ["A"]
+          [CST.ClassMethod "ADD" [Ty.TyCon "A" [], Ty.TyCon "A" []] (Ty.TyCon "A" []),
+           CST.ClassMethod "NEG" [Ty.TyCon "A" []] (Ty.TyCon "A" [])])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "cls with multiple type vars" $ do
+      prog <- viaSExpr "(cls CONVERT (a b) (convert %a %b))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprCls "CONVERT" ["A", "B"]
+          [CST.ClassMethod "CONVERT" [Ty.TyCon "A" []] (Ty.TyCon "B" [])])] -> pure ()
+        other -> expectationFailure (show other)
+
+    -- inst
+    it "inst with one method" $ do
+      prog <- viaSExpr "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprInst "SHOW" Ty.TyInt
+          [("SHOW", Loc.Located _ (CST.ExprLam _ _ _))])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "inst with multiple methods" $ do
+      prog <- viaSExpr "(inst NUM %INT (add (lam ((x %INT) (y %INT)) x)) (neg (lam ((x %INT)) x)))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprInst "NUM" Ty.TyInt
+          [("ADD", _), ("NEG", _)])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "inst for parameterized type" $ do
+      prog <- viaSExpr "(inst SHOW %(List %INT) (show (lam ((xs %(List %INT))) \"list\")))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprInst "SHOW" (Ty.TyCon "LIST" [Ty.TyInt])
+          [("SHOW", _)])] -> pure ()
+        other -> expectationFailure (show other)
+
+    -- errors
+    it "rejects cls with no type vars" $
+      shouldFailSExpr "(cls SHOW () (show %a %STR))"
+
+    it "rejects cls with no methods" $
+      shouldFailSExpr "(cls SHOW (a))"
+
+    it "rejects cls method with only one type (no args)" $
+      shouldFailSExpr "(cls SHOW (a) (show %STR))"
+
+    it "rejects inst with no methods" $
+      shouldFailSExpr "(inst SHOW %INT)"
+
 -- Parse via SExpr pipeline: Text → [SExpr] → CST.Program
 viaSExpr :: T.Text -> IO CST.Program
 viaSExpr src = do

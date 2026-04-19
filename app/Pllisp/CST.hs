@@ -40,7 +40,15 @@ data ExprF
   | ExprCase Expr [(Pattern, Expr)]     -- (CASE scrutinee (pat body)...)
   | ExprFieldAccess Symbol Expr         -- (.field expr)
   | ExprKeyArg Symbol Expr              -- &key name value (only in app args)
+  | ExprCls Symbol [Symbol] [ClassMethod]  -- (CLS Name (tyvars...) methods...)
+  | ExprInst Symbol Ty.Type [(Symbol, Expr)]  -- (INST ClassName %Type methods...)
   deriving (Eq, Show)
+
+data ClassMethod = ClassMethod
+  { cmName   :: Symbol
+  , cmArgTys :: [Ty.Type]
+  , cmRetTy  :: Ty.Type
+  } deriving (Eq, Show)
 
 data LamList = LamList
   { llRequired :: [TSymbol]
