@@ -38,6 +38,7 @@ data ExprF
   | ExprLit Literal
   | ExprType Symbol [Symbol] [DataCon]  -- (TYPE Name (params...) (Ctor args...)...)
   | ExprCase Expr [(Pattern, Expr)]     -- (CASE scrutinee (pat body)...)
+  | ExprFieldAccess Symbol Expr         -- (.field expr)
   deriving (Eq, Show)
 
 data Pattern
@@ -49,8 +50,9 @@ data Pattern
   deriving (Eq, Show)
 
 data DataCon = DataCon
-  { dcName :: Symbol
-  , dcArgs :: [Ty.Type]
+  { dcName   :: Symbol
+  , dcArgs   :: [Ty.Type]
+  , dcFields :: Maybe [Symbol]  -- Nothing = positional, Just = record
   } deriving (Eq, Show)
 
 -- PROGRAM STRUCTURE

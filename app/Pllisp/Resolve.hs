@@ -37,6 +37,7 @@ data RExprF
   | RApp  RExpr [RExpr]
   | RType CST.Symbol [CST.Symbol] [CST.DataCon]
   | RCase RExpr [(RPattern, RExpr)]
+  | RFieldAccess CST.Symbol RExpr
   deriving (Eq, Show)
 
 data RPattern
@@ -103,6 +104,9 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     dupCheck "duplicate type parameter" params sp
     dupCheck "duplicate data constructor" (map CST.dcName ctors) sp
     pure (RType name params ctors)
+  CST.ExprFieldAccess field subExpr -> do
+    rexpr <- resolveExpr subExpr
+    pure $ RFieldAccess field rexpr
   CST.ExprCase scrutinee arms -> do
     rscrutinee <- resolveExpr scrutinee
     rarms <- traverse (resolveArm sp) arms

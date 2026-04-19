@@ -768,6 +768,42 @@ spec = do
         , "(print (int-to-str (first-of (42 99))))"
         ]) >>= (`shouldBe` "42")
 
+  describe "record types" $ do
+    it "record field access string" $
+      run (T.unlines
+        [ "(type Person () (Person (name %STR) (age %INT)))"
+        , "(let ((p (Person \"alice\" 30)))"
+        , "  (print (.name p)))"
+        ]) >>= (`shouldBe` "alice")
+
+    it "record field access int" $
+      run (T.unlines
+        [ "(type Person () (Person (name %STR) (age %INT)))"
+        , "(let ((p (Person \"alice\" 30)))"
+        , "  (print (int-to-str (.age p))))"
+        ]) >>= (`shouldBe` "30")
+
+    it "record pattern match still works" $
+      run (T.unlines
+        [ "(type Point () (Point (x %INT) (y %INT)))"
+        , "(let ((p (Point 3 4)))"
+        , "  (case p ((Point a b) (print (int-to-str (add a b))))))"
+        ]) >>= (`shouldBe` "7")
+
+    it "record with type parameter" $
+      run (T.unlines
+        [ "(type Box (a) (Box (val a)))"
+        , "(let ((b (Box 42)))"
+        , "  (print (int-to-str (.val b))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "nested field access" $
+      run (T.unlines
+        [ "(type Box (a) (Box (val a)))"
+        , "(let ((b (Box (Box 42))))"
+        , "  (print (int-to-str (.val (.val b)))))"
+        ]) >>= (`shouldBe` "42")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

@@ -129,8 +129,8 @@ collectCtors = foldl' go M.empty
     go acc (Ty.Typed _ (LL.LLType _ _ dataCons)) =
       foldl' addCtor acc (zip [0..] dataCons)
     go acc _ = acc
-    addCtor acc (tag, CST.DataCon name fields) =
-      M.insert name (CtorInfo tag fields) acc
+    addCtor acc (tag, CST.DataCon name args _fields) =
+      M.insert name (CtorInfo tag args) acc
 
 -- LLVM TYPE MAPPING
 

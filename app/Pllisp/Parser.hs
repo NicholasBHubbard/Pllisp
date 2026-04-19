@@ -118,7 +118,7 @@ dataConParser :: Parser CST.DataCon
 dataConParser = MP.label "data constructor" $ parens $ do
   name <- symbolParser
   args <- MP.many typeParserInCtor
-  pure $ CST.DataCon name args
+  pure $ CST.DataCon name args Nothing
 
 -- Type parser for inside constructor definitions (handles type variables)
 typeParserInCtor :: Parser Ty.Type
@@ -270,12 +270,18 @@ sexprParser = located $ MP.choice
   ]
 
 sexprAtomParser :: Parser T.Text
-sexprAtomParser = MP.label "atom" $ lexeme $ do
-  s <- rawIdent
-  mDot <- MP.optional (MP.C.char '.' *> rawIdent)
-  pure $ case mDot of
-    Nothing -> s
-    Just q  -> s <> "." <> q
+sexprAtomParser = MP.label "atom" $ lexeme $ dotAccessor <|> regularAtom
+  where
+    dotAccessor = MP.try $ do
+      _ <- MP.C.char '.'
+      s <- rawIdent
+      pure ("." <> s)
+    regularAtom = do
+      s <- rawIdent
+      mDot <- MP.optional (MP.C.char '.' *> rawIdent)
+      pure $ case mDot of
+        Nothing -> s
+        Just q  -> s <> "." <> q
 
 sexprQuasiParser :: Parser SExpr.SExprF
 sexprQuasiParser = do

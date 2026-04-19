@@ -84,6 +84,10 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
   SList (Loc.Located _ (SAtom "IF")   : rest) -> Loc.Located sp <$> toIf sp rest
   SList (Loc.Located _ (SAtom "TYPE") : rest) -> Loc.Located sp <$> toTypeDecl sp rest
   SList (Loc.Located _ (SAtom "CASE") : rest) -> Loc.Located sp <$> toCase sp rest
+  SList [Loc.Located _ (SAtom dotName), arg]
+    | Just field <- T.stripPrefix "." dotName -> do
+        arg' <- toExpr arg
+        Right $ Loc.Located sp (CST.ExprFieldAccess field arg')
   SList (fun : args) -> do
     fun'  <- toExpr fun
     args' <- mapM toExpr args
@@ -145,9 +149,25 @@ toTypeDecl _ (Loc.Located _ (SAtom name) : Loc.Located _ (SList params) : ctors)
 toTypeDecl sp _ = Left $ ConvertError sp "invalid type declaration"
 
 toDataCon :: SExpr -> Either ConvertError CST.DataCon
-toDataCon (Loc.Located _ (SList (Loc.Located _ (SAtom name) : args))) = do
-  args' <- mapM toTypeArg args
-  Right $ CST.DataCon name args'
+toDataCon (Loc.Located _ (SList (Loc.Located _ (SAtom name) : args)))
+  | not (null args) && all isRecordField args = do
+      fields <- mapM toRecordField args
+      let (names, types) = unzip fields
+      Right $ CST.DataCon name types (Just names)
+  | otherwise = do
+      args' <- mapM toTypeArg args
+      Right $ CST.DataCon name args' Nothing
+  where
+    isRecordField (Loc.Located _ (SList [Loc.Located _ (SAtom _), tyArg])) =
+      isTypeArg tyArg
+    isRecordField _ = False
+    isTypeArg (Loc.Located _ (SType _)) = True
+    isTypeArg (Loc.Located _ (SAtom _)) = True
+    isTypeArg _                         = False
+    toRecordField (Loc.Located _ (SList [Loc.Located _ (SAtom fname), tyArg])) = do
+      ty <- toTypeArg tyArg
+      Right (fname, ty)
+    toRecordField (Loc.Located sp' _) = Left $ ConvertError sp' "invalid record field"
 toDataCon (Loc.Located sp _) = Left $ ConvertError sp "invalid data constructor"
 
 -- CASE

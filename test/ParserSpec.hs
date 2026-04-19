@@ -69,15 +69,15 @@ spec = do
     it "type declaration no params" $ do
       r <- either fail pure $ parseOne "(type Foo () (Bar))"
       case r of
-        CST.ExprType "FOO" [] [CST.DataCon "BAR" []] -> pure ()
+        CST.ExprType "FOO" [] [CST.DataCon "BAR" [] Nothing] -> pure ()
         _ -> expectationFailure (show r)
 
     it "type declaration with params and constructors" $ do
       r <- either fail pure $ parseOne "(type Maybe (a) (Nothing) (Just a))"
       case r of
         CST.ExprType "MAYBE" ["A"]
-          [ CST.DataCon "NOTHING" []
-          , CST.DataCon "JUST" [Ty.TyCon "A" []]
+          [ CST.DataCon "NOTHING" [] Nothing
+          , CST.DataCon "JUST" [Ty.TyCon "A" []] Nothing
           ] -> pure ()
         _ -> expectationFailure (show r)
 
@@ -240,7 +240,7 @@ spec = do
     it "type var in constructor arg" $ do
       r <- either fail pure $ parseOne "(type List (a) (Cons a %INT))"
       case r of
-        CST.ExprType "LIST" ["A"] [CST.DataCon "CONS" [Ty.TyCon "A" [], Ty.TyInt]] -> pure ()
+        CST.ExprType "LIST" ["A"] [CST.DataCon "CONS" [Ty.TyCon "A" [], Ty.TyInt] Nothing] -> pure ()
         _ -> expectationFailure (show r)
 
   describe "module declaration" $ do

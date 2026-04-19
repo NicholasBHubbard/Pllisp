@@ -281,8 +281,8 @@ spec = do
       prog <- viaSExpr "(type Maybe (a) (Nothing) (Just a))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprType "MAYBE" ["A"]
-          [CST.DataCon "NOTHING" [],
-           CST.DataCon "JUST" [Ty.TyCon "A" []]])] -> pure ()
+          [CST.DataCon "NOTHING" [] Nothing,
+           CST.DataCon "JUST" [Ty.TyCon "A" []] Nothing])] -> pure ()
         other -> expectationFailure (show other)
 
     it "case" $ do
@@ -334,6 +334,28 @@ spec = do
       prog <- viaSExpr "(lam ((x %(List %INT))) x)"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprLam [CST.TSymbol "X" (Just (Ty.TyCon "LIST" [Ty.TyInt]))] Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+  describe "record types" $ do
+    it "record type declaration" $ do
+      prog <- viaSExpr "(type Person () (Person (name %STR) (age %INT)))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprType "PERSON" []
+          [CST.DataCon "PERSON" [Ty.TyStr, Ty.TyInt] (Just ["NAME", "AGE"])])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "positional constructor unchanged" $ do
+      prog <- viaSExpr "(type Maybe (a) (Nothing) (Just a))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprType "MAYBE" ["A"]
+          [CST.DataCon "NOTHING" [] Nothing,
+           CST.DataCon "JUST" [Ty.TyCon "A" []] Nothing])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "field access parses" $ do
+      prog <- viaSExpr "(.name x)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprFieldAccess "NAME" _)] -> pure ()
         other -> expectationFailure (show other)
 
 -- Parse via SExpr pipeline: Text → [SExpr] → CST.Program

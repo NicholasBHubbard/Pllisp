@@ -11,6 +11,7 @@ import qualified Pllisp.Type as Ty
 import qualified Control.Monad.RWS as RWS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.Text as T
 
 -- ENTRY POINT
 
@@ -20,7 +21,9 @@ typecheck importedCtx exprs =
       ctorCtx = buildCtorContext typeDecls
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
       initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx]
-      (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) initialCtx 0
+      fieldMap = buildFieldMap typeDecls
+      env = InferEnv initialCtx fieldMap
+      (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) env 0
   in case solveAll constraints of
     Left solveErrs -> Left (inferErrs ++ solveErrs)
     Right subst
@@ -40,8 +43,23 @@ type Context = M.Map CST.Symbol Scheme
 -- | Output from inference: constraints to solve and errors encountered
 type InferOutput = (Constraints, [TypeError])
 
+-- | Field info for record desugar: (ctor name, field index, total fields)
+type FieldInfo = (CST.Symbol, Int, Int)
+type FieldMap = M.Map CST.Symbol FieldInfo
+
+data InferEnv = InferEnv
+  { ieCtx    :: !Context
+  , ieFields :: !FieldMap
+  }
+
 -- | Inference monad that collects errors instead of failing
-type Infer a = RWS.RWS Context InferOutput TyVar a
+type Infer a = RWS.RWS InferEnv InferOutput TyVar a
+
+askCtx :: Infer Context
+askCtx = ieCtx <$> RWS.ask
+
+localCtx :: (Context -> Context) -> Infer a -> Infer a
+localCtx f = RWS.local (\e -> e { ieCtx = f (ieCtx e) })
 
 type TResolvedCST = [TRExpr]
 
@@ -173,7 +191,7 @@ buildCtorContext = M.fromList . concatMap buildCtors
           paramSet = S.fromList [0 .. fromIntegral (length params - 1)]
       in map (buildCtor paramMap paramSet resultTy) ctors
 
-    buildCtor paramMap paramSet resultTy (CST.DataCon ctorName args) =
+    buildCtor paramMap paramSet resultTy (CST.DataCon ctorName args _fields) =
       let argTys = map (resolveTypeParams paramMap) args
           ctorTy = if null argTys
                    then resultTy
@@ -188,6 +206,15 @@ buildCtorContext = M.fromList . concatMap buildCtors
       Ty.TyCon name args -> Ty.TyCon name (map (resolveTypeParams paramMap) args)
       Ty.TyFun args ret -> Ty.TyFun (map (resolveTypeParams paramMap) args) (resolveTypeParams paramMap ret)
       _ -> ty
+
+buildFieldMap :: [(CST.Symbol, [CST.Symbol], [CST.DataCon])] -> FieldMap
+buildFieldMap = M.fromList . concatMap go
+  where
+    go (_typeName, _params, ctors) = concatMap ctorFields ctors
+    ctorFields (CST.DataCon ctorName args (Just fieldNames)) =
+      [(fname, (ctorName, idx, length args))
+      | (idx, fname) <- zip [0..] fieldNames]
+    ctorFields _ = []
 
 -- INFERENCE
 
@@ -206,7 +233,7 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   Res.RUnit ->
     pure $ Ty.Typed Ty.TyUnit TRUnit
   Res.RVar vb -> do
-    ctx <- RWS.ask
+    ctx <- askCtx
     case M.lookup (Res.symName vb) ctx of
       Just scheme -> do
         t <- instantiate scheme
@@ -232,17 +259,17 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     let paramNames = map CST.symName params
         paramSchemes = map (Forall S.empty) paramTys
         newBindings = M.fromList (zip paramNames paramSchemes)
-    bodyExpr <- RWS.local (M.union newBindings) (infer body)
+    bodyExpr <- localCtx (M.union newBindings) (infer body)
     let funTy = Ty.TyFun paramTys (typeOf bodyExpr)
     pure $ Ty.Typed funTy (TRLam (zip paramNames paramTys) (typeOf bodyExpr) bodyExpr)
   Res.RLet binds body -> do
-    ctx <- RWS.ask
+    ctx <- askCtx
     let names = map (CST.symName . fst) binds
     freshTys <- traverse (const fresh) names
     let monoSchemes = map (Forall S.empty) freshTys
         recCtx = M.union (M.fromList (zip names monoSchemes)) ctx
     (rhsExprs, (rhsConstraints, _)) <- RWS.listen $
-      traverse (\(_, rhs) -> RWS.local (const recCtx) (infer rhs)) binds
+      traverse (\(_, rhs) -> localCtx (const recCtx) (infer rhs)) binds
     sequence_ $ zipWith (constrain sp) freshTys (map typeOf rhsExprs)
     -- Solve RHS constraints eagerly so generalization uses concrete types,
     -- not raw inference variables (fixes over-generalization of applied fns).
@@ -252,12 +279,43 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
                               Left _      -> map typeOf rhsExprs
         generalizedSchemes = map (generalize ctx) concreteFreshTys
         bodyCtx = M.union (M.fromList (zip names generalizedSchemes)) ctx
-    bodyExpr <- RWS.local (const bodyCtx) (infer body)
+    bodyExpr <- localCtx (const bodyCtx) (infer body)
     let typedBinds = zip3 names (map typeOf rhsExprs) rhsExprs
     pure $ Ty.Typed (typeOf bodyExpr) (TRLet typedBinds bodyExpr)
   Res.RType name params ctors ->
     -- Constructors are registered in context by typecheck, just pass through here
     pure $ Ty.Typed (Ty.TyCon name []) (TRType name params ctors)
+  Res.RFieldAccess fieldName subExpr -> do
+    scrutExpr <- infer subExpr
+    let scrutTy = typeOf scrutExpr
+    fmap <- ieFields <$> RWS.ask
+    case M.lookup fieldName fmap of
+      Nothing -> do
+        t <- recordError sp ("no field '" ++ T.unpack fieldName ++ "'")
+        pure $ Ty.Typed t TRUnit
+      Just (ctorName, fieldIdx, numFields) -> do
+        ctx <- askCtx
+        ctorTy <- case M.lookup ctorName ctx of
+          Just scheme -> instantiate scheme
+          Nothing     -> recordError sp ("unknown constructor " ++ T.unpack ctorName)
+        let (argTys, resultTy) = case ctorTy of
+              Ty.TyFun as r -> (as, r)
+              t             -> ([], t)
+        constrain sp scrutTy resultTy
+        if fieldIdx >= length argTys || numFields /= length argTys
+          then do
+            t <- recordError sp ("field index out of bounds for " ++ T.unpack fieldName)
+            pure $ Ty.Typed t TRUnit
+          else do
+            let fieldTy = argTys !! fieldIdx
+                pats = [if i == fieldIdx
+                        then TRPatVar fieldName ft
+                        else TRPatWild ft
+                       | (i, ft) <- zip [0..] argTys]
+                pat = TRPatCon ctorName scrutTy pats
+                binding = Res.VarBinding 0 fieldName
+                body = Loc.Located sp (Ty.Typed fieldTy (TRVar binding))
+            pure $ Ty.Typed fieldTy (TRCase scrutExpr [(pat, body)])
   Res.RCase scrutinee arms -> do
     scrutExpr <- infer scrutinee
     let scrutTy = typeOf scrutExpr
@@ -267,7 +325,7 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     where
       inferArm scrutTy resultTy (pat, body) = do
         (rpat, bindings) <- inferPattern scrutTy pat sp
-        bodyExpr <- RWS.local (M.union (M.fromList bindings)) (infer body)
+        bodyExpr <- localCtx (M.union (M.fromList bindings)) (infer body)
         constrain sp (typeOf bodyExpr) resultTy
         pure (rpat, bodyExpr)
 
@@ -321,7 +379,7 @@ inferPattern ty pat sp = case pat of
   Res.RPatVar s ->
     pure (TRPatVar s ty, [(s, Forall S.empty ty)])
   Res.RPatCon ctor subpats -> do
-    ctx <- RWS.ask
+    ctx <- askCtx
     ctorTy <- case M.lookup ctor ctx of
       Just scheme -> instantiate scheme
       Nothing     -> recordError sp ("Unknown constructor in pattern: " ++ show ctor)
