@@ -28,7 +28,7 @@ type Expr = Loc.Located ExprF
 type CST = [Expr]
 
 data ExprF
-  = ExprLam [TSymbol] (Maybe Ty.Type) Expr
+  = ExprLam LamList (Maybe Ty.Type) Expr
   | ExprApp Expr [Expr]
   | ExprLet [(TSymbol, Expr)] Expr
   | ExprIf Expr Expr Expr
@@ -39,6 +39,19 @@ data ExprF
   | ExprType Symbol [Symbol] [DataCon]  -- (TYPE Name (params...) (Ctor args...)...)
   | ExprCase Expr [(Pattern, Expr)]     -- (CASE scrutinee (pat body)...)
   | ExprFieldAccess Symbol Expr         -- (.field expr)
+  | ExprKeyArg Symbol Expr              -- &key name value (only in app args)
+  deriving (Eq, Show)
+
+data LamList = LamList
+  { llRequired :: [TSymbol]
+  , llExtra    :: LamExtra
+  } deriving (Eq, Show)
+
+data LamExtra
+  = NoExtra
+  | OptParams [(TSymbol, Expr)]  -- %opt (param default)...
+  | RestParam TSymbol            -- &rest param
+  | KeyParams [(TSymbol, Expr)]  -- &key (param default)...
   deriving (Eq, Show)
 
 data Pattern

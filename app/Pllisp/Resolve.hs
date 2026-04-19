@@ -31,13 +31,26 @@ data RExprF
   | RBool Bool
   | RUnit
   | RVar  VarBinding
-  | RLam  [CST.TSymbol] (Maybe Ty.Type) RExpr
+  | RLam  RLamList (Maybe Ty.Type) RExpr
   | RLet  [(CST.TSymbol, RExpr)] RExpr
   | RIf   RExpr RExpr RExpr
   | RApp  RExpr [RExpr]
   | RType CST.Symbol [CST.Symbol] [CST.DataCon]
   | RCase RExpr [(RPattern, RExpr)]
   | RFieldAccess CST.Symbol RExpr
+  | RKeyArg CST.Symbol RExpr
+  deriving (Eq, Show)
+
+data RLamList = RLamList
+  { rllRequired :: [CST.TSymbol]
+  , rllExtra    :: RLamExtra
+  } deriving (Eq, Show)
+
+data RLamExtra
+  = RNoExtra
+  | ROptParams [(CST.TSymbol, RExpr)]
+  | RRestParam CST.TSymbol
+  | RKeyParams [(CST.TSymbol, RExpr)]
   deriving (Eq, Show)
 
 data RPattern
@@ -87,11 +100,16 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     rfun <- resolveExpr fun
     rargs <- traverse resolveExpr args
     pure $ RApp rfun rargs
-  CST.ExprLam params mRet body -> do
-    dupCheck "duplicate lambda parameter" (map CST.symName params) sp
-    let newScope = S.fromList (map CST.symName params)
+  CST.ExprLam (CST.LamList required extra) mRet body -> do
+    let allParamNames = map CST.symName required ++ extraParamNames extra
+    dupCheck "duplicate lambda parameter" allParamNames sp
+    let newScope = S.fromList allParamNames
+    rExtra <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExtra extra)
     rbody <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExpr body)
-    pure $ RLam params mRet rbody
+    pure $ RLam (RLamList required rExtra) mRet rbody
+  CST.ExprKeyArg name subExpr -> do
+    rexpr <- resolveExpr subExpr
+    pure $ RKeyArg name rexpr
   CST.ExprLet binds body -> do
     let symNames = map (CST.symName . fst) binds
         newScope = S.fromList (filter (/= "_") symNames)
@@ -151,6 +169,26 @@ resolvePattern pat sp = case pat of
     pure (RPatCon ctor rpats, concat varss)
 
 -- HELPERS
+
+extraParamNames :: CST.LamExtra -> [CST.Symbol]
+extraParamNames CST.NoExtra = []
+extraParamNames (CST.RestParam ts) = [CST.symName ts]
+extraParamNames (CST.OptParams opts) = map (CST.symName . fst) opts
+extraParamNames (CST.KeyParams keys) = map (CST.symName . fst) keys
+
+resolveExtra :: CST.LamExtra -> Resolve RLamExtra
+resolveExtra CST.NoExtra = pure RNoExtra
+resolveExtra (CST.RestParam ts) = pure (RRestParam ts)
+resolveExtra (CST.OptParams opts) = do
+  ropts <- traverse (\(ts, defExpr) -> do
+    rdef <- resolveExpr defExpr
+    pure (ts, rdef)) opts
+  pure (ROptParams ropts)
+resolveExtra (CST.KeyParams keys) = do
+  rkeys <- traverse (\(ts, defExpr) -> do
+    rdef <- resolveExpr defExpr
+    pure (ts, rdef)) keys
+  pure (RKeyParams rkeys)
 
 dupCheck :: String -> [CST.Symbol] -> Loc.Span -> Resolve ()
 dupCheck msg syms sp =

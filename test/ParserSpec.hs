@@ -31,13 +31,13 @@ spec = do
     it "lambda no type" $ do
       r <- either fail pure $ parseOne "(lam (x) x)"
       case r of
-        CST.ExprLam [CST.TSymbol "X" Nothing] Nothing _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol "X" Nothing] CST.NoExtra) Nothing _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "lambda with param type and return type" $ do
       r <- either fail pure $ parseOne "(lam ((x %INT)) %INT x)"
       case r of
-        CST.ExprLam [CST.TSymbol "X" (Just Ty.TyInt)] (Just Ty.TyInt) _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol "X" (Just Ty.TyInt)] CST.NoExtra) (Just Ty.TyInt) _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "application" $ do
@@ -192,31 +192,31 @@ spec = do
     it "%INT in lambda param" $ do
       r <- either fail pure $ parseOne "(lam ((x %INT)) x)"
       case r of
-        CST.ExprLam [CST.TSymbol _ (Just Ty.TyInt)] _ _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol _ (Just Ty.TyInt)] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "%FLT in lambda param" $ do
       r <- either fail pure $ parseOne "(lam ((x %FLT)) x)"
       case r of
-        CST.ExprLam [CST.TSymbol _ (Just Ty.TyFlt)] _ _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol _ (Just Ty.TyFlt)] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "%STR in lambda param" $ do
       r <- either fail pure $ parseOne "(lam ((x %STR)) x)"
       case r of
-        CST.ExprLam [CST.TSymbol _ (Just Ty.TyStr)] _ _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol _ (Just Ty.TyStr)] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "%BOOL in lambda param" $ do
       r <- either fail pure $ parseOne "(lam ((x %BOOL)) x)"
       case r of
-        CST.ExprLam [CST.TSymbol _ (Just Ty.TyBool)] _ _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol _ (Just Ty.TyBool)] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "%UNIT in lambda param" $ do
       r <- either fail pure $ parseOne "(lam ((x %UNIT)) x)"
       case r of
-        CST.ExprLam [CST.TSymbol _ (Just Ty.TyUnit)] _ _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol _ (Just Ty.TyUnit)] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "%UNIT as return type" $ do
@@ -234,7 +234,7 @@ spec = do
     it "%(List %INT) parameterized type in lambda param" $ do
       r <- either fail pure $ parseOne "(lam ((x %(List %INT))) x)"
       case r of
-        CST.ExprLam [CST.TSymbol _ (Just (Ty.TyCon "LIST" [Ty.TyInt]))] _ _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol _ (Just (Ty.TyCon "LIST" [Ty.TyInt]))] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
     it "type var in constructor arg" $ do
@@ -336,7 +336,7 @@ spec = do
     it "%RX type annotation" $ do
       r <- either fail pure $ parseOne "(lam ((r %RX)) r)"
       case r of
-        CST.ExprLam [CST.TSymbol "R" (Just Ty.TyRx)] _ _ -> pure ()
+        CST.ExprLam (CST.LamList [CST.TSymbol "R" (Just Ty.TyRx)] CST.NoExtra) _ _ -> pure ()
         _ -> expectationFailure (show r)
 
   describe "error cases" $ do

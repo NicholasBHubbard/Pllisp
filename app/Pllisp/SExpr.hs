@@ -88,10 +88,15 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
     | Just field <- T.stripPrefix "." dotName -> do
         arg' <- toExpr arg
         Right $ Loc.Located sp (CST.ExprFieldAccess field arg')
-  SList (fun : args) -> do
-    fun'  <- toExpr fun
-    args' <- mapM toExpr args
-    Right $ Loc.Located sp (CST.ExprApp fun' args')
+  SList (fun : args)
+    | any isKeyArg args -> do
+        fun' <- toExpr fun
+        args' <- processKeyArgs sp args
+        Right $ Loc.Located sp (CST.ExprApp fun' args')
+    | otherwise -> do
+        fun'  <- toExpr fun
+        args' <- mapM toExpr args
+        Right $ Loc.Located sp (CST.ExprApp fun' args')
   SList [] -> Left $ ConvertError sp "empty application"
 
   SType _     -> Left $ ConvertError sp "unexpected type annotation in expression position"
@@ -103,15 +108,81 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
 
 toLam :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
 toLam sp [Loc.Located _ (SList params), Loc.Located _ (SType retTy), body] = do
-  params' <- mapM toTSymbol params
+  lamList <- toLamList sp params
   ty      <- toType retTy
   body'   <- toExpr body
-  Right $ CST.ExprLam params' (Just ty) body'
-toLam _ [Loc.Located _ (SList params), body] = do
-  params' <- mapM toTSymbol params
+  Right $ CST.ExprLam lamList (Just ty) body'
+toLam sp [Loc.Located _ (SList params), body] = do
+  lamList <- toLamList sp params
   body'   <- toExpr body
-  Right $ CST.ExprLam params' Nothing body'
+  Right $ CST.ExprLam lamList Nothing body'
 toLam sp _ = Left $ ConvertError sp "invalid lambda: expected (lam (params...) [%type] body)"
+
+-- | Parse an extended lambda list: required params, then optionally &rest, %opt, or &key.
+toLamList :: Loc.Span -> [SExpr] -> Either ConvertError CST.LamList
+toLamList sp sexprs = do
+  let (reqSexprs, rest) = span (not . isLamMarker) sexprs
+  required <- mapM toTSymbol reqSexprs
+  extra <- case rest of
+    [] -> Right CST.NoExtra
+
+    -- &rest param
+    (Loc.Located _ (SAtom "&REST") : afterRest) -> do
+      rejectTrailingMarkers sp afterRest
+      case afterRest of
+        [p] -> do
+          tsym <- toTSymbol p
+          Right $ CST.RestParam tsym
+        [] -> Left $ ConvertError sp "&rest must be followed by a parameter"
+        _  -> Left $ ConvertError sp "&rest must be followed by exactly one parameter"
+
+    -- %opt (param default)...
+    (Loc.Located _ (SType (Loc.Located _ (SAtom "OPT"))) : afterOpt) -> do
+      rejectTrailingMarkers sp afterOpt
+      opts <- mapM (toDefaultParam sp "%opt") afterOpt
+      Right $ CST.OptParams opts
+
+    -- &key (param default)...
+    (Loc.Located _ (SAtom "&KEY") : afterKey) -> do
+      rejectTrailingMarkers sp afterKey
+      keys <- mapM (toDefaultParam sp "&key") afterKey
+      Right $ CST.KeyParams keys
+
+    (Loc.Located sp' _ : _) ->
+      Left $ ConvertError sp' "unexpected marker in lambda list"
+
+  Right $ CST.LamList required extra
+
+-- | Check if an SExpr is a lambda list marker (&REST, &KEY, or %OPT).
+isLamMarker :: SExpr -> Bool
+isLamMarker (Loc.Located _ (SAtom "&REST")) = True
+isLamMarker (Loc.Located _ (SAtom "&KEY"))  = True
+isLamMarker (Loc.Located _ (SType (Loc.Located _ (SAtom "OPT")))) = True
+isLamMarker _ = False
+
+-- | Reject if there are additional markers after the first one (no mixing).
+rejectTrailingMarkers :: Loc.Span -> [SExpr] -> Either ConvertError ()
+rejectTrailingMarkers sp sexprs =
+  case filter isLamMarker sexprs of
+    [] -> Right ()
+    _  -> Left $ ConvertError sp "cannot mix &rest, %opt, and &key in lambda list"
+
+-- | Parse a (param default) pair for %opt or &key.
+toDefaultParam :: Loc.Span -> String -> SExpr -> Either ConvertError (CST.TSymbol, CST.Expr)
+toDefaultParam sp label (Loc.Located _ (SList [name, val])) = do
+  tsym <- toTSymbol name
+  val' <- toExpr val
+  Right (tsym, val')
+toDefaultParam sp label (Loc.Located _ (SList [name, Loc.Located _ (SType ty), val])) = do
+  tsym <- case name of
+    Loc.Located _ (SAtom n) -> do
+      t <- toType ty
+      Right $ CST.TSymbol n (Just t)
+    Loc.Located sp' _ -> Left $ ConvertError sp' "invalid parameter name"
+  val' <- toExpr val
+  Right (tsym, val')
+toDefaultParam sp label (Loc.Located sp' _) =
+  Left $ ConvertError sp' (label ++ " parameters must be (name default) pairs")
 
 -- LET
 
@@ -233,6 +304,28 @@ toTypeArg :: SExpr -> Either ConvertError Ty.Type
 toTypeArg (Loc.Located _ (SType inner)) = toType inner
 toTypeArg (Loc.Located _ (SAtom name))  = Right (Ty.TyCon name [])
 toTypeArg (Loc.Located sp _) = Left $ ConvertError sp "invalid type argument"
+
+-- KEYWORD ARGS AT CALL SITES
+
+-- | Check if an SExpr is a &KEY marker in an argument list.
+isKeyArg :: SExpr -> Bool
+isKeyArg (Loc.Located _ (SAtom "&KEY")) = True
+isKeyArg _ = False
+
+-- | Process an argument list containing &KEY markers into positional + KeyArg exprs.
+processKeyArgs :: Loc.Span -> [SExpr] -> Either ConvertError [CST.Expr]
+processKeyArgs _ [] = Right []
+processKeyArgs sp (Loc.Located _ (SAtom "&KEY") : Loc.Located _ (SAtom name) : val : rest) = do
+  val' <- toExpr val
+  let keyArg = Loc.Located sp (CST.ExprKeyArg name val')
+  rest' <- processKeyArgs sp rest
+  Right (keyArg : rest')
+processKeyArgs sp (Loc.Located sp' (SAtom "&KEY") : _) =
+  Left $ ConvertError sp' "&key must be followed by a name and value"
+processKeyArgs sp (arg : rest) = do
+  arg' <- toExpr arg
+  rest' <- processKeyArgs sp rest
+  Right (arg' : rest')
 
 -- HELPERS
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- MODULE
 
 module Pllisp.TypeCheck where
@@ -22,7 +24,7 @@ typecheck importedCtx exprs =
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
       initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx]
       fieldMap = buildFieldMap typeDecls
-      env = InferEnv initialCtx fieldMap
+      env = InferEnv initialCtx fieldMap M.empty
       (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) env 0
   in case solveAll constraints of
     Left solveErrs -> Left (inferErrs ++ solveErrs)
@@ -47,9 +49,24 @@ type InferOutput = (Constraints, [TypeError])
 type FieldInfo = (CST.Symbol, Int, Int)
 type FieldMap = M.Map CST.Symbol FieldInfo
 
+-- | Metadata about a function's extended params, used for call-site rewriting.
+data FuncInfo = FuncInfo
+  { fiRequired :: !Int
+  , fiExtra    :: !FuncInfoExtra
+  }
+
+data FuncInfoExtra
+  = FIPlain
+  | FIOpt [Res.RExpr]                   -- default expressions (resolved, re-inferred at call site)
+  | FIRest
+  | FIKey [CST.Symbol] [Res.RExpr]      -- key names, default expressions
+
+type FuncInfoMap = M.Map CST.Symbol FuncInfo
+
 data InferEnv = InferEnv
   { ieCtx    :: !Context
   , ieFields :: !FieldMap
+  , ieFuncs  :: !FuncInfoMap
   }
 
 -- | Inference monad that collects errors instead of failing
@@ -60,6 +77,9 @@ askCtx = ieCtx <$> RWS.ask
 
 localCtx :: (Context -> Context) -> Infer a -> Infer a
 localCtx f = RWS.local (\e -> e { ieCtx = f (ieCtx e) })
+
+localFuncs :: (FuncInfoMap -> FuncInfoMap) -> Infer a -> Infer a
+localFuncs f = RWS.local (\e -> e { ieFuncs = f (ieFuncs e) })
 
 type TResolvedCST = [TRExpr]
 
@@ -250,25 +270,89 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ Ty.Typed (typeOf tt) (TRIf ct tt et)
   Res.RApp fexpr aexprs -> do
     ft <- infer fexpr
-    ats <- traverse infer aexprs
+    -- Check for keyword args: separate them from positional
+    let (posExprs, keyExprs) = partitionArgs aexprs
+    posAts <- traverse infer posExprs
+    -- Look up function metadata for call-site rewriting
+    funcInfo <- lookupFuncInfo fexpr
+    ats <- case funcInfo of
+      Just (FuncInfo reqArity (FIOpt defaults)) -> do
+        -- Fill in missing optional args with defaults
+        let nPos = length posAts
+            totalArity = reqArity + length defaults
+        if nPos >= totalArity then pure posAts
+        else if nPos < reqArity then pure posAts  -- too few, unification will error
+        else do
+          let nMissing = totalArity - nPos
+              missingDefaults = drop (nPos - reqArity) defaults
+          defaultAts <- traverse infer (take nMissing missingDefaults)
+          pure (posAts ++ defaultAts)
+
+      Just (FuncInfo reqArity FIRest) -> do
+        -- Always pack args beyond reqArity into a Cons/Nil list
+        let nPos = length posAts
+        if nPos < reqArity then pure posAts  -- too few, unification will error
+        else do
+          let reqArgs  = take reqArity posAts
+              restArgs = drop reqArity posAts
+          elemTy <- if null restArgs then fresh
+                    else pure (typeOf (head restArgs))
+          listExpr <- buildListExpr sp elemTy restArgs
+          pure (reqArgs ++ [listExpr])
+
+      Just (FuncInfo reqArity (FIKey keyNames defaults)) -> do
+        -- Reorder keyword args to match definition order
+        keyAts <- traverse (\(_, e) -> infer e) keyExprs
+        let keyMap = M.fromList (zip (map fst keyExprs) keyAts)
+        reorderedKeys <- sequence
+          [ case M.lookup name keyMap of
+              Just expr -> pure expr
+              Nothing   -> infer (defaults !! idx)
+          | (idx, name) <- zip [0..] keyNames
+          ]
+        pure (posAts ++ reorderedKeys)
+
+      _ -> do
+        -- No metadata or plain function — handle any inline key args
+        if null keyExprs then pure posAts
+        else do
+          keyAts <- traverse (\(_, e) -> infer e) keyExprs
+          pure (posAts ++ keyAts)
+
     rt <- fresh
     constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
     pure $ Ty.Typed rt (TRApp ft ats)
-  Res.RLam params _mRet body -> do
-    paramTys <- traverse paramType params
-    let paramNames = map CST.symName params
-        paramSchemes = map (Forall S.empty) paramTys
-        newBindings = M.fromList (zip paramNames paramSchemes)
+
+  Res.RKeyArg _ _ -> do
+    t <- recordError sp "&key argument outside function application"
+    pure $ Ty.Typed t TRUnit
+  Res.RLam (Res.RLamList required rExtra) _mRet body -> do
+    reqTys <- traverse paramType required
+    let reqNames = map CST.symName required
+    -- Build the full param list including extra params
+    (extraNames, extraTys, extraDefaults) <- inferExtra sp rExtra
+    let allNames = reqNames ++ extraNames
+        allTys   = reqTys ++ extraTys
+        paramSchemes = map (Forall S.empty) allTys
+        newBindings = M.fromList (zip allNames paramSchemes)
+    -- Type-check default expressions to ensure consistency
+    mapM_ (\(defExpr, expectedTy) -> do
+      tdef <- localCtx (M.union newBindings) (infer defExpr)
+      constrain sp (typeOf tdef) expectedTy
+      ) extraDefaults
     bodyExpr <- localCtx (M.union newBindings) (infer body)
-    let funTy = Ty.TyFun paramTys (typeOf bodyExpr)
-    pure $ Ty.Typed funTy (TRLam (zip paramNames paramTys) (typeOf bodyExpr) bodyExpr)
+    let funTy = Ty.TyFun allTys (typeOf bodyExpr)
+    pure $ Ty.Typed funTy (TRLam (zip allNames allTys) (typeOf bodyExpr) bodyExpr)
   Res.RLet binds body -> do
     ctx <- askCtx
     let names = map (CST.symName . fst) binds
     freshTys <- traverse (const fresh) names
     let monoSchemes = map (Forall S.empty) freshTys
         recCtx = M.union (M.fromList (zip names monoSchemes)) ctx
+    -- Collect func metadata from lambda bindings
+    let funcMetas = collectFuncMetas (zip names (map snd binds))
     (rhsExprs, (rhsConstraints, _)) <- RWS.listen $
+      localFuncs (M.union funcMetas) $
       traverse (\(_, rhs) -> localCtx (const recCtx) (infer rhs)) binds
     sequence_ $ zipWith (constrain sp) freshTys (map typeOf rhsExprs)
     -- Solve RHS constraints eagerly so generalization uses concrete types,
@@ -279,7 +363,8 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
                               Left _      -> map typeOf rhsExprs
         generalizedSchemes = map (generalize ctx) concreteFreshTys
         bodyCtx = M.union (M.fromList (zip names generalizedSchemes)) ctx
-    bodyExpr <- localCtx (const bodyCtx) (infer body)
+    bodyExpr <- localFuncs (M.union funcMetas) $
+      localCtx (const bodyCtx) (infer body)
     let typedBinds = zip3 names (map typeOf rhsExprs) rhsExprs
     pure $ Ty.Typed (typeOf bodyExpr) (TRLet typedBinds bodyExpr)
   Res.RType name params ctors ->
@@ -360,6 +445,74 @@ instantiate (Forall vs t) = do
   ftvs <- traverse (const fresh) vars
   let subst = M.fromList (zip vars ftvs)
   return $ apply subst t
+
+-- Extended lambda list helpers
+
+-- | Infer types and collect defaults for the extra part of a lambda list.
+-- Returns: (param names, param types, [(default RExpr, expected type)])
+inferExtra :: Loc.Span -> Res.RLamExtra -> Infer ([CST.Symbol], [Ty.Type], [(Res.RExpr, Ty.Type)])
+inferExtra _ Res.RNoExtra = pure ([], [], [])
+inferExtra _ (Res.RRestParam ts) = do
+  elemTy <- case CST.symType ts of
+    Just (Ty.TyCon "LIST" [t]) -> pure t
+    Just _ -> fresh  -- let unification catch mismatches
+    Nothing -> fresh
+  let listTy = Ty.TyCon "LIST" [elemTy]
+  pure ([CST.symName ts], [listTy], [])
+inferExtra _ (Res.ROptParams opts) = do
+  tys <- traverse (\(ts, _) -> paramType ts) opts
+  let names = map (CST.symName . fst) opts
+      defaults = [(defExpr, ty) | ((_, defExpr), ty) <- zip opts tys]
+  pure (names, tys, defaults)
+inferExtra _ (Res.RKeyParams keys) = do
+  tys <- traverse (\(ts, _) -> paramType ts) keys
+  let names = map (CST.symName . fst) keys
+      defaults = [(defExpr, ty) | ((_, defExpr), ty) <- zip keys tys]
+  pure (names, tys, defaults)
+
+-- | Collect FuncInfo metadata from let-bindings where the RHS is a lambda.
+collectFuncMetas :: [(CST.Symbol, Res.RExpr)] -> FuncInfoMap
+collectFuncMetas = M.fromList . concatMap go
+  where
+    go (name, Loc.Located _ (Res.RLam (Res.RLamList required extra) _ _)) =
+      let reqArity = length required
+          extraInfo = case extra of
+            Res.RNoExtra -> FIPlain
+            Res.ROptParams opts -> FIOpt (map snd opts)
+            Res.RRestParam _   -> FIRest
+            Res.RKeyParams keys -> FIKey (map (CST.symName . fst) keys) (map snd keys)
+      in [(name, FuncInfo reqArity extraInfo)]
+    go _ = []
+
+-- | Look up FuncInfo for a function expression (only works for named variables).
+lookupFuncInfo :: Res.RExpr -> Infer (Maybe FuncInfo)
+lookupFuncInfo (Loc.Located _ (Res.RVar vb)) = do
+  funcs <- ieFuncs <$> RWS.ask
+  pure $ M.lookup (Res.symName vb) funcs
+lookupFuncInfo _ = pure Nothing
+
+-- | Partition application args into positional and keyword args.
+partitionArgs :: [Res.RExpr] -> ([Res.RExpr], [(CST.Symbol, Res.RExpr)])
+partitionArgs = go [] []
+  where
+    go posAcc keyAcc [] = (reverse posAcc, reverse keyAcc)
+    go posAcc keyAcc (Loc.Located _ (Res.RKeyArg name val) : rest) =
+      go posAcc ((name, val) : keyAcc) rest
+    go posAcc keyAcc (arg : rest) =
+      go (arg : posAcc) keyAcc rest
+
+-- | Build a Cons/Nil list expression from a list of typed expressions.
+buildListExpr :: Loc.Span -> Ty.Type -> [TRExpr] -> Infer TRExpr
+buildListExpr sp elemTy [] = do
+  let listTy = Ty.TyCon "LIST" [elemTy]
+  pure $ Loc.Located sp (Ty.Typed listTy (TRVar (Res.VarBinding 0 "NIL")))
+buildListExpr sp elemTy (x:xs) = do
+  rest <- buildListExpr sp elemTy xs
+  let listTy = Ty.TyCon "LIST" [elemTy]
+      consTy = Ty.TyFun [elemTy, listTy] listTy
+      consFn = Loc.Located sp (Ty.Typed consTy (TRVar (Res.VarBinding 0 "CONS")))
+  constrain sp (typeOf x) elemTy
+  pure $ Loc.Located sp (Ty.Typed listTy (TRApp consFn [x, rest]))
 
 inferPattern :: Ty.Type -> Res.RPattern -> Loc.Span -> Infer (TRPattern, [(CST.Symbol, Scheme)])
 inferPattern ty pat sp = case pat of

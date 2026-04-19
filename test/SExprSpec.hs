@@ -256,13 +256,13 @@ spec = do
     it "lambda no type" $ do
       prog <- viaSExpr "(lam (x) x)"
       case CST.progExprs prog of
-        [Loc.Located _ (CST.ExprLam [CST.TSymbol "X" Nothing] Nothing _)] -> pure ()
+        [Loc.Located _ (CST.ExprLam (CST.LamList [CST.TSymbol "X" Nothing] CST.NoExtra) Nothing _)] -> pure ()
         other -> expectationFailure (show other)
 
     it "lambda with types" $ do
       prog <- viaSExpr "(lam ((x %INT)) %INT x)"
       case CST.progExprs prog of
-        [Loc.Located _ (CST.ExprLam [CST.TSymbol "X" (Just Ty.TyInt)] (Just Ty.TyInt) _)] -> pure ()
+        [Loc.Located _ (CST.ExprLam (CST.LamList [CST.TSymbol "X" (Just Ty.TyInt)] CST.NoExtra) (Just Ty.TyInt) _)] -> pure ()
         other -> expectationFailure (show other)
 
     it "let" $ do
@@ -333,7 +333,7 @@ spec = do
     it "parameterized type annotation" $ do
       prog <- viaSExpr "(lam ((x %(List %INT))) x)"
       case CST.progExprs prog of
-        [Loc.Located _ (CST.ExprLam [CST.TSymbol "X" (Just (Ty.TyCon "LIST" [Ty.TyInt]))] Nothing _)] -> pure ()
+        [Loc.Located _ (CST.ExprLam (CST.LamList [CST.TSymbol "X" (Just (Ty.TyCon "LIST" [Ty.TyInt]))] CST.NoExtra) Nothing _)] -> pure ()
         other -> expectationFailure (show other)
 
   describe "record types" $ do
@@ -358,8 +358,157 @@ spec = do
         [Loc.Located _ (CST.ExprFieldAccess "NAME" _)] -> pure ()
         other -> expectationFailure (show other)
 
+  describe "extended lambda lists" $ do
+    -- &rest
+    it "&rest with required params" $ do
+      prog <- viaSExpr "(lam (a b &rest xs) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList
+          [CST.TSymbol "A" Nothing, CST.TSymbol "B" Nothing]
+          (CST.RestParam (CST.TSymbol "XS" Nothing))) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "&rest no required params" $ do
+      prog <- viaSExpr "(lam (&rest xs) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList []
+          (CST.RestParam (CST.TSymbol "XS" Nothing))) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "&rest with typed param" $ do
+      prog <- viaSExpr "(lam (a &rest (xs %(List %INT))) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList
+          [CST.TSymbol "A" Nothing]
+          (CST.RestParam (CST.TSymbol "XS" (Just (Ty.TyCon "LIST" [Ty.TyInt]))))) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    -- %opt
+    it "%opt single param" $ do
+      prog <- viaSExpr "(lam (a %opt (b 0)) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList
+          [CST.TSymbol "A" Nothing]
+          (CST.OptParams [(CST.TSymbol "B" Nothing, Loc.Located _ (CST.ExprLit (CST.LitInt 0)))])) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "%opt multiple params" $ do
+      prog <- viaSExpr "(lam (a %opt (b 0) (c \"hi\")) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList
+          [CST.TSymbol "A" Nothing]
+          (CST.OptParams [
+            (CST.TSymbol "B" Nothing, Loc.Located _ (CST.ExprLit (CST.LitInt 0))),
+            (CST.TSymbol "C" Nothing, Loc.Located _ (CST.ExprLit (CST.LitStr "hi")))])) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "%opt no required params" $ do
+      prog <- viaSExpr "(lam (%opt (b 0)) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList []
+          (CST.OptParams [(CST.TSymbol "B" Nothing, _)])) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "%opt with typed param" $ do
+      prog <- viaSExpr "(lam (%opt ((b %INT) 0)) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList []
+          (CST.OptParams [(CST.TSymbol "B" (Just Ty.TyInt), _)])) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    -- &key
+    it "&key params" $ do
+      prog <- viaSExpr "(lam (&key (x 0) (y 1)) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList []
+          (CST.KeyParams [
+            (CST.TSymbol "X" Nothing, Loc.Located _ (CST.ExprLit (CST.LitInt 0))),
+            (CST.TSymbol "Y" Nothing, Loc.Located _ (CST.ExprLit (CST.LitInt 1)))])) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "&key with required params" $ do
+      prog <- viaSExpr "(lam (a &key (x 0)) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList
+          [CST.TSymbol "A" Nothing]
+          (CST.KeyParams [(CST.TSymbol "X" Nothing, _)])) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+    -- &key at call sites
+    it "&key in application" $ do
+      prog <- viaSExpr "(f &key x 1 &key y 2)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprApp _ [
+          Loc.Located _ (CST.ExprKeyArg "X" (Loc.Located _ (CST.ExprLit (CST.LitInt 1)))),
+          Loc.Located _ (CST.ExprKeyArg "Y" (Loc.Located _ (CST.ExprLit (CST.LitInt 2))))])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "&key mixed with positional args" $ do
+      prog <- viaSExpr "(f 1 &key x 2)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprApp _ [
+          Loc.Located _ (CST.ExprLit (CST.LitInt 1)),
+          Loc.Located _ (CST.ExprKeyArg "X" (Loc.Located _ (CST.ExprLit (CST.LitInt 2))))])] -> pure ()
+        other -> expectationFailure (show other)
+
+    -- plain lambda unchanged
+    it "plain lambda uses NoExtra" $ do
+      prog <- viaSExpr "(lam (a b) 1)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList
+          [CST.TSymbol "A" Nothing, CST.TSymbol "B" Nothing]
+          CST.NoExtra) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
+
+  describe "extended lambda list errors" $ do
+    it "rejects &rest with no param after" $
+      shouldFailSExpr "(lam (&rest) 1)"
+
+    it "rejects &rest with two params after" $
+      shouldFailSExpr "(lam (&rest a b) 1)"
+
+    it "rejects &rest followed by %opt" $
+      shouldFailSExpr "(lam (&rest %opt (x 0)) 1)"
+
+    it "rejects %opt followed by &rest" $
+      shouldFailSExpr "(lam (%opt (x 0) &rest y) 1)"
+
+    it "rejects &rest followed by &key" $
+      shouldFailSExpr "(lam (&rest a &key (x 0)) 1)"
+
+    it "rejects &key followed by &rest" $
+      shouldFailSExpr "(lam (&key (x 0) &rest y) 1)"
+
+    it "rejects %opt followed by &key" $
+      shouldFailSExpr "(lam (%opt (x 0) &key (y 1)) 1)"
+
+    it "rejects &key followed by %opt" $
+      shouldFailSExpr "(lam (&key (x 0) %opt (y 1)) 1)"
+
+    it "rejects %opt with bare symbol (no default)" $
+      shouldFailSExpr "(lam (%opt b) 1)"
+
+    it "rejects &key with bare symbol (no default)" $
+      shouldFailSExpr "(lam (&key b) 1)"
+
+    it "rejects duplicate &rest" $
+      shouldFailSExpr "(lam (&rest a &rest b) 1)"
+
+    it "rejects &rest param written as default pair" $
+      shouldFailSExpr "(lam (&rest (a 0)) 1)"
+
 -- Parse via SExpr pipeline: Text → [SExpr] → CST.Program
 viaSExpr :: T.Text -> IO CST.Program
 viaSExpr src = do
   sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>" src
   either (fail . show) pure $ SExpr.toProgram sexprs
+
+-- Expect SExpr → CST conversion to fail
+shouldFailSExpr :: T.Text -> Expectation
+shouldFailSExpr src = do
+  let sexprs = case Parser.parseSExprs "<test>" src of
+        Left _  -> error "parse should succeed"
+        Right s -> s
+  case SExpr.toProgram sexprs of
+    Left _  -> pure ()
+    Right _ -> expectationFailure "expected conversion error"

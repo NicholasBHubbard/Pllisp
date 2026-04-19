@@ -804,6 +804,114 @@ spec = do
         , "  (print (int-to-str (.val (.val b)))))"
         ]) >>= (`shouldBe` "42")
 
+  describe "&rest" $ do
+    it "captures remaining args as list" $
+      run (T.unlines
+        [ "(let ((f (lam (a &rest xs) (case xs"
+        , "  ((Cons h _) (print (int-to-str (add a h))))"
+        , "  ((Nil) (print (int-to-str a)))))))"
+        , "  (f 10 20))"
+        ]) >>= (`shouldBe` "30")
+
+    it "no extra args gives Nil" $
+      run (T.unlines
+        [ "(let ((f (lam (a &rest xs) (case xs"
+        , "  ((Nil) (print \"empty\"))"
+        , "  ((Cons _ _) (print \"notempty\"))))))"
+        , "  (f 1))"
+        ]) >>= (`shouldBe` "empty")
+
+    it "captures multiple extra args" $
+      run (T.unlines
+        [ "(let ((go (lam ((xs %(List %INT))) (case xs"
+        , "  ((Nil) 0)"
+        , "  ((Cons h t) (add h (go t)))))))"
+        , "  (let ((sum-all (lam (&rest xs) (go xs))))"
+        , "    (print (int-to-str (sum-all 1 2 3 4)))))"
+        ]) >>= (`shouldBe` "10")
+
+    it "rest with no required params" $
+      run (T.unlines
+        [ "(let ((f (lam (&rest xs) (case xs"
+        , "  ((Nil) (print \"none\"))"
+        , "  ((Cons h _) (print (int-to-str h)))))))"
+        , "  (f 42))"
+        ]) >>= (`shouldBe` "42")
+
+  describe "%opt" $ do
+    it "uses default when arg omitted" $
+      run (T.unlines
+        [ "(let ((f (lam (a %opt (b 10)) (add a b))))"
+        , "  (print (int-to-str (f 5))))"
+        ]) >>= (`shouldBe` "15")
+
+    it "uses provided arg over default" $
+      run (T.unlines
+        [ "(let ((f (lam (a %opt (b 10)) (add a b))))"
+        , "  (print (int-to-str (f 5 20))))"
+        ]) >>= (`shouldBe` "25")
+
+    it "multiple optional params all defaulted" $
+      run (T.unlines
+        [ "(let ((f (lam (%opt (a 1) (b 2) (c 3)) (add a (add b c)))))"
+        , "  (print (int-to-str (f))))"
+        ]) >>= (`shouldBe` "6")
+
+    it "multiple optional params partially provided" $
+      run (T.unlines
+        [ "(let ((f (lam (%opt (a 1) (b 2) (c 3)) (add a (add b c)))))"
+        , "  (print (int-to-str (f 10))))"
+        ]) >>= (`shouldBe` "15")
+
+    it "multiple optional params all provided" $
+      run (T.unlines
+        [ "(let ((f (lam (%opt (a 1) (b 2) (c 3)) (add a (add b c)))))"
+        , "  (print (int-to-str (f 10 20 30))))"
+        ]) >>= (`shouldBe` "60")
+
+    it "opt with string default" $
+      run (T.unlines
+        [ "(let ((greet (lam (%opt (name \"world\")) (concat \"hello \" name))))"
+        , "  (print (greet)))"
+        ]) >>= (`shouldBe` "hello world")
+
+    it "opt with string provided" $
+      run (T.unlines
+        [ "(let ((greet (lam (%opt (name \"world\")) (concat \"hello \" name))))"
+        , "  (print (greet \"alice\")))"
+        ]) >>= (`shouldBe` "hello alice")
+
+  describe "&key" $ do
+    it "basic keyword args" $
+      run (T.unlines
+        [ "(let ((f (lam (&key (x 0) (y 0)) (add x y))))"
+        , "  (print (int-to-str (f &key x 10 &key y 20))))"
+        ]) >>= (`shouldBe` "30")
+
+    it "keyword args reordered" $
+      run (T.unlines
+        [ "(let ((f (lam (&key (x 0) (y 0)) (sub x y))))"
+        , "  (print (int-to-str (f &key y 3 &key x 10))))"
+        ]) >>= (`shouldBe` "7")
+
+    it "keyword args with defaults" $
+      run (T.unlines
+        [ "(let ((f (lam (&key (x 0) (y 100)) (add x y))))"
+        , "  (print (int-to-str (f &key x 5))))"
+        ]) >>= (`shouldBe` "105")
+
+    it "all keyword args defaulted" $
+      run (T.unlines
+        [ "(let ((f (lam (&key (x 1) (y 2)) (add x y))))"
+        , "  (print (int-to-str (f))))"
+        ]) >>= (`shouldBe` "3")
+
+    it "keyword with required params" $
+      run (T.unlines
+        [ "(let ((f (lam (a &key (x 0)) (add a x))))"
+        , "  (print (int-to-str (f 10 &key x 5))))"
+        ]) >>= (`shouldBe` "15")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

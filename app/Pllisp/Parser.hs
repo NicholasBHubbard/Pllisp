@@ -64,16 +64,66 @@ exprParser = MP.label "expression" $ located $ MP.choice
 exprLamParser :: Parser CST.ExprF
 exprLamParser = MP.label "lambda" $ MP.try $ parens $ do
   _ <- ident' "LAM"
-  args <- parens (MP.many tsymbolParser)
+  lamList <- parens lamListParser
   rettype <- MP.optional typeParser
   body <- exprParser
-  pure $ CST.ExprLam args rettype body
+  pure $ CST.ExprLam lamList rettype body
+
+lamListParser :: Parser CST.LamList
+lamListParser = do
+  required <- MP.many (MP.try regularParam)
+  extra <- MP.choice
+    [ MP.try restParamParser
+    , MP.try optParamParser
+    , MP.try keyParamParser
+    , pure CST.NoExtra
+    ]
+  pure $ CST.LamList required extra
+  where
+    -- A regular param that is not &REST or &KEY
+    regularParam = do
+      ts <- tsymbolParser
+      case CST.symName ts of
+        "&REST" -> fail "not a regular param"
+        "&KEY"  -> fail "not a regular param"
+        _       -> pure ts
+
+    restParamParser = do
+      _ <- ident' "&REST"
+      param <- tsymbolParser
+      pure $ CST.RestParam param
+
+    optParamParser = do
+      _ <- MP.C.char '%' *> (ident >>= \t -> if t == "OPT" then pure () else fail "expected OPT")
+      opts <- MP.many defaultParamParser
+      pure $ CST.OptParams opts
+
+    keyParamParser = do
+      _ <- ident' "&KEY"
+      keys <- MP.many defaultParamParser
+      pure $ CST.KeyParams keys
+
+    defaultParamParser = parens $ (,) <$> tsymbolParser <*> exprParser
 
 exprAppParser :: Parser CST.ExprF
 exprAppParser = MP.label "application" $ parens $ do
   fun <- exprParser
-  args <- MP.many exprParser
+  args <- MP.many appArgParser
   pure $ CST.ExprApp fun args
+
+-- | Parse an application argument, which may be a &key pair or a regular expr.
+appArgParser :: Parser CST.Expr
+appArgParser = MP.choice
+  [ MP.try keyArgParser
+  , exprParser
+  ]
+
+keyArgParser :: Parser CST.Expr
+keyArgParser = located $ do
+  _ <- ident' "&KEY"
+  name <- symbolParser
+  val <- exprParser
+  pure $ CST.ExprKeyArg name val
 
 exprLetParser :: Parser CST.ExprF
 exprLetParser = MP.label "let" $ MP.try $ parens $ do
