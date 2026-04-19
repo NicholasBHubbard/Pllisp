@@ -15,8 +15,10 @@ import qualified Pllisp.Codegen        as Codegen
 import qualified Pllisp.ClosureConvert as CC
 import qualified Pllisp.CST            as CST
 import qualified Pllisp.LambdaLift     as LL
+import qualified Pllisp.MacroExpand    as MacroExpand
 import qualified Pllisp.Module         as Mod
 import qualified Pllisp.Parser         as Parser
+import qualified Pllisp.SExpr          as SExpr
 import qualified Pllisp.Stdlib         as Stdlib
 import qualified Pllisp.Resolve        as Resolve
 import qualified Pllisp.TypeCheck      as TC
@@ -704,21 +706,89 @@ spec = do
           mainSrc = "(print (int-to-str (square (double 3))))"
       runWithModule "MOD" modSrc ["SQUARE", "DOUBLE"] mainSrc >>= (`shouldBe` "36")
 
+  describe "macros" $ do
+    it "when macro" $ do
+      run (T.unlines
+        [ "(mac when (test body) `(if ,test ,body unit))"
+        , "(when true (print \"yes\"))"
+        ]) >>= (`shouldBe` "yes")
+
+    it "when macro false branch" $ do
+      run (T.unlines
+        [ "(mac when (test body) `(if ,test ,body unit))"
+        , "(when false (print \"no\"))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "done")
+
+    it "unless macro" $ do
+      run (T.unlines
+        [ "(mac unless (test body) `(if ,test unit ,body))"
+        , "(unless false (print \"ran\"))"
+        ]) >>= (`shouldBe` "ran")
+
+    it "do macro sequences expressions" $ do
+      run (T.unlines
+        [ "(mac do (expr) expr)"
+        , "(mac do (first &rest rest) `(let ((_ ,first)) (do ,@rest)))"
+        , "(do (print \"a\") (print \"b\") (print \"c\"))"
+        ]) >>= (`shouldBe` "a\nb\nc")
+
+    it "cond macro" $ do
+      run (T.unlines
+        [ "(mac cond ((test body)) `(if ,test ,body unit))"
+        , "(mac cond ((test body) &rest rest) `(if ,test ,body (cond ,@rest)))"
+        , "(let ((x 2))"
+        , "  (cond ((eq x 1) (print \"one\"))"
+        , "        ((eq x 2) (print \"two\"))"
+        , "        ((eq x 3) (print \"three\"))))"
+        ]) >>= (`shouldBe` "two")
+
+    it "macro using another macro" $ do
+      run (T.unlines
+        [ "(mac unless (test body) `(if ,test unit ,body))"
+        , "(mac when (test body) `(unless (not ,test) ,body))"
+        , "(when true (print \"ok\"))"
+        ]) >>= (`shouldBe` "ok")
+
+    it "macro with type annotations" $ do
+      run (T.unlines
+        [ "(mac typed-id (x) `,x)"
+        , "(print (int-to-str (typed-id (add 1 2))))"
+        ]) >>= (`shouldBe` "3")
+
+    it "macro in nested position" $ do
+      run (T.unlines
+        [ "(mac double (x) `(add ,x ,x))"
+        , "(print (int-to-str (double 21)))"
+        ]) >>= (`shouldBe` "42")
+
+    it "macro with destructuring params" $ do
+      run (T.unlines
+        [ "(mac first-of ((a b)) `,a)"
+        , "(print (int-to-str (first-of (42 99))))"
+        ]) >>= (`shouldBe` "42")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text
 pipeline src = do
   preludeDecls <- Stdlib.loadPrelude
-  case Parser.parseProgram "<test>" src of
-    Left e -> error ("parse error: " ++ show e)
-    Right prog ->
-      let exprs = preludeDecls ++ CST.progExprs prog
-      in case Resolve.resolve S.empty exprs of
-        Left e -> error ("resolve error: " ++ show e)
-        Right resolved -> case TC.typecheck M.empty resolved of
-          Left e -> error ("typecheck error: " ++ show e)
-          Right typed ->
-            pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
+  let sexprs = case Parser.parseSExprs "<test>" src of
+        Left e -> error ("parse error: " ++ show e)
+        Right s -> s
+      expanded = case MacroExpand.expand sexprs of
+        Left e -> error ("macro error: " ++ e)
+        Right s -> s
+      prog = case SExpr.toProgram expanded of
+        Left e -> error ("sexpr error: " ++ SExpr.ceMsg e)
+        Right p -> p
+      exprs = preludeDecls ++ CST.progExprs prog
+  case Resolve.resolve S.empty exprs of
+    Left e -> error ("resolve error: " ++ show e)
+    Right resolved -> case TC.typecheck M.empty resolved of
+      Left e -> error ("typecheck error: " ++ show e)
+      Right typed ->
+        pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
 
 run :: T.Text -> IO String
 run = runWith []

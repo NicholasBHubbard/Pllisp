@@ -5,6 +5,7 @@
 module Pllisp.Parser where
 
 import qualified Pllisp.CST as CST
+import qualified Pllisp.SExpr as SExpr
 import qualified Pllisp.SrcLoc as Loc
 import qualified Pllisp.Type as Ty
 
@@ -213,7 +214,7 @@ keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE", "MODULE
 
 rawIdent :: Parser T.Text
 rawIdent = do
-  first <- MP.C.char '_' <|> MP.C.letterChar
+  first <- MP.C.char '_' <|> MP.C.char '&' <|> MP.C.letterChar
   rest  <- MP.many (MP.C.char '_' <|> MP.C.char '-' <|> MP.C.alphaNumChar)
   pure $ T.toUpper (T.pack (first:rest))
 
@@ -243,3 +244,61 @@ located p =
     x <- p
     end <- MP.getSourcePos
     pure $ Loc.Located (Loc.Span (toPos start) (toPos end)) x
+
+-- SEXPR PARSER
+
+parseSExprs :: FilePath -> T.Text -> Either (MP.ParseErrorBundle T.Text Void) [SExpr.SExpr]
+parseSExprs fp = MP.parse sexprsParser fp
+
+sexprsParser :: Parser [SExpr.SExpr]
+sexprsParser = sc *> MP.many sexprParser <* MP.eof
+
+sexprParser :: Parser SExpr.SExpr
+sexprParser = located $ MP.choice
+  [ sexprQuasiParser
+  , MP.try sexprSpliceParser
+  , sexprUnquoteParser
+  , sexprTypeParser'
+  , SExpr.SList <$> parens (MP.many sexprParser)
+  , litToSExpr <$> lexeme (MP.choice
+      [ CST.LitFlt <$> MP.try MP.C.L.float
+      , CST.LitInt <$> MP.C.L.decimal
+      , CST.LitStr . T.pack <$> (MP.C.char '"' *> MP.manyTill MP.C.L.charLiteral (MP.C.char '"'))
+      , rxLitParser
+      ])
+  , SExpr.SAtom <$> sexprAtomParser
+  ]
+
+sexprAtomParser :: Parser T.Text
+sexprAtomParser = MP.label "atom" $ lexeme $ do
+  s <- rawIdent
+  mDot <- MP.optional (MP.C.char '.' *> rawIdent)
+  pure $ case mDot of
+    Nothing -> s
+    Just q  -> s <> "." <> q
+
+sexprQuasiParser :: Parser SExpr.SExprF
+sexprQuasiParser = do
+  _ <- MP.C.char '`'
+  SExpr.SQuasi <$> sexprParser
+
+sexprUnquoteParser :: Parser SExpr.SExprF
+sexprUnquoteParser = do
+  _ <- MP.C.char ','
+  SExpr.SUnquote <$> sexprParser
+
+sexprSpliceParser :: Parser SExpr.SExprF
+sexprSpliceParser = do
+  _ <- MP.C.string ",@"
+  SExpr.SSplice <$> sexprParser
+
+sexprTypeParser' :: Parser SExpr.SExprF
+sexprTypeParser' = do
+  _ <- MP.C.char '%'
+  SExpr.SType <$> sexprParser
+
+litToSExpr :: CST.Literal -> SExpr.SExprF
+litToSExpr (CST.LitInt n)    = SExpr.SInt n
+litToSExpr (CST.LitFlt d)    = SExpr.SFlt d
+litToSExpr (CST.LitStr s)    = SExpr.SStr s
+litToSExpr (CST.LitRx p f)   = SExpr.SRx p f

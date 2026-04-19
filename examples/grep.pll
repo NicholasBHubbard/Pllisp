@@ -1,16 +1,48 @@
-(let ((pattern (if (lt (argc unit) 2)
-                 (let ((_ (print "usage: grep <pattern>"))) "")
-                 (argv 1))))
-  (let ((loop (lam ((dummy %INT))
-    (if (is-eof unit)
-      unit
-      (let ((line (read-line unit)))
-        (if (is-eof unit)
-          unit
-          (let ((_ (if (str-contains line pattern)
-                     (print line)
+# grep — match lines from stdin against a regex pattern
+# usage: grep [-i] [-v] [-c] [-n] [-F] PATTERN
+
+(let ((grep-loop (lam ((rx %RX) (invert %BOOL) (count-only %BOOL)
+                       (show-nums %BOOL) (lineno %INT) (count %INT))
+  (if (is-eof unit)
+    (if count-only (print (int-to-str count)) unit)
+    (let ((line (read-line unit)))
+      (if (is-eof unit)
+        (if count-only (print (int-to-str count)) unit)
+        (let ((hit (if invert
+                     (not (rx-match rx line))
+                     (rx-match rx line))))
+          (let ((_ (if hit
+                     (if count-only
+                       unit
+                       (if show-nums
+                         (print (concat (int-to-str lineno) (concat ":" line)))
+                         (print line)))
                      unit)))
-            (loop 0))))))))
-    (if (lt (argc unit) 2)
-      unit
-      (loop 0))))
+            (grep-loop rx invert count-only show-nums
+              (add lineno 1)
+              (if hit (add count 1) count))))))))))
+
+(let ((parse-args (lam ((idx %INT) (fi %BOOL) (fv %BOOL)
+                        (fc %BOOL) (fn %BOOL) (ff %BOOL))
+  (if (ge idx (argc unit))
+    (print "usage: grep [-i] [-v] [-c] [-n] [-F] PATTERN")
+    (let ((arg (argv idx)))
+      (let ((next (add idx 1)))
+        (if (eqs arg "-i")
+          (parse-args next true fv fc fn ff)
+          (if (eqs arg "-v")
+            (parse-args next fi true fc fn ff)
+            (if (eqs arg "-c")
+              (parse-args next fi fv true fn ff)
+              (if (eqs arg "-n")
+                (parse-args next fi fv fc true ff)
+                (if (eqs arg "-F")
+                  (parse-args next fi fv fc fn true)
+                  (let ((pat (if ff
+                               (concat "\\Q" (concat arg "\\E"))
+                               arg)))
+                    (let ((pat2 (if fi (concat "(?i)" pat) pat)))
+                      (let ((rx (rx-compile pat2)))
+                        (grep-loop rx fv fc fn 1 0)))))))))))))))
+
+(parse-args 1 false false false false false)))

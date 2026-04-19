@@ -20,8 +20,10 @@ import qualified Pllisp.CST            as CST
 import qualified Pllisp.Error          as Error
 import qualified Pllisp.ExhaustCheck   as Exhaust
 import qualified Pllisp.LambdaLift     as LL
+import qualified Pllisp.MacroExpand    as MacroExpand
 import qualified Pllisp.Module         as Mod
 import qualified Pllisp.Parser         as Parser
+import qualified Pllisp.SExpr          as SExpr
 import qualified Pllisp.Stdlib         as Stdlib
 import qualified Pllisp.Resolve        as Resolve
 import qualified Pllisp.SrcLoc         as Loc
@@ -38,15 +40,20 @@ compileFile :: FilePath -> IO ()
 compileFile fp = do
   src <- T.IO.readFile fp
   let render kind sp msg = putStr (Error.renderError src kind sp msg)
-  case Parser.parseProgram fp src of
-    Left  err -> putStr (MP.errorBundlePretty err)
-    Right prog -> do
-      -- Validate module name matches filename
-      case CST.progName prog of
-        Just name -> case Mod.validateModuleName name fp of
-          Just err -> putStrLn err >> pure ()
-          Nothing  -> compileProg fp src render prog
-        Nothing -> compileProg fp src render prog
+  case Parser.parseSExprs fp src of
+    Left err -> putStr (MP.errorBundlePretty err)
+    Right sexprs ->
+      case MacroExpand.expand sexprs of
+        Left err -> putStrLn ("macro error: " ++ err)
+        Right expanded ->
+          case SExpr.toProgram expanded of
+            Left err -> putStrLn ("syntax error: " ++ SExpr.ceMsg err)
+            Right prog ->
+              case CST.progName prog of
+                Just name -> case Mod.validateModuleName name fp of
+                  Just err -> putStrLn err >> pure ()
+                  Nothing  -> compileProg fp src render prog
+                Nothing -> compileProg fp src render prog
 
 compileProg :: FilePath -> T.Text -> (String -> Loc.Span -> String -> IO ()) -> CST.Program -> IO ()
 compileProg fp src render prog = do
@@ -105,14 +112,18 @@ loadModule searchDir imp = do
     then pure (Left ("module not found: " ++ T.unpack modName ++ " (looked for " ++ modFile ++ ")"))
     else do
       src <- T.IO.readFile modFile
-      case Parser.parseProgram modFile src of
+      case Parser.parseSExprs modFile src of
         Left err -> pure (Left ("parse error in module " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
-        Right modProg -> do
-          preludeDecls <- Stdlib.loadPrelude
-          case Resolve.resolve S.empty (preludeDecls ++ Mod.desugarTopLevel (CST.progExprs modProg)) of
-            Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-            Right resolved -> case TC.typecheck M.empty resolved of
-              Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
-              Right typed ->
-                let exports = Mod.collectExports typed
-                in pure (Right (modName, exports, typed))
+        Right sexprs -> case MacroExpand.expand sexprs of
+          Left err -> pure (Left ("macro error in module " ++ T.unpack modName ++ ": " ++ err))
+          Right expanded -> case SExpr.toProgram expanded of
+            Left err -> pure (Left ("syntax error in module " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg err))
+            Right modProg -> do
+              preludeDecls <- Stdlib.loadPrelude
+              case Resolve.resolve S.empty (preludeDecls ++ Mod.desugarTopLevel (CST.progExprs modProg)) of
+                Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+                Right resolved -> case TC.typecheck M.empty resolved of
+                  Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+                  Right typed ->
+                    let exports = Mod.collectExports typed
+                    in pure (Right (modName, exports, typed))

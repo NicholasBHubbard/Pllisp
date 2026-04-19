@@ -13,13 +13,16 @@ import qualified TypeSpec
 import qualified ClosureConvertSpec
 import qualified CodegenSpec
 import qualified LambdaLiftSpec
+import qualified MacroExpandSpec
 import qualified ModuleSpec
+import qualified SExprSpec
 
 main :: IO ()
 main = hspec $ do
   describe "Type"      TypeSpec.spec
   describe "BuiltIn"   BuiltInSpec.spec
   describe "Parser"    ParserSpec.spec
+  describe "SExpr"     SExprSpec.spec
   describe "Resolve"   ResolveSpec.spec
   describe "TypeCheck" TypeCheckSpec.spec
   describe "Exhaust"   ExhaustCheckSpec.spec
@@ -29,3 +32,4 @@ main = hspec $ do
   describe "LambdaLift"    LambdaLiftSpec.spec
   describe "Module"         ModuleSpec.spec
   describe "Codegen"        CodegenSpec.spec
+  describe "MacroExpand"    MacroExpandSpec.spec
