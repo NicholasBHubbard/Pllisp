@@ -22,10 +22,12 @@ typecheck importedCtx exprs =
   let typeDecls = extractTypeDecls exprs
       ctorCtx = buildCtorContext typeDecls
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
+      ffiDecls = extractFFIDecls exprs
+      ffiCtx = buildFFIContext ffiDecls
       -- Build class method schemes and instance env
       classDecls = extractClassDecls exprs
       (classEnv, methodEnv, methodCtx) = buildClassContext classDecls
-      initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx, methodCtx]
+      initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx, ffiCtx, methodCtx]
       fieldMap = buildFieldMap typeDecls
       -- Type-check instance method bodies in a first pass
       instDecls = extractInstDecls exprs
@@ -136,6 +138,7 @@ data TRExprF
   | TRCase TRExpr [(TRPattern, TRExpr)]
   | TRLoop [(CST.Symbol, Ty.Type)] TRExpr
   | TRRecur [TRExpr]
+  | TRFFI CST.Symbol [Ty.Type] Ty.Type
   deriving (Eq, Show)
 
 data TRPattern
@@ -209,6 +212,7 @@ instance Substitutable TRExprF where
   tvs (TRCase scr arms) = tvs scr `S.union` foldr S.union S.empty [tvs p `S.union` tvs e | (p, e) <- arms]
   tvs (TRLoop params body) = foldr (S.union . tvs . snd) S.empty params `S.union` tvs body
   tvs (TRRecur args) = tvs args
+  tvs (TRFFI _ _ _) = S.empty
 
   apply _ (TRLit l) = TRLit l
   apply _ (TRBool b) = TRBool b
@@ -222,6 +226,7 @@ instance Substitutable TRExprF where
   apply s (TRCase scr arms) = TRCase (apply s scr) [(apply s p, apply s e) | (p, e) <- arms]
   apply s (TRLoop params body) = TRLoop [(n, apply s t) | (n, t) <- params] (apply s body)
   apply s (TRRecur args) = TRRecur (apply s args)
+  apply _ (TRFFI n pts rt) = TRFFI n pts rt
 
 compose :: Subst -> Subst -> Subst
 compose a b = M.map (apply a) (b `M.union` a)
@@ -233,6 +238,16 @@ extractTypeDecls = foldr go []
   where
     go (Loc.Located _ (Res.RType name params ctors)) acc = (name, params, ctors) : acc
     go _ acc = acc
+
+extractFFIDecls :: [Res.RExpr] -> [(CST.Symbol, [Ty.Type], Ty.Type)]
+extractFFIDecls = foldr go []
+  where
+    go (Loc.Located _ (Res.RFFI name paramTys retTy)) acc = (name, paramTys, retTy) : acc
+    go _ acc = acc
+
+buildFFIContext :: [(CST.Symbol, [Ty.Type], Ty.Type)] -> Context
+buildFFIContext = M.fromList . map (\(name, paramTys, retTy) ->
+  (name, Forall S.empty (Ty.TyFun paramTys retTy)))
 
 buildCtorContext :: [(CST.Symbol, [CST.Symbol], [CST.DataCon])] -> Context
 buildCtorContext = M.fromList . concatMap buildCtors
@@ -784,6 +799,8 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   Res.RType name params ctors ->
     -- Constructors are registered in context by typecheck, just pass through here
     pure $ Ty.Typed (Ty.TyCon name []) (TRType name params ctors)
+  Res.RFFI name paramTys retTy ->
+    pure $ Ty.Typed Ty.TyUnit (TRFFI name paramTys retTy)
   Res.RFieldAccess fieldName subExpr -> do
     scrutExpr <- infer subExpr
     let scrutTy = typeOf scrutExpr

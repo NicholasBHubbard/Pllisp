@@ -1172,6 +1172,31 @@ spec = do
         , "  (loop 1000000 0))"
         ]) >>= (`shouldBe` "500000500000")
 
+  describe "ffi" $ do
+    it "ffi sqrt (double -> double)" $
+      run (T.unlines
+        [ "(ffi sqrt (%FLT) %FLT)"
+        , "(print (flt-to-str (sqrt 4.0)))"
+        ]) >>= (`shouldBe` "2")
+
+    it "ffi pow (double, double -> double)" $
+      run (T.unlines
+        [ "(ffi pow (%FLT %FLT) %FLT)"
+        , "(print (flt-to-str (pow 2.0 10.0)))"
+        ]) >>= (`shouldBe` "1024")
+
+    it "ffi labs (long -> long)" $
+      run (T.unlines
+        [ "(ffi labs (%INT) %INT)"
+        , "(print (int-to-str (labs (neg 42))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "ffi atol (string -> long)" $
+      run (T.unlines
+        [ "(ffi atol (%STR) %INT)"
+        , "(print (int-to-str (atol \"123\")))"
+        ]) >>= (`shouldBe` "123")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

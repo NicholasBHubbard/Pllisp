@@ -23,6 +23,11 @@ data CtorInfo = CtorInfo
   , ciArgs :: [Ty.Type]
   } deriving (Show)
 
+data FFIInfo = FFIInfo
+  { ffiParamTys :: [Ty.Type]
+  , ffiRetTy    :: Ty.Type
+  } deriving (Show)
+
 data CgState = CgState
   { csFresh   :: !Int
   , csStrLits :: [(T.Text, T.Text)]       -- (global name, value), reverse order
@@ -33,6 +38,7 @@ data CgState = CgState
   , csInstrs  :: [T.Text]                  -- instructions, reverse order
   , csTcoLoop :: Maybe (T.Text, [(CST.Symbol, T.Text, Ty.Type)])
                  -- TCO: (loop label, [(param name, alloca operand, type)])
+  , csFFI    :: M.Map CST.Symbol FFIInfo
   }
 
 type CgM = State CgState
@@ -47,8 +53,10 @@ codegen :: LL.LLProgram -> T.Text
 codegen prog = evalState go initState
   where
     ctors    = collectCtors (LL.llExprs prog)
+    ffis     = collectFFI (LL.llExprs prog)
     defMap   = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
-    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing
+    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis
+    ffiDecls = map genFFIDecl (M.toList ffis)
 
     go :: CgM T.Text
     go = do
@@ -59,6 +67,7 @@ codegen prog = evalState go initState
       pure $ T.unlines $
         [ moduleHeader, "" ]
         ++ [ externDecls ]
+        ++ ffiDecls
         ++ [ fmtConstants ]
         ++ strDecls
         ++ [ "" ]
@@ -135,6 +144,24 @@ collectCtors = foldl' go M.empty
     go acc _ = acc
     addCtor acc (tag, CST.DataCon name args _fields) =
       M.insert name (CtorInfo tag args) acc
+
+collectFFI :: [LL.LLExpr] -> M.Map CST.Symbol FFIInfo
+collectFFI = foldl' go M.empty
+  where
+    go acc (Ty.Typed _ (LL.LLFFI name paramTys retTy)) =
+      M.insert name (FFIInfo paramTys retTy) acc
+    go acc _ = acc
+
+genFFIDecl :: (CST.Symbol, FFIInfo) -> T.Text
+genFFIDecl (name, ffi) =
+  let cName = sanitize (T.toLower name)
+      retTyStr = ffiRetType (ffiRetTy ffi)
+      paramTyStrs = T.intercalate ", " (map llvmType (ffiParamTys ffi))
+  in "declare " <> retTyStr <> " @" <> cName <> "(" <> paramTyStrs <> ")"
+
+ffiRetType :: Ty.Type -> T.Text
+ffiRetType Ty.TyUnit = "void"
+ffiRetType t = llvmType t
 
 -- LLVM TYPE MAPPING
 
@@ -270,6 +297,7 @@ genMain exprs = do
 
 genTopExpr :: LL.LLExpr -> CgM ()
 genTopExpr (Ty.Typed _ (LL.LLType {})) = pure ()
+genTopExpr (Ty.Typed _ (LL.LLFFI {}))  = pure ()
 genTopExpr expr = void (genExpr expr)
 
 -- EXPRESSION GENERATION
@@ -310,6 +338,7 @@ genExpr (Ty.Typed t expr) = case expr of
   LL.LLLoop params body    -> genLoop params body
   LL.LLRecur args          -> genRecur t args
   LL.LLType {}             -> pure "0"
+  LL.LLFFI {}              -> pure "0"
 
 genLit :: CST.Literal -> CgM T.Text
 genLit (CST.LitInt n) = pure (tshow n)
@@ -377,12 +406,15 @@ genApp :: Ty.Type -> LL.LLExpr -> [LL.LLExpr] -> CgM T.Text
 genApp resTy func args = do
   argResults <- mapM (\a -> do op <- genExpr a; pure (Ty.ty a, op)) args
   ctors <- gets csCtors
+  ffis <- gets csFFI
 
   case Ty.val func of
     LL.LLVar name _ | S.member name BuiltIn.builtInNames ->
       genBuiltIn name argResults resTy
     LL.LLVar name _ | M.member name ctors ->
       genCtorAlloc (ctors M.! name) argResults
+    LL.LLVar name _ | Just ffi <- M.lookup name ffis ->
+      genFFICall name ffi argResults
     _ -> do
       closureOp <- genExpr func
       genClosureCall closureOp argResults resTy
@@ -419,6 +451,22 @@ genClosureCall closureOp argResults resTy = do
   emit (result <> " = call " <> llvmType resTy <> " "
     <> fnptr <> "(" <> argList <> ")")
   pure result
+
+-- FFI CALLS
+
+genFFICall :: CST.Symbol -> FFIInfo -> [(Ty.Type, T.Text)] -> CgM T.Text
+genFFICall name ffi argResults = do
+  let cName = sanitize (T.toLower name)
+      retTyStr = ffiRetType (ffiRetTy ffi)
+      argList = T.intercalate ", " [llvmType t <> " " <> op | (t, op) <- argResults]
+  if ffiRetTy ffi == Ty.TyUnit
+    then do
+      emit ("call void @" <> cName <> "(" <> argList <> ")")
+      pure "0"
+    else do
+      result <- fresh
+      emit (result <> " = call " <> retTyStr <> " @" <> cName <> "(" <> argList <> ")")
+      pure result
 
 -- CONSTRUCTOR OPERATIONS
 

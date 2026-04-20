@@ -86,6 +86,7 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
   SList (Loc.Located _ (SAtom "CASE") : rest) -> Loc.Located sp <$> toCase sp rest
   SList (Loc.Located _ (SAtom "CLS")  : rest) -> Loc.Located sp <$> toCls sp rest
   SList (Loc.Located _ (SAtom "INST") : rest) -> Loc.Located sp <$> toInst sp rest
+  SList (Loc.Located _ (SAtom "FFI")  : rest) -> Loc.Located sp <$> toFFIDecl sp rest
   SList [Loc.Located _ (SAtom dotName), arg]
     | Just field <- T.stripPrefix "." dotName -> do
         arg' <- toExpr arg
@@ -300,6 +301,15 @@ toInstMethod (Loc.Located _ (SList [Loc.Located _ (SAtom name), body])) = do
   body' <- toExpr body
   Right (name, body')
 toInstMethod (Loc.Located sp _) = Left $ ConvertError sp "invalid instance method: expected (name expr)"
+
+-- FFI
+
+toFFIDecl :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
+toFFIDecl _ [Loc.Located _ (SAtom name), Loc.Located _ (SList paramTyExprs), retTyExpr] = do
+  paramTys <- mapM toTypeArg paramTyExprs
+  retTy <- toTypeArg retTyExpr
+  Right $ CST.ExprFFI name paramTys retTy
+toFFIDecl sp _ = Left $ ConvertError sp "invalid ffi: expected (ffi name (param-types...) return-type)"
 
 -- PATTERNS
 

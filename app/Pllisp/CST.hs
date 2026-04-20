@@ -42,6 +42,7 @@ data ExprF
   | ExprKeyArg Symbol Expr              -- &key name value (only in app args)
   | ExprCls Symbol [Symbol] [ClassMethod]  -- (CLS Name (tyvars...) methods...)
   | ExprInst Symbol Ty.Type [(Symbol, Expr)]  -- (INST ClassName %Type methods...)
+  | ExprFFI Symbol [Ty.Type] Ty.Type  -- (FFI name (param-types...) return-type)
   deriving (Eq, Show)
 
 data ClassMethod = ClassMethod

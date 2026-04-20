@@ -41,6 +41,7 @@ data RExprF
   | RKeyArg CST.Symbol RExpr
   | RCls CST.Symbol [CST.Symbol] [CST.ClassMethod]
   | RInst CST.Symbol Ty.Type [(CST.Symbol, RExpr)]
+  | RFFI CST.Symbol [Ty.Type] Ty.Type
   deriving (Eq, Show)
 
 data RLamList = RLamList
@@ -78,7 +79,8 @@ resolveWith :: S.Set CST.Symbol -> M.Map CST.Symbol CST.Symbol -> CST.CST -> Eit
 resolveWith importedNames normMap cst =
   let ctorNames = S.fromList (extractCtorNames cst)
       classMethodNames = S.fromList (extractClassMethodNames cst)
-      initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, classMethodNames, importedNames]]
+      ffiNames = S.fromList (extractFFINames cst)
+      initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, classMethodNames, ffiNames, importedNames]]
       (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) (initialScope, normMap) ()
   in if null errors
      then Right result
@@ -94,6 +96,12 @@ extractClassMethodNames :: CST.CST -> [CST.Symbol]
 extractClassMethodNames = concatMap go
   where
     go (Loc.Located _ (CST.ExprCls _ _ methods)) = map CST.cmName methods
+    go _ = []
+
+extractFFINames :: CST.CST -> [CST.Symbol]
+extractFFINames = concatMap go
+  where
+    go (Loc.Located _ (CST.ExprFFI name _ _)) = [name]
     go _ = []
 
 resolveExpr :: CST.Expr -> Resolve RExpr
@@ -138,6 +146,8 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
       rbody <- resolveExpr body
       pure (mname, rbody)) methods
     pure $ RInst className ty rmethods
+  CST.ExprFFI name paramTys retTy ->
+    pure $ RFFI name paramTys retTy
   CST.ExprFieldAccess field subExpr -> do
     rexpr <- resolveExpr subExpr
     pure $ RFieldAccess field rexpr
