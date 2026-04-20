@@ -99,7 +99,7 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
         fun'  <- toExpr fun
         args' <- mapM toExpr args
         Right $ Loc.Located sp (CST.ExprApp fun' args')
-  SList [] -> Left $ ConvertError sp "empty application"
+  SList [] -> Right $ Loc.Located sp CST.ExprUnit
 
   SType _     -> Left $ ConvertError sp "unexpected type annotation in expression position"
   SQuasi _    -> Left $ ConvertError sp "quasiquote outside macro body"

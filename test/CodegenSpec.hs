@@ -1072,6 +1072,106 @@ spec = do
         , "  (display Red))"
         ]) >>= (`shouldBe` "red")
 
+  describe "garbage collection" $ do
+    it "gc-collect runs without error" $
+      run (T.unlines
+        [ "(gc-collect ())"
+        , "(print \"ok\")"
+        ]) >>= (`shouldBe` "ok")
+
+    it "gc-heap-size returns positive value" $
+      run (T.unlines
+        [ "(print (if (gt (gc-heap-size ()) 0) \"ok\" \"zero\"))"
+        ]) >>= (`shouldBe` "ok")
+
+    it "ADT garbage is collected" $
+      run (T.unlines
+        [ "(TYPE Box () (MkBox))"
+        , "(let ((make-garbage (lam (n)"
+        , "        (if (le n 0) 0"
+        , "          (let ((_ MkBox)) (make-garbage (sub n 1))))))"
+        , "      (do-rounds (lam (r)"
+        , "        (if (le r 0) 0"
+        , "          (let ((_ (make-garbage 2000))) (do-rounds (sub r 1)))))))"
+        , "  (let ((_ (do-rounds 50))"
+        , "        (_ (gc-collect ()))"
+        , "        (h1 (gc-heap-size ()))"
+        , "        (_ (do-rounds 50))"
+        , "        (_ (gc-collect ()))"
+        , "        (h2 (gc-heap-size ())))"
+        , "    (print (if (lt h2 (mul h1 3)) \"bounded\" \"leak\"))))"
+        ]) >>= (`shouldBe` "bounded")
+
+    it "closure garbage is collected" $
+      run (T.unlines
+        [ "(let ((make-closures (lam (n)"
+        , "        (if (le n 0) 0"
+        , "          (let ((f (lam (x) (add x n)))) (make-closures (sub n 1))))))"
+        , "      (do-rounds (lam (r)"
+        , "        (if (le r 0) 0"
+        , "          (let ((_ (make-closures 2000))) (do-rounds (sub r 1)))))))"
+        , "  (let ((_ (do-rounds 50))"
+        , "        (_ (gc-collect ()))"
+        , "        (h1 (gc-heap-size ()))"
+        , "        (_ (do-rounds 50))"
+        , "        (_ (gc-collect ()))"
+        , "        (h2 (gc-heap-size ())))"
+        , "    (print (if (lt h2 (mul h1 3)) \"bounded\" \"leak\"))))"
+        ]) >>= (`shouldBe` "bounded")
+
+    it "string garbage is collected" $
+      run (T.unlines
+        [ "(let ((make-strings (lam (n)"
+        , "        (if (le n 0) \"\""
+        , "          (let ((_ (concat \"hello\" (int-to-str n))))"
+        , "            (make-strings (sub n 1))))))"
+        , "      (do-rounds (lam (r)"
+        , "        (if (le r 0) 0"
+        , "          (let ((_ (make-strings 2000))) (do-rounds (sub r 1)))))))"
+        , "  (let ((_ (do-rounds 50))"
+        , "        (_ (gc-collect ()))"
+        , "        (h1 (gc-heap-size ()))"
+        , "        (_ (do-rounds 50))"
+        , "        (_ (gc-collect ()))"
+        , "        (h2 (gc-heap-size ())))"
+        , "    (print (if (lt h2 (mul h1 3)) \"bounded\" \"leak\"))))"
+        ]) >>= (`shouldBe` "bounded")
+
+  describe "tail call optimization" $ do
+    it "tail-recursive countdown" $
+      run (T.unlines
+        [ "(let ((countdown (lam (n)"
+        , "  (if (le n 0) (print \"done\")"
+        , "    (countdown (sub n 1))))))"
+        , "  (countdown 1000000))"
+        ]) >>= (`shouldBe` "done")
+
+    it "tail-recursive accumulator" $
+      run (T.unlines
+        [ "(let ((sum-to (lam (n acc)"
+        , "  (if (le n 0) (print (int-to-str acc))"
+        , "    (sum-to (sub n 1) (add acc n))))))"
+        , "  (sum-to 1000000 0))"
+        ]) >>= (`shouldBe` "500000500000")
+
+    it "tail recursion with three params" $
+      run (T.unlines
+        [ "(let ((go (lam (n a b)"
+        , "  (if (le n 0) (print (int-to-str (add a b)))"
+        , "    (go (sub n 1) (add a 1) (add b 2))))))"
+        , "  (go 1000000 0 0))"
+        ]) >>= (`shouldBe` "3000000")
+
+    it "tail recursion through let body" $
+      run (T.unlines
+        [ "(let ((loop (lam (n acc)"
+        , "  (if (le n 0) (print (int-to-str acc))"
+        , "    (let ((next (sub n 1))"
+        , "          (new-acc (add acc n)))"
+        , "      (loop next new-acc))))))"
+        , "  (loop 1000000 0))"
+        ]) >>= (`shouldBe` "500000500000")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text
@@ -1109,7 +1209,7 @@ runWithStdin stdin' extraArgs src = do
   T.IO.writeFile "/tmp/pllisp_test.ll" ir
   (ec1, _, err1) <- readProcessWithExitCode
     "clang" ["/tmp/pllisp_test.ll",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8"] ""
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc"] ""
   case ec1 of
     ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do
@@ -1129,7 +1229,7 @@ runWithModule modName modSrc unquals mainSrc = do
   T.IO.writeFile "/tmp/pllisp_test.ll" ir
   (ec1, _, err1) <- readProcessWithExitCode
     "clang" ["/tmp/pllisp_test.ll",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8"] ""
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc"] ""
   case ec1 of
     ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do

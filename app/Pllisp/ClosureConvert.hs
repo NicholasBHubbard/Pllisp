@@ -41,6 +41,8 @@ data CCExprF
   | CCApp  CCExpr [CCExpr]
   | CCType CST.Symbol [CST.Symbol] [CST.DataCon]
   | CCCase CCExpr [(CCPattern, CCExpr)]
+  | CCLoop [(CST.Symbol, Ty.Type)] CCExpr
+  | CCRecur [CCExpr]
   deriving (Eq, Show)
 
 data CCPattern
@@ -68,6 +70,8 @@ convertExpr (Loc.Located _ (Ty.Typed t expr)) = Ty.Typed t $ case expr of
   TC.TRType n ps cs -> CCType n ps cs
   TC.TRCase scr arms ->
     CCCase (convertExpr scr) [(convertPattern p, convertExpr b) | (p, b) <- arms]
+  TC.TRLoop params body -> CCLoop params (convertExpr body)
+  TC.TRRecur args -> CCRecur (map convertExpr args)
   TC.TRLam params retTy body ->
     -- This is the interesting case: compute free variables of the lambda body,
     -- subtract the params (and built-ins/constructors), and attach them.
@@ -108,6 +112,9 @@ freeVars (Loc.Located _ (Ty.Typed t expr)) = case expr of
   TC.TRCase scr arms ->
     M.union (freeVars scr) $ M.unions
       [M.withoutKeys (freeVars b) (patternBinds p) | (p, b) <- arms]
+  TC.TRLoop params body ->
+    M.withoutKeys (freeVars body) (S.fromList (map fst params))
+  TC.TRRecur args -> M.unions (map freeVars args)
   _ -> M.empty
 
 -- | Free variables of a pattern (the variables it binds, which should be

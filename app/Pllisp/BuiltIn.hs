@@ -80,4 +80,7 @@ builtInTypes = M.fromList
   , ("RX-SPLIT",    Ty.TyFun [Ty.TyRx, Ty.TyStr] (Ty.TyCon "LIST" [Ty.TyStr]))
   , ("RX-CAPTURES", Ty.TyFun [Ty.TyRx, Ty.TyStr] (Ty.TyCon "LIST" [Ty.TyStr]))
   , ("RX-COMPILE",  Ty.TyFun [Ty.TyStr] Ty.TyRx)
+  -- GC
+  , ("GC-COLLECT",   Ty.TyFun [Ty.TyUnit] Ty.TyUnit)
+  , ("GC-HEAP-SIZE", Ty.TyFun [Ty.TyUnit] Ty.TyInt)
   ]

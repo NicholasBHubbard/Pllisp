@@ -49,6 +49,8 @@ data LLExprF
   | LLType CST.Symbol [CST.Symbol] [CST.DataCon]
   | LLCase LLExpr [(LLPattern, LLExpr)]
   | LLMkClosure CST.Symbol [LLExpr]
+  | LLLoop [(CST.Symbol, Ty.Type)] LLExpr
+  | LLRecur [LLExpr]
   deriving (Eq, Show)
 
 data LLPattern
@@ -121,6 +123,14 @@ liftExpr (Ty.Typed t expr) = case expr of
     scr' <- liftExpr scr
     arms' <- mapM (\(p, b) -> do b' <- liftExpr b; pure (liftPattern p, b')) arms
     pure (Ty.Typed t (LLCase scr' arms'))
+
+  CC.CCLoop params body -> do
+    body' <- liftExpr body
+    pure (Ty.Typed t (LLLoop params body'))
+
+  CC.CCRecur args -> do
+    args' <- mapM liftExpr args
+    pure (Ty.Typed t (LLRecur args'))
 
 liftPattern :: CC.CCPattern -> LLPattern
 liftPattern pat = case pat of

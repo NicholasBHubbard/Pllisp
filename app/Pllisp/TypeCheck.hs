@@ -37,7 +37,7 @@ typecheck importedCtx exprs =
     Right subst
       | not (null instErrs) -> Left instErrs
       | not (null inferErrs) -> Left inferErrs
-      | otherwise -> Right (dictPass classEnv methodEnv instanceEnv (apply subst typed))
+      | otherwise -> Right (tcoPass (dictPass classEnv methodEnv instanceEnv (apply subst typed)))
 
 -- TYPES
 
@@ -134,6 +134,8 @@ data TRExprF
   | TRApp  TRExpr [TRExpr]
   | TRType CST.Symbol [CST.Symbol] [CST.DataCon]
   | TRCase TRExpr [(TRPattern, TRExpr)]
+  | TRLoop [(CST.Symbol, Ty.Type)] TRExpr
+  | TRRecur [TRExpr]
   deriving (Eq, Show)
 
 data TRPattern
@@ -205,6 +207,8 @@ instance Substitutable TRExprF where
   tvs (TRApp f as) = tvs f `S.union` tvs as
   tvs (TRType _ _ _) = S.empty
   tvs (TRCase scr arms) = tvs scr `S.union` foldr S.union S.empty [tvs p `S.union` tvs e | (p, e) <- arms]
+  tvs (TRLoop params body) = foldr (S.union . tvs . snd) S.empty params `S.union` tvs body
+  tvs (TRRecur args) = tvs args
 
   apply _ (TRLit l) = TRLit l
   apply _ (TRBool b) = TRBool b
@@ -216,6 +220,8 @@ instance Substitutable TRExprF where
   apply s (TRApp f as) = TRApp (apply s f) (apply s as)
   apply _ (TRType n ps cs) = TRType n ps cs
   apply s (TRCase scr arms) = TRCase (apply s scr) [(apply s p, apply s e) | (p, e) <- arms]
+  apply s (TRLoop params body) = TRLoop [(n, apply s t) | (n, t) <- params] (apply s body)
+  apply s (TRRecur args) = TRRecur (apply s args)
 
 compose :: Subst -> Subst -> Subst
 compose a b = M.map (apply a) (b `M.union` a)
@@ -1015,3 +1021,62 @@ solveAll constraints = go M.empty constraints []
       case unify sp (apply subst t1) (apply subst t2) of
         Left es -> go subst cs (errs ++ es)
         Right s -> go (compose s subst) cs errs
+
+-- TAIL CALL OPTIMIZATION
+
+tcoPass :: TResolvedCST -> TResolvedCST
+tcoPass = map tcoExpr
+
+tcoExpr :: TRExpr -> TRExpr
+tcoExpr (Loc.Located sp (Ty.Typed t expr)) =
+  Loc.Located sp (Ty.Typed t (tcoExprF expr))
+
+tcoExprF :: TRExprF -> TRExprF
+tcoExprF (TRLet binds body) =
+  TRLet (map tcoBind binds) (tcoExpr body)
+tcoExprF (TRLam ps rt body) = TRLam ps rt (tcoExpr body)
+tcoExprF (TRIf c t e) = TRIf (tcoExpr c) (tcoExpr t) (tcoExpr e)
+tcoExprF (TRApp f as) = TRApp (tcoExpr f) (map tcoExpr as)
+tcoExprF (TRCase s arms) = TRCase (tcoExpr s) [(p, tcoExpr b) | (p, b) <- arms]
+tcoExprF e = e
+
+tcoBind :: (CST.Symbol, Ty.Type, TRExpr) -> (CST.Symbol, Ty.Type, TRExpr)
+tcoBind (name, ty, rhs) = case rhs of
+  Loc.Located sp (Ty.Typed lamTy (TRLam params retTy body))
+    | hasSelfTailCall name body ->
+      let body' = rewriteTailCalls name body
+          bsp = case body of Loc.Located s _ -> s
+          bty = case body of Loc.Located _ (Ty.Typed t _) -> t
+      in (name, ty, Loc.Located sp (Ty.Typed lamTy
+           (TRLam params retTy
+             (Loc.Located bsp (Ty.Typed bty (TRLoop params body'))))))
+  _ -> (name, ty, tcoExpr rhs)
+
+-- | Check if an expression has a self-recursive tail call to the given name.
+hasSelfTailCall :: CST.Symbol -> TRExpr -> Bool
+hasSelfTailCall name (Loc.Located _ (Ty.Typed _ expr)) = case expr of
+  TRApp (Loc.Located _ (Ty.Typed _ (TRVar vb))) _ -> Res.symName vb == name
+  TRIf _ t e -> hasSelfTailCall name t || hasSelfTailCall name e
+  TRLet binds body ->
+    not (any (\(n, _, _) -> n == name) binds) && hasSelfTailCall name body
+  TRCase _ arms -> any (\(_, b) -> hasSelfTailCall name b) arms
+  _ -> False
+
+-- | Rewrite self-recursive tail calls to TRRecur, non-tail subexpressions
+-- are recursed into with tcoExpr for nested TCO opportunities.
+rewriteTailCalls :: CST.Symbol -> TRExpr -> TRExpr
+rewriteTailCalls name (Loc.Located sp (Ty.Typed t expr)) = case expr of
+  TRApp (Loc.Located _ (Ty.Typed _ (TRVar vb))) args
+    | Res.symName vb == name ->
+      Loc.Located sp (Ty.Typed t (TRRecur (map tcoExpr args)))
+  TRIf c th el ->
+    Loc.Located sp (Ty.Typed t (TRIf (tcoExpr c)
+      (rewriteTailCalls name th) (rewriteTailCalls name el)))
+  TRLet binds body ->
+    let shadowed = any (\(n, _, _) -> n == name) binds
+        body' = if shadowed then tcoExpr body else rewriteTailCalls name body
+    in Loc.Located sp (Ty.Typed t (TRLet (map tcoBind binds) body'))
+  TRCase scr arms ->
+    Loc.Located sp (Ty.Typed t (TRCase (tcoExpr scr)
+      [(p, rewriteTailCalls name b) | (p, b) <- arms]))
+  _ -> Loc.Located sp (Ty.Typed t (tcoExprF expr))
