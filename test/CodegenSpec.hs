@@ -1501,6 +1501,100 @@ spec = do
         , "      (None (print \"none\")))))"
         ]) >>= (`shouldBe` "42")
 
+  describe "newtype erasure" $ do
+    it "IR has no GC_malloc for newtype construction" $ do
+      ir <- pipeline (T.unlines
+        [ "(TYPE Name () (MkName %Str))"
+        , "(let ((n (MkName \"alice\"))) (CASE n ((MkName s) (print s))))"
+        ])
+      -- The main function should NOT contain GC_malloc for MkName
+      let mainLines = dropWhile (not . T.isPrefixOf "define i32 @main") (T.lines ir)
+          mainBody = takeWhile (not . T.isPrefixOf "}") (drop 1 mainLines)
+      -- No GC_malloc in main = newtype was erased
+      any (T.isInfixOf "GC_malloc") mainBody `shouldBe` False
+      -- No tag store either
+      any (T.isInfixOf "store i32 0") mainBody `shouldBe` False
+
+    it "single-ctor single-field string wrapper is zero-cost" $
+      run (T.unlines
+        [ "(TYPE Name () (MkName %Str))"
+        , "(let ((n (MkName \"alice\")))"
+        , "  (CASE n ((MkName s) (print s))))"
+        ]) >>= (`shouldBe` "alice")
+
+    it "newtype wrapping another ADT" $
+      run (T.unlines
+        [ "(TYPE Pair (a b) (MkPair a b))"
+        , "(TYPE Wrapped () (Wrap %(Pair %Int %Int)))"
+        , "(let ((w (Wrap (MkPair 3 4))))"
+        , "  (CASE w ((Wrap p)"
+        , "    (CASE p ((MkPair x y) (print (int-to-str (add x y))))))))"
+        ]) >>= (`shouldBe` "7")
+
+    it "multi-constructor ADT is NOT erased" $
+      run (T.unlines
+        [ "(TYPE Maybe (a) (Just a) (Nothing))"
+        , "(let ((x (Just 42)))"
+        , "  (CASE x"
+        , "    ((Just v) (print (int-to-str v)))"
+        , "    (Nothing (print \"none\"))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "multi-field single-constructor is NOT erased" $
+      run (T.unlines
+        [ "(TYPE Pair2 (a b) (MkPair2 a b))"
+        , "(let ((p (MkPair2 10 20)))"
+        , "  (CASE p ((MkPair2 x y) (print (int-to-str (add x y))))))"
+        ]) >>= (`shouldBe` "30")
+
+    it "newtype used in let binding" $
+      run (T.unlines
+        [ "(TYPE Tag () (MkTag %Str))"
+        , "(let ((t (MkTag \"hello\")))"
+        , "  (let ((s (CASE t ((MkTag x) x))))"
+        , "    (print s)))"
+        ]) >>= (`shouldBe` "hello")
+
+    it "newtype passed to function" $
+      run (T.unlines
+        [ "(TYPE Label () (MkLabel %Str))"
+        , "(let ((show-label (lam (l)"
+        , "        (CASE l ((MkLabel s) (print s))))))"
+        , "  (show-label (MkLabel \"world\")))"
+        ]) >>= (`shouldBe` "world")
+
+    it "newtype in nested pattern match" $
+      run (T.unlines
+        [ "(TYPE Id () (MkId %Str))"
+        , "(TYPE Maybe2 (a) (Just2 a) (Nothing2))"
+        , "(let ((x (Just2 (MkId \"found\"))))"
+        , "  (CASE x"
+        , "    ((Just2 id-val) (CASE id-val ((MkId s) (print s))))"
+        , "    (Nothing2 (print \"none\"))))"
+        ]) >>= (`shouldBe` "found")
+
+    it "polymorphic single-field is NOT erased" $
+      run (T.unlines
+        [ "(TYPE Box (a) (MkBox a))"
+        , "(let ((b (MkBox (MkBox 42))))"
+        , "  (CASE b ((MkBox inner)"
+        , "    (CASE inner ((MkBox v) (print (int-to-str v)))))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "int-wrapping single-ctor is NOT erased" $
+      run (T.unlines
+        [ "(TYPE Age () (MkAge %Int))"
+        , "(let ((a (MkAge 25)))"
+        , "  (CASE a ((MkAge n) (print (int-to-str n)))))"
+        ]) >>= (`shouldBe` "25")
+
+    it "bool-wrapping single-ctor is NOT erased" $
+      run (T.unlines
+        [ "(TYPE Flag () (MkFlag %Bool))"
+        , "(let ((f (MkFlag true)))"
+        , "  (CASE f ((MkFlag b) (if b (print \"yes\") (print \"no\")))))"
+        ]) >>= (`shouldBe` "yes")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

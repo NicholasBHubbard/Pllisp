@@ -19,8 +19,9 @@ import qualified Data.Text as T
 -- TYPES
 
 data CtorInfo = CtorInfo
-  { ciTag  :: !Int
-  , ciArgs :: [Ty.Type]
+  { ciTag     :: !Int
+  , ciArgs    :: [Ty.Type]
+  , ciNewtype :: !Bool  -- single-ctor single-field, erased at runtime
   } deriving (Show)
 
 data FFIInfo = FFIInfo
@@ -308,11 +309,25 @@ escapeForLLVM = T.concatMap escChar
 collectCtors :: [LL.LLExpr] -> M.Map CST.Symbol CtorInfo
 collectCtors = foldl' go M.empty
   where
-    go acc (Ty.Typed _ (LL.LLType _ _ dataCons)) =
-      foldl' addCtor acc (zip [0..] dataCons)
+    go acc (Ty.Typed _ (LL.LLType _ tyParams dataCons)) =
+      let paramSet = S.fromList tyParams
+          isNT = case dataCons of
+            [CST.DataCon _ [fieldTy] _] -> isConcretePtr paramSet fieldTy
+            _ -> False
+      in foldl' (addCtor isNT) acc (zip [0..] dataCons)
     go acc _ = acc
-    addCtor acc (tag, CST.DataCon name args _fields) =
-      M.insert name (CtorInfo tag args) acc
+    addCtor isNT acc (tag, CST.DataCon name args _fields) =
+      M.insert name (CtorInfo tag args isNT) acc
+
+-- | Check if a type is concretely ptr-representable (safe for newtype erasure).
+-- Type parameters (TyCon "a" []) are excluded since they could be instantiated
+-- to i64/double/i1 at use sites.
+isConcretePtr :: S.Set CST.Symbol -> Ty.Type -> Bool
+isConcretePtr _      Ty.TyStr       = True
+isConcretePtr _      Ty.TyRx        = True
+isConcretePtr _      (Ty.TyFun _ _) = True
+isConcretePtr params (Ty.TyCon n _) = not (S.member n params)
+isConcretePtr _      _               = False
 
 collectFFI :: [LL.LLExpr] -> M.Map CST.Symbol FFIInfo
 collectFFI = foldl' go M.empty
@@ -909,6 +924,7 @@ isUnsignedCType _       = False
 -- CONSTRUCTOR OPERATIONS
 
 genCtorAlloc :: CtorInfo -> [(Ty.Type, T.Text)] -> CgM T.Text
+genCtorAlloc ci [(_, argOp)] | ciNewtype ci = pure argOp
 genCtorAlloc ci args = do
   let totalSize = slotSize * (1 + length args)
   obj <- fresh
@@ -1015,11 +1031,15 @@ genPatTest scrOp pat matchLbl nextLbl = case pat of
       else do
         ctors <- gets csCtors
         let ci = ctors M.! ctorName
-        tagR <- fresh
-        emit (tagR <> " = load i32, ptr " <> scrOp)
-        cmp <- fresh
-        emit (cmp <> " = icmp eq i32 " <> tagR <> ", " <> tshow (ciTag ci))
-        emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
+        if ciNewtype ci
+          then -- Newtype: no tag, always matches
+            emit ("br label %" <> matchLbl)
+          else do
+            tagR <- fresh
+            emit (tagR <> " = load i32, ptr " <> scrOp)
+            cmp <- fresh
+            emit (cmp <> " = icmp eq i32 " <> tagR <> ", " <> tshow (ciTag ci))
+            emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
 
   -- Wildcard/var handled in genArms before reaching here
   _ -> emit ("br label %" <> matchLbl)
@@ -1067,18 +1087,26 @@ bindPatVars scrOp pat = case pat of
                       _ -> pure ()
                     bindVar name converted
             _ -> pure ()
-      Nothing -> -- Regular ADT: use tag+slot layout
-        forM_ (zip [1..] subPats) $ \(i, subPat) -> do
-          let offset = slotSize * (i :: Int)
-          fieldPtr <- fresh
-          emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
-            <> ", i64 " <> tshow offset)
-          let fty = patType subPat
-          fieldVal <- fresh
-          emit (fieldVal <> " = load " <> llvmType fty <> ", ptr " <> fieldPtr)
-          case subPat of
-            LL.LLPatVar name _ -> bindVar name fieldVal
-            _                  -> pure ()
+      Nothing -> do
+        ctors <- gets csCtors
+        let ci = ctors M.! ctorName
+        if ciNewtype ci
+          then -- Newtype: scrutinee IS the unwrapped value
+            case subPats of
+              [LL.LLPatVar name _] -> bindVar name scrOp
+              _ -> pure ()
+          else -- Regular ADT: use tag+slot layout
+            forM_ (zip [1..] subPats) $ \(i, subPat) -> do
+              let offset = slotSize * (i :: Int)
+              fieldPtr <- fresh
+              emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+                <> ", i64 " <> tshow offset)
+              let fty = patType subPat
+              fieldVal <- fresh
+              emit (fieldVal <> " = load " <> llvmType fty <> ", ptr " <> fieldPtr)
+              case subPat of
+                LL.LLPatVar name _ -> bindVar name fieldVal
+                _                  -> pure ()
   LL.LLPatVar name _ -> bindVar name scrOp
   _ -> pure ()
 
