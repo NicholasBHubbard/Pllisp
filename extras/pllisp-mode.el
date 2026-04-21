@@ -60,21 +60,13 @@
   (setq-local font-lock-defaults '(pllisp-font-lock-keywords))
   (setq-local comment-start "# ")
   (setq-local comment-start-skip "#+ *")
-  (setq-local lisp-indent-function #'pllisp-indent-function))
+  (setq-local lisp-indent-function #'lisp-indent-function))
 
-(defun pllisp-indent-function (indent-point state)
-  "Indent pllisp forms. Special forms get body-style indentation."
-  (let ((normal-indent (current-column)))
-    (goto-char (1+ (elt state 1)))
-    (let ((method (and (looking-at "\\(?:\\sw\\|\\s_\\)+")
-                       (intern-soft (downcase (match-string 0))))))
-      (cond
-       ((memq method '(lam let if case type cls inst mac fun
-                        module import ffi ffi-struct
-                        ffi-var ffi-enum ffi-callback))
-        (lisp-indent-specform 1 state indent-point normal-indent))
-       (t
-        (lisp-indent-defform state indent-point))))))
+;; Indent rules: number = distinguished args before body
+(dolist (sym '(lam let if case type cls inst mac fun
+               module import ffi ffi-struct
+               ffi-var ffi-enum ffi-callback))
+  (put sym 'lisp-indent-function 1))
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.pll\\'" . pllisp-mode))
