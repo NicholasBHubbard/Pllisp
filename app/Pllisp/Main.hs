@@ -84,7 +84,7 @@ compileProg fp src render prog = do
                   T.IO.writeFile bridgeFile Ty.ffiBridgeC
                   (ec, _, err') <- readProcessWithExitCode
                     "clang" [llFile, bridgeFile, "-o", exeFile,
-                             "-lm", "-lpcre2-8", "-lffi"] ""
+                             "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
                   removeFile bridgeFile
                   case ec of
                     ExitFailure _ -> do
