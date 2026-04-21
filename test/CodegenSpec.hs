@@ -707,6 +707,38 @@ spec = do
           mainSrc = "(print (int-to-str (square (double 3))))"
       runWithModule "MOD" modSrc ["SQUARE", "DOUBLE"] mainSrc >>= (`shouldBe` "36")
 
+    it "imported macro" $ do
+      let modSrc = T.unlines
+            [ "(mac double-print (x)"
+            , "  `(do (print ,x) (print ,x)))"
+            ]
+          mainSrc = "(double-print \"hi\")"
+      runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "hi\nhi")
+
+    it "imported macro uses prelude macro" $ do
+      let modSrc = T.unlines
+            [ "(fun square ((x %INT)) (mul x x))"
+            ]
+          mainSrc = "(print (int-to-str (square 6)))"
+      runWithModule "MOD" modSrc ["SQUARE"] mainSrc >>= (`shouldBe` "36")
+
+    it "imported macro with values" $ do
+      let modSrc = T.unlines
+            [ "(let ((helper (lam ((x %INT)) (mul x x)))) unit)"
+            , "(mac apply-helper (x) `(helper ,x))"
+            ]
+          mainSrc = "(print (int-to-str (apply-helper 5)))"
+      runWithModule "MOD" modSrc ["HELPER"] mainSrc >>= (`shouldBe` "25")
+
+    it "imported multi-clause macro" $ do
+      let modSrc = T.unlines
+            [ "(mac my-do (expr) expr)"
+            , "(mac my-do (first &rest rest)"
+            , "  `(let ((_ ,first)) (my-do ,@rest)))"
+            ]
+          mainSrc = "(my-do (print \"a\") (print \"b\") (print \"c\"))"
+      runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "a\nb\nc")
+
   describe "macros" $ do
     it "when macro" $ do
       run (T.unlines
@@ -1317,12 +1349,12 @@ spec = do
 
     it "enum passed to function" $
       run (T.unlines
-        [ "(ffi-enum Dir (UP 0) (DOWN 1) (LEFT 2) (RIGHT 3))"
+        [ "(ffi-enum Dir (UP 0) (DOWN 1) (WEST 2) (EAST 3))"
         , "(let ((describe (lam (d)"
         , "        (if (eq d UP) \"up\""
-        , "          (if (eq d RIGHT) \"right\" \"other\")))))"
-        , "  (print (describe RIGHT)))"
-        ]) >>= (`shouldBe` "right")
+        , "          (if (eq d EAST) \"east\" \"other\")))))"
+        , "  (print (describe EAST)))"
+        ]) >>= (`shouldBe` "east")
 
   -- FEATURE: Arrays (fixed-size inline arrays)
   describe "ffi arrays" $ do
@@ -1666,10 +1698,13 @@ runWithModule modName modSrc unquals mainSrc = do
 importPipeline :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO T.Text
 importPipeline modName modSrc unquals mainSrc = do
   preludeSexprs <- Stdlib.loadPrelude
-  -- Compile module
-  let parseMod = case Parser.parseSExprs "<mod>" modSrc of
+  -- Parse module and extract macros for export
+  let modSexprs = case Parser.parseSExprs "<mod>" modSrc of
         Left e -> error ("mod parse: " ++ show e)
-        Right s -> case MacroExpand.expand (preludeSexprs ++ s) of
+        Right s -> s
+      modMacroDefs = MacroExpand.extractMacroDefs modSexprs
+  -- Compile module (with prelude macros)
+  let parseMod = case MacroExpand.expand (preludeSexprs ++ modSexprs) of
           Left e -> error ("mod macro: " ++ e)
           Right expanded -> case SExpr.toProgram expanded of
             Left e -> error ("mod sexpr: " ++ SExpr.ceMsg e)
@@ -1685,9 +1720,10 @@ importPipeline modName modSrc unquals mainSrc = do
       exportMap = M.singleton modName modExports
       imports = [CST.Import modName unquals]
       (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap imports
+  -- Compile main (with prelude + imported module macros)
   let parseMain = case Parser.parseSExprs "<main>" mainSrc of
         Left e -> error ("main parse: " ++ show e)
-        Right s -> case MacroExpand.expand (preludeSexprs ++ s) of
+        Right s -> case MacroExpand.expand (preludeSexprs ++ modMacroDefs ++ s) of
           Left e -> error ("main macro: " ++ e)
           Right expanded -> case SExpr.toProgram expanded of
             Left e -> error ("main sexpr: " ++ SExpr.ceMsg e)

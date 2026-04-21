@@ -41,21 +41,28 @@ compileFile :: FilePath -> IO ()
 compileFile fp = do
   src <- T.IO.readFile fp
   preludeSexprs <- Stdlib.loadPrelude
+  stdlibDir <- Stdlib.getStdlibDir
   let render kind sp msg = putStr (Error.renderError src kind sp msg)
+      searchDir = takeDirectory fp
   case Parser.parseSExprs fp src of
     Left err -> putStr (MP.errorBundlePretty err)
-    Right sexprs ->
-      case MacroExpand.expand (preludeSexprs ++ sexprs) of
-        Left err -> putStrLn ("macro error: " ++ err)
-        Right expanded ->
-          case SExpr.toProgram expanded of
-            Left err -> putStrLn ("syntax error: " ++ SExpr.ceMsg err)
-            Right prog ->
-              case CST.progName prog of
-                Just name -> case Mod.validateModuleName name fp of
-                  Just err -> putStrLn err >> pure ()
-                  Nothing  -> compileProg fp src render prog
-                Nothing -> compileProg fp src render prog
+    Right sexprs -> do
+      let imports = SExpr.preScanImports sexprs
+      macroResult <- loadImportedMacros S.empty searchDir stdlibDir imports
+      case macroResult of
+        Left err -> putStrLn ("import error: " ++ err)
+        Right importedMacros ->
+          case MacroExpand.expand (preludeSexprs ++ importedMacros ++ sexprs) of
+            Left err -> putStrLn ("macro error: " ++ err)
+            Right expanded ->
+              case SExpr.toProgram expanded of
+                Left err -> putStrLn ("syntax error: " ++ SExpr.ceMsg err)
+                Right prog ->
+                  case CST.progName prog of
+                    Just name -> case Mod.validateModuleName name fp of
+                      Just err -> putStrLn err >> pure ()
+                      Nothing  -> compileProg fp src render prog
+                    Nothing -> compileProg fp src render prog
 
 compileProg :: FilePath -> T.Text -> (String -> Loc.Span -> String -> IO ()) -> CST.Program -> IO ()
 compileProg fp src render prog = do
@@ -112,24 +119,76 @@ loadModule :: FilePath -> CST.Import
 loadModule searchDir imp = do
   let modName = CST.impModule imp
       modFile = searchDir </> T.unpack modName ++ ".pll"
-  exists <- doesFileExist modFile
-  if not exists
-    then pure (Left ("module not found: " ++ T.unpack modName ++ " (looked for " ++ modFile ++ ")"))
-    else do
-      src <- T.IO.readFile modFile
-      case Parser.parseSExprs modFile src of
+  stdlibDir <- Stdlib.getStdlibDir
+  mPath <- findModuleFile searchDir stdlibDir modName
+  case mPath of
+    Nothing -> pure (Left ("module not found: " ++ T.unpack modName ++ " (looked for " ++ modFile ++ ")"))
+    Just modPath -> do
+      src <- T.IO.readFile modPath
+      case Parser.parseSExprs modPath src of
         Left err -> pure (Left ("parse error in module " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
         Right sexprs -> do
           preludeSexprs <- Stdlib.loadPrelude
-          case MacroExpand.expand (preludeSexprs ++ sexprs) of
-            Left err -> pure (Left ("macro error in module " ++ T.unpack modName ++ ": " ++ err))
-            Right expanded -> case SExpr.toProgram expanded of
-              Left err -> pure (Left ("syntax error in module " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg err))
-              Right modProg ->
-                case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs modProg)) of
-                  Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-                  Right resolved -> case TC.typecheck M.empty resolved of
-                    Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
-                    Right typed ->
-                      let exports = Mod.collectExports typed
-                      in pure (Right (modName, exports, typed))
+          -- Pre-scan for imports in this module and load their macros
+          let subImports = SExpr.preScanImports sexprs
+          macroResult <- loadImportedMacros (S.singleton modName) (takeDirectory modPath) stdlibDir subImports
+          case macroResult of
+            Left err -> pure (Left err)
+            Right importedMacros ->
+              case MacroExpand.expand (preludeSexprs ++ importedMacros ++ sexprs) of
+                Left err -> pure (Left ("macro error in module " ++ T.unpack modName ++ ": " ++ err))
+                Right expanded -> case SExpr.toProgram expanded of
+                  Left err -> pure (Left ("syntax error in module " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg err))
+                  Right modProg ->
+                    case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs modProg)) of
+                      Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+                      Right resolved -> case TC.typecheck M.empty resolved of
+                        Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+                        Right typed ->
+                          let exports = Mod.collectExports typed
+                          in pure (Right (modName, exports, typed))
+
+-- | Find a module file, checking source directory first, then stdlib.
+findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)
+findModuleFile searchDir stdlibDir modName = do
+  let localPath = searchDir </> T.unpack modName ++ ".pll"
+  localExists <- doesFileExist localPath
+  if localExists then pure (Just localPath)
+  else do
+    let stdlibPath = stdlibDir </> T.unpack modName ++ ".pll"
+    stdlibExists <- doesFileExist stdlibPath
+    pure (if stdlibExists then Just stdlibPath else Nothing)
+
+-- | Recursively load macro definitions from imported modules.
+loadImportedMacros :: S.Set CST.Symbol -> FilePath -> FilePath -> [CST.Import]
+  -> IO (Either String [SExpr.SExpr])
+loadImportedMacros _ _ _ [] = pure (Right [])
+loadImportedMacros visited searchDir stdlibDir imports = do
+  results <- mapM (loadModuleMacros visited searchDir stdlibDir) imports
+  case sequence results of
+    Left err -> pure (Left err)
+    Right macroLists -> pure (Right (concat macroLists))
+
+loadModuleMacros :: S.Set CST.Symbol -> FilePath -> FilePath -> CST.Import
+  -> IO (Either String [SExpr.SExpr])
+loadModuleMacros visited searchDir stdlibDir imp
+  | S.member modName visited =
+      pure (Left ("circular macro import involving " ++ T.unpack modName))
+  | otherwise = do
+      mPath <- findModuleFile searchDir stdlibDir modName
+      case mPath of
+        Nothing -> pure (Right [])  -- not found here; loadModule will report the error
+        Just modPath -> do
+          src <- T.IO.readFile modPath
+          case Parser.parseSExprs modPath src of
+            Left _ -> pure (Right [])  -- parse error will be caught by loadModule
+            Right sexprs -> do
+              let subImports = SExpr.preScanImports sexprs
+                  visited' = S.insert modName visited
+              subResult <- loadImportedMacros visited' (takeDirectory modPath) stdlibDir subImports
+              case subResult of
+                Left err -> pure (Left err)
+                Right subMacros ->
+                  let thisMacros = MacroExpand.extractMacroDefs sexprs
+                  in pure (Right (subMacros ++ thisMacros))
+  where modName = CST.impModule imp

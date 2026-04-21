@@ -27,6 +27,17 @@ data SExprF
   | SSplice SExpr
   deriving (Eq, Show)
 
+-- PRE-SCAN
+
+-- | Scan raw SExprs for (import ...) forms before macro expansion.
+preScanImports :: [SExpr] -> [CST.Import]
+preScanImports [] = []
+preScanImports (sx@(Loc.Located _ (SList (Loc.Located _ (SAtom "IMPORT") : _))) : rest) =
+  case toImport sx of
+    Right imp -> imp : preScanImports rest
+    Left _    -> preScanImports rest
+preScanImports (_ : rest) = preScanImports rest
+
 -- SEXPR → CST CONVERSION
 
 data ConvertError = ConvertError
@@ -37,21 +48,28 @@ data ConvertError = ConvertError
 toProgram :: [SExpr] -> Either ConvertError CST.Program
 toProgram sexprs = do
   let (mName, rest1) = takeModule sexprs
-      (imports, rest2) = takeImports rest1
+      (imports, rest2) = partitionImports rest1
   exprs <- mapM toExpr rest2
   pure $ CST.Program mName imports exprs
 
 takeModule :: [SExpr] -> (Maybe T.Text, [SExpr])
-takeModule (Loc.Located _ (SList [Loc.Located _ (SAtom "MODULE"), Loc.Located _ (SAtom name)]) : rest) =
-  (Just name, rest)
-takeModule sexprs = (Nothing, sexprs)
+takeModule = go []
+  where
+    go before (Loc.Located _ (SList [Loc.Located _ (SAtom "MODULE"), Loc.Located _ (SAtom name)]) : rest) =
+      (Just name, reverse before ++ rest)
+    go before (sx : rest) = go (sx : before) rest
+    go before [] = (Nothing, reverse before)
 
-takeImports :: [SExpr] -> ([CST.Import], [SExpr])
-takeImports (sx@(Loc.Located _ (SList (Loc.Located _ (SAtom "IMPORT") : _))) : rest) =
-  case toImport sx of
-    Right imp -> let (imps, rest') = takeImports rest in (imp : imps, rest')
-    Left _    -> ([], sx : rest)
-takeImports sexprs = ([], sexprs)
+-- | Partition SExprs into imports and non-imports, scanning all forms.
+partitionImports :: [SExpr] -> ([CST.Import], [SExpr])
+partitionImports = go [] []
+  where
+    go imps other [] = (reverse imps, reverse other)
+    go imps other (sx@(Loc.Located _ (SList (Loc.Located _ (SAtom "IMPORT") : _))) : rest) =
+      case toImport sx of
+        Right imp -> go (imp : imps) other rest
+        Left _    -> go imps (sx : other) rest
+    go imps other (sx : rest) = go imps (sx : other) rest
 
 toImport :: SExpr -> Either ConvertError CST.Import
 toImport (Loc.Located _ (SList [Loc.Located _ (SAtom "IMPORT"), Loc.Located _ (SAtom modName)])) =

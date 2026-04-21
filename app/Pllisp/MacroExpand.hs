@@ -2,7 +2,7 @@
 
 -- MODULE
 
-module Pllisp.MacroExpand (expand) where
+module Pllisp.MacroExpand (expand, extractMacroDefs) where
 
 import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
@@ -168,6 +168,16 @@ evalQuasiList callSpan binds (sx : rest) = case Loc.locVal sx of
     sx'   <- evalQuasi callSpan binds sx
     rest' <- evalQuasiList callSpan binds rest
     Right (sx' : rest')
+
+-- MACRO EXTRACTION
+
+-- | Extract (mac ...) forms from a list of SExprs.
+-- Used to collect macro definitions from imported modules.
+extractMacroDefs :: [SExpr.SExpr] -> [SExpr.SExpr]
+extractMacroDefs = filter isMacDef
+  where
+    isMacDef (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : _))) = True
+    isMacDef _ = False
 
 -- HELPERS
 

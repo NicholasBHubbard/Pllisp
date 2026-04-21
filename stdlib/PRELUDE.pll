@@ -1,3 +1,28 @@
-(mac fun (name params body) `(let ((,name (lam ,params ,body))) ,name))
+(mac fun (name params body)
+  `(let ((,name (lam ,params ,body)))
+     ,name))
 
-(type List (a) (Nil) (Cons a %(List a)))
+(type List (a)
+  (Nil)
+  (Cons a %(List a)))
+
+(type Maybe (a)
+  (Nothing)
+  (Just a))
+
+(type Either (a b)
+  (Left a)
+  (Right b))
+
+(mac do (expr) expr)
+(mac do (first &rest rest)
+  `(let ((_ ,first)) (do ,@rest)))
+
+(mac cond ((test body)) `(when ,test ,body))
+(mac cond ((test body) &rest rest) `(if ,test ,body (cond ,@rest)))
+
+(mac when (cond body)
+  `(if ,cond ,body unit))
+
+(mac unless (cond body)
+  `(if ,cond unit ,body))

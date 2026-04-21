@@ -563,6 +563,59 @@ spec = do
     it "rejects inst with no methods" $
       shouldFailSExpr "(inst SHOW %INT)"
 
+  describe "preScanImports" $ do
+    it "extracts import from raw sexprs" $ do
+      sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>" "(import Foo)"
+      let imps = SExpr.preScanImports sexprs
+      length imps `shouldBe` 1
+      CST.impModule (head imps) `shouldBe` "FOO"
+
+    it "extracts import with unqualified names" $ do
+      sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>" "(import Bar (x y))"
+      let imps = SExpr.preScanImports sexprs
+      length imps `shouldBe` 1
+      CST.impModule (head imps) `shouldBe` "BAR"
+      CST.impUnqual (head imps) `shouldBe` ["X", "Y"]
+
+    it "finds imports mixed with other forms" $ do
+      sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>"
+        "(mac foo () `1) (import A) (let ((x 1)) x) (import B (y))"
+      let imps = SExpr.preScanImports sexprs
+      length imps `shouldBe` 2
+      CST.impModule (head imps) `shouldBe` "A"
+      CST.impModule (imps !! 1) `shouldBe` "B"
+
+    it "returns empty when no imports" $ do
+      sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>" "42 (let ((x 1)) x)"
+      SExpr.preScanImports sexprs `shouldBe` []
+
+    it "skips module declaration" $ do
+      sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>"
+        "(module Foo) (import Bar)"
+      let imps = SExpr.preScanImports sexprs
+      length imps `shouldBe` 1
+      CST.impModule (head imps) `shouldBe` "BAR"
+
+  describe "toProgram with interleaved forms" $ do
+    it "finds imports after type definitions" $ do
+      prog <- viaSExpr "(type Foo () (Bar)) (import Mod) 42"
+      length (CST.progImports prog) `shouldBe` 1
+      CST.impModule (head (CST.progImports prog)) `shouldBe` "MOD"
+
+    it "finds module declaration after type definitions" $ do
+      sexprs <- either (fail . show) pure $
+        Parser.parseSExprs "<test>" "(type Foo () (Bar)) (module Main) 42"
+      prog <- either (fail . show) pure $ SExpr.toProgram sexprs
+      CST.progName prog `shouldBe` Just "MAIN"
+
+    it "finds both module and imports after type defs" $ do
+      sexprs <- either (fail . show) pure $
+        Parser.parseSExprs "<test>" "(type Foo () (Bar)) (module Main) (import Lib (x)) 42"
+      prog <- either (fail . show) pure $ SExpr.toProgram sexprs
+      CST.progName prog `shouldBe` Just "MAIN"
+      length (CST.progImports prog) `shouldBe` 1
+      CST.impUnqual (head (CST.progImports prog)) `shouldBe` ["X"]
+
 -- Parse via SExpr pipeline: Text → [SExpr] → CST.Program
 viaSExpr :: T.Text -> IO CST.Program
 viaSExpr src = do

@@ -11,6 +11,12 @@ import qualified Pllisp.Parser      as Parser
 import qualified Pllisp.SExpr       as SExpr
 import qualified Pllisp.SrcLoc      as Loc
 
+-- Parse source to SExprs (without expanding)
+parseSexprs :: T.Text -> Either String [SExpr.SExpr]
+parseSexprs src = case Parser.parseSExprs "<test>" src of
+  Left err -> Left (show err)
+  Right s  -> Right s
+
 -- Parse source to SExprs, expand macros, return stripped results
 expandSrc :: T.Text -> Either String [SExpr.SExprF]
 expandSrc src = do
@@ -111,6 +117,27 @@ spec = do
     it "no macros means identity" $ do
       r <- either fail pure $ expandSrc "42 \"hello\" true"
       r `shouldBe` [SExpr.SInt 42, SExpr.SStr "hello", SExpr.SAtom "TRUE"]
+
+  describe "extractMacroDefs" $ do
+    it "extracts mac forms from mixed sexprs" $ do
+      sexprs <- either (fail . show) pure $ parseSexprs
+        "(mac foo () `1) 42 (mac bar (x) `,x) (let ((y 2)) y)"
+      let macDefs = MacroExpand.extractMacroDefs sexprs
+      length macDefs `shouldBe` 2
+
+    it "returns empty when no mac forms" $ do
+      sexprs <- either (fail . show) pure $ parseSexprs "42 (let ((x 1)) x)"
+      MacroExpand.extractMacroDefs sexprs `shouldBe` []
+
+    it "extracted mac defs are usable in expand" $ do
+      sexprs <- either (fail . show) pure $ parseSexprs
+        "(mac double (x) `(add ,x ,x)) 42 (type Foo () (Bar))"
+      let macDefs = MacroExpand.extractMacroDefs sexprs
+      -- Use extracted mac defs to expand a call
+      callSexprs <- either (fail . show) pure $ parseSexprs "(double 3)"
+      r <- either fail pure $ MacroExpand.expand (macDefs ++ callSexprs)
+      map strip r `shouldBe`
+        [SExpr.SList [l (SExpr.SAtom "ADD"), l (SExpr.SInt 3), l (SExpr.SInt 3)]]
 
   describe "error cases" $ do
     it "wrong number of args" $ do

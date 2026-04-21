@@ -29,7 +29,7 @@
       ;; Constructor names: capitalized identifiers
       ("\\<\\([A-Z][A-Za-z0-9_-]*\\)\\>" 1 font-lock-type-face)
       ;; &rest, &key, %opt parameter markers
-      ("\\<[&%][A-Za-z][A-Za-z0-9_-]*\\>" . font-lock-preprocessor-face)
+      ("\\(?:^\\|[[:space:](]\\)\\([&%][A-Za-z][A-Za-z0-9_-]*\\)" 1 font-lock-preprocessor-face)
       ;; .field access
       ("\\<\\.[a-z][A-Za-z0-9_-]*\\>" . font-lock-variable-name-face)))
   "Font-lock rules for pllisp.")
@@ -41,8 +41,10 @@
     (modify-syntax-entry ?\n ">" st)
     ;; ; is not a comment character in pllisp
     (modify-syntax-entry ?\; "_" st)
-    ;; % is a symbol constituent (type prefix)
+    ;; % is a symbol constituent (type prefix, %opt)
     (modify-syntax-entry ?% "'" st)
+    ;; & is a symbol constituent (&rest, &key)
+    (modify-syntax-entry ?& "_" st)
     ;; . is a symbol constituent for field access
     (modify-syntax-entry ?. "_ p" st)
     ;; ! is a symbol constituent (set!)
