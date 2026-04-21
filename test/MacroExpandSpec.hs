@@ -112,6 +112,27 @@ spec = do
       r <- either fail pure $ expandSrc "42 \"hello\" true"
       r `shouldBe` [SExpr.SInt 42, SExpr.SStr "hello", SExpr.SAtom "TRUE"]
 
+  describe "macro docstrings" $ do
+    it "mac with docstring expands normally" $ do
+      r <- either fail pure $ expandSrc
+        "(mac double \"Doubles a number\" (x) `(add ,x ,x)) (double 3)"
+      r `shouldBe` [SExpr.SList [l (SExpr.SAtom "ADD"), l (SExpr.SInt 3), l (SExpr.SInt 3)]]
+
+    it "mac without docstring still works" $ do
+      r <- either fail pure $ expandSrc
+        "(mac double (x) `(add ,x ,x)) (double 3)"
+      r `shouldBe` [SExpr.SList [l (SExpr.SAtom "ADD"), l (SExpr.SInt 3), l (SExpr.SInt 3)]]
+
+    it "multi-clause mac with docstring" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac do \"Sequence expressions\" (expr) expr)"
+                   , "(mac do (first &rest rest) `(let ((_ ,first)) (do ,@rest)))"
+                   , "(do 1 2)"
+                   ])
+      case r of
+        [SExpr.SList (Loc.Located _ (SExpr.SAtom "LET") : _)] -> pure ()
+        _ -> expectationFailure (show r)
+
   describe "error cases" $ do
     it "wrong number of args" $ do
       case expandSrc "(mac foo (a b) `(add ,a ,b)) (foo 1)" of
