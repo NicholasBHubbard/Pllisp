@@ -60,13 +60,16 @@
   (setq-local font-lock-defaults '(pllisp-font-lock-keywords))
   (setq-local comment-start "# ")
   (setq-local comment-start-skip "#+ *")
+  (setq-local lisp-body-indent 2)
   (setq-local lisp-indent-function #'lisp-indent-function))
 
 ;; Indent rules: number = distinguished args before body
-(dolist (sym '(lam let if case type cls inst mac fun
+(dolist (sym '(lam let if case cls inst
                module import ffi ffi-struct
                ffi-var ffi-enum ffi-callback))
   (put sym 'lisp-indent-function 1))
+(dolist (sym '(mac fun type))
+  (put sym 'lisp-indent-function 2))
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.pll\\'" . pllisp-mode))
