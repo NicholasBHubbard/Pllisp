@@ -1599,17 +1599,17 @@ spec = do
 
 pipeline :: T.Text -> IO T.Text
 pipeline src = do
-  preludeDecls <- Stdlib.loadPrelude
+  preludeSexprs <- Stdlib.loadPrelude
   let sexprs = case Parser.parseSExprs "<test>" src of
         Left e -> error ("parse error: " ++ show e)
         Right s -> s
-      expanded = case MacroExpand.expand sexprs of
+      expanded = case MacroExpand.expand (preludeSexprs ++ sexprs) of
         Left e -> error ("macro error: " ++ e)
         Right s -> s
       prog = case SExpr.toProgram expanded of
         Left e -> error ("sexpr error: " ++ SExpr.ceMsg e)
         Right p -> p
-      exprs = preludeDecls ++ CST.progExprs prog
+      exprs = CST.progExprs prog
   case Resolve.resolve S.empty exprs of
     Left e -> error ("resolve error: " ++ show e)
     Right resolved -> case TC.typecheck M.empty resolved of
@@ -1665,12 +1665,17 @@ runWithModule modName modSrc unquals mainSrc = do
 
 importPipeline :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO T.Text
 importPipeline modName modSrc unquals mainSrc = do
-  preludeDecls <- Stdlib.loadPrelude
+  preludeSexprs <- Stdlib.loadPrelude
   -- Compile module
-  let modTyped = case Parser.parseProgram "<mod>" modSrc of
+  let parseMod = case Parser.parseSExprs "<mod>" modSrc of
         Left e -> error ("mod parse: " ++ show e)
-        Right prog ->
-          let exprs = preludeDecls ++ Mod.desugarTopLevel (CST.progExprs prog)
+        Right s -> case MacroExpand.expand (preludeSexprs ++ s) of
+          Left e -> error ("mod macro: " ++ e)
+          Right expanded -> case SExpr.toProgram expanded of
+            Left e -> error ("mod sexpr: " ++ SExpr.ceMsg e)
+            Right p -> p
+      modTyped =
+          let exprs = Mod.desugarTopLevel (CST.progExprs parseMod)
           in case Resolve.resolve S.empty exprs of
             Left e -> error ("mod resolve: " ++ show e)
             Right resolved -> case TC.typecheck M.empty resolved of
@@ -1680,11 +1685,15 @@ importPipeline modName modSrc unquals mainSrc = do
       exportMap = M.singleton modName modExports
       imports = [CST.Import modName unquals]
       (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap imports
-  case Parser.parseProgram "<main>" mainSrc of
-    Left e -> error ("main parse: " ++ show e)
-    Right prog ->
-      let exprs = preludeDecls ++ Mod.desugarTopLevel (CST.progExprs prog)
-      in case Resolve.resolveWith resolveScope normMap exprs of
+  let parseMain = case Parser.parseSExprs "<main>" mainSrc of
+        Left e -> error ("main parse: " ++ show e)
+        Right s -> case MacroExpand.expand (preludeSexprs ++ s) of
+          Left e -> error ("main macro: " ++ e)
+          Right expanded -> case SExpr.toProgram expanded of
+            Left e -> error ("main sexpr: " ++ SExpr.ceMsg e)
+            Right p -> p
+      exprs = Mod.desugarTopLevel (CST.progExprs parseMain)
+  case Resolve.resolveWith resolveScope normMap exprs of
         Left e -> error ("main resolve: " ++ show e)
         Right resolved -> case TC.typecheck tcCtx resolved of
           Left e -> error ("main typecheck: " ++ show e)

@@ -40,11 +40,12 @@ main = do
 compileFile :: FilePath -> IO ()
 compileFile fp = do
   src <- T.IO.readFile fp
+  preludeSexprs <- Stdlib.loadPrelude
   let render kind sp msg = putStr (Error.renderError src kind sp msg)
   case Parser.parseSExprs fp src of
     Left err -> putStr (MP.errorBundlePretty err)
     Right sexprs ->
-      case MacroExpand.expand sexprs of
+      case MacroExpand.expand (preludeSexprs ++ sexprs) of
         Left err -> putStrLn ("macro error: " ++ err)
         Right expanded ->
           case SExpr.toProgram expanded of
@@ -62,9 +63,8 @@ compileProg fp src render prog = do
   case importResult of
     Left err -> putStrLn err
     Right (exportMap, importedTypedModules) -> do
-      preludeDecls <- Stdlib.loadPrelude
       let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap (CST.progImports prog)
-          exprs = preludeDecls ++ Mod.desugarTopLevel (CST.progExprs prog)
+          exprs = Mod.desugarTopLevel (CST.progExprs prog)
       case Resolve.resolveWith resolveScope normMap exprs of
         Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
         Right resolved ->
@@ -119,16 +119,17 @@ loadModule searchDir imp = do
       src <- T.IO.readFile modFile
       case Parser.parseSExprs modFile src of
         Left err -> pure (Left ("parse error in module " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
-        Right sexprs -> case MacroExpand.expand sexprs of
-          Left err -> pure (Left ("macro error in module " ++ T.unpack modName ++ ": " ++ err))
-          Right expanded -> case SExpr.toProgram expanded of
-            Left err -> pure (Left ("syntax error in module " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg err))
-            Right modProg -> do
-              preludeDecls <- Stdlib.loadPrelude
-              case Resolve.resolve S.empty (preludeDecls ++ Mod.desugarTopLevel (CST.progExprs modProg)) of
-                Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-                Right resolved -> case TC.typecheck M.empty resolved of
-                  Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
-                  Right typed ->
-                    let exports = Mod.collectExports typed
-                    in pure (Right (modName, exports, typed))
+        Right sexprs -> do
+          preludeSexprs <- Stdlib.loadPrelude
+          case MacroExpand.expand (preludeSexprs ++ sexprs) of
+            Left err -> pure (Left ("macro error in module " ++ T.unpack modName ++ ": " ++ err))
+            Right expanded -> case SExpr.toProgram expanded of
+              Left err -> pure (Left ("syntax error in module " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg err))
+              Right modProg ->
+                case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs modProg)) of
+                  Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+                  Right resolved -> case TC.typecheck M.empty resolved of
+                    Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+                    Right typed ->
+                      let exports = Mod.collectExports typed
+                      in pure (Right (modName, exports, typed))

@@ -15,7 +15,6 @@ import qualified Pllisp.SrcLoc as Loc
 data MacroClause = MacroClause
   { mcParams   :: [MacroParam]
   , mcTemplate :: SExpr.SExpr
-  , mcDoc      :: Maybe T.Text
   } deriving (Show)
 
 data MacroParam
@@ -55,12 +54,9 @@ collectMacros table (sx : rest) = case Loc.locVal sx of
        in (table', sx : rest')
 
 parseMacDef :: [SExpr.SExpr] -> Either String (T.Text, MacroClause)
-parseMacDef [Loc.Located _ (SExpr.SAtom name), Loc.Located _ (SExpr.SStr doc), Loc.Located _ (SExpr.SList paramSxs), template] = do
-  params <- parseParams paramSxs
-  Right (name, MacroClause params template (Just doc))
 parseMacDef [Loc.Located _ (SExpr.SAtom name), Loc.Located _ (SExpr.SList paramSxs), template] = do
   params <- parseParams paramSxs
-  Right (name, MacroClause params template Nothing)
+  Right (name, MacroClause params template)
 parseMacDef _ = Left "invalid mac definition"
 
 parseParams :: [SExpr.SExpr] -> Either String [MacroParam]

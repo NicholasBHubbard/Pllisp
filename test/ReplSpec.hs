@@ -96,9 +96,9 @@ data ReplState = ReplState
 -- | Run a sequence of REPL rounds, return the combined stdout output.
 runRepl :: [T.Text] -> IO String
 runRepl rounds = do
-  preludeDecls <- Stdlib.loadPrelude
+  preludeSexprs <- Stdlib.loadPrelude
   stRef <- newIORef (ReplState S.empty M.empty [] [])
-  soFiles <- mapM (\(i, src) -> compileRound preludeDecls stRef i src) (zip [0 :: Int ..] rounds)
+  soFiles <- mapM (\(i, src) -> compileRound preludeSexprs stRef i src) (zip [0 :: Int ..] rounds)
   let driverSrc = genDriver soFiles
   writeFile "/tmp/pll_repl_driver.c" driverSrc
   (ec1, _, err1) <- readProcessWithExitCode "clang"
@@ -113,20 +113,20 @@ runRepl rounds = do
   where
     strip = reverse . dropWhile (== '\n') . reverse
 
-compileRound :: CST.CST -> IORef ReplState -> Int -> T.Text -> IO FilePath
-compileRound preludeDecls stRef roundNum src = do
+compileRound :: [SExpr.SExpr] -> IORef ReplState -> Int -> T.Text -> IO FilePath
+compileRound preludeSexprs stRef roundNum src = do
   st <- readIORef stRef
   let sexprs = case Parser.parseSExprs "<repl>" src of
         Left e -> error ("parse error: " ++ show e)
         Right s -> s
-      expanded = case MacroExpand.expand sexprs of
+      expanded = case MacroExpand.expand (preludeSexprs ++ sexprs) of
         Left e -> error ("macro error: " ++ e)
         Right s -> s
       prog = case SExpr.toProgram expanded of
         Left e -> error ("sexpr error: " ++ SExpr.ceMsg e)
         Right p -> p
       -- Include accumulated defs (TYPE declarations etc.) before this round's exprs
-      exprs = preludeDecls ++ rsPrevExprs st ++ CST.progExprs prog
+      exprs = rsPrevExprs st ++ CST.progExprs prog
   case Resolve.resolve (rsScope st) exprs of
     Left e -> error ("resolve error: " ++ show e)
     Right resolved -> case TC.typecheck (rsContext st) resolved of

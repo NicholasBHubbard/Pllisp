@@ -1,0 +1,3 @@
+(mac fun (name params body) `(let ((,name (lam ,params ,body))) ,name))
+
+(type List (a) (Nil) (Cons a %(List a)))
