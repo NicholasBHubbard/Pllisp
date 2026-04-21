@@ -87,6 +87,10 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
   SList (Loc.Located _ (SAtom "CLS")  : rest) -> Loc.Located sp <$> toCls sp rest
   SList (Loc.Located _ (SAtom "INST") : rest) -> Loc.Located sp <$> toInst sp rest
   SList (Loc.Located _ (SAtom "FFI")  : rest) -> Loc.Located sp <$> toFFIDecl sp rest
+  SList (Loc.Located _ (SAtom "FFI-STRUCT") : rest) -> Loc.Located sp <$> toFFIStruct sp rest
+  SList (Loc.Located _ (SAtom "FFI-VAR") : rest) -> Loc.Located sp <$> toFFIVar sp rest
+  SList (Loc.Located _ (SAtom "FFI-ENUM") : rest) -> Loc.Located sp <$> toFFIEnum sp rest
+  SList (Loc.Located _ (SAtom "FFI-CALLBACK") : rest) -> Loc.Located sp <$> toFFICallback sp rest
   SList [Loc.Located _ (SAtom dotName), arg]
     | Just field <- T.stripPrefix "." dotName -> do
         arg' <- toExpr arg
@@ -306,10 +310,85 @@ toInstMethod (Loc.Located sp _) = Left $ ConvertError sp "invalid instance metho
 
 toFFIDecl :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
 toFFIDecl _ [Loc.Located _ (SAtom name), Loc.Located _ (SList paramTyExprs), retTyExpr] = do
-  paramTys <- mapM toTypeArg paramTyExprs
-  retTy <- toTypeArg retTyExpr
+  paramTys <- mapM toCTypeArg paramTyExprs
+  retTy <- toCTypeArg retTyExpr
   Right $ CST.ExprFFI name paramTys retTy
 toFFIDecl sp _ = Left $ ConvertError sp "invalid ffi: expected (ffi name (param-types...) return-type)"
+
+toFFIStruct :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
+toFFIStruct _ (Loc.Located _ (SAtom name) : fields)
+  | not (null fields) = do
+      fs <- mapM toStructField fields
+      Right $ CST.ExprFFIStruct name fs
+toFFIStruct sp _ = Left $ ConvertError sp "invalid ffi-struct: expected (ffi-struct Name (field %CType)...)"
+
+toStructField :: SExpr -> Either ConvertError (CST.Symbol, Ty.CType)
+toStructField (Loc.Located _ (SList [Loc.Located _ (SAtom fname), tyExpr])) = do
+  ct <- toCTypeArg tyExpr
+  Right (fname, ct)
+toStructField (Loc.Located sp _) = Left $ ConvertError sp "invalid struct field: expected (name %CType)"
+
+toFFIVar :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
+toFFIVar _ [Loc.Located _ (SAtom name), Loc.Located _ (SList paramTyExprs), retTyExpr] = do
+  paramTys <- mapM toCTypeArg paramTyExprs
+  retTy <- toCTypeArg retTyExpr
+  Right $ CST.ExprFFIVar name paramTys retTy
+toFFIVar sp _ = Left $ ConvertError sp "invalid ffi-var: expected (ffi-var name (fixed-params...) return-type)"
+
+toFFIEnum :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
+toFFIEnum _ (Loc.Located _ (SAtom name) : variants)
+  | not (null variants) = do
+      vs <- mapM toEnumVariant variants
+      Right $ CST.ExprFFIEnum name vs
+toFFIEnum sp _ = Left $ ConvertError sp "invalid ffi-enum: expected (ffi-enum Name (Variant value)...)"
+
+toEnumVariant :: SExpr -> Either ConvertError (CST.Symbol, Integer)
+toEnumVariant (Loc.Located _ (SList [Loc.Located _ (SAtom name), Loc.Located _ (SInt val)])) =
+  Right (name, val)
+toEnumVariant (Loc.Located sp _) = Left $ ConvertError sp "invalid enum variant: expected (NAME integer)"
+
+toFFICallback :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
+toFFICallback _ [Loc.Located _ (SAtom name), Loc.Located _ (SList paramTyExprs), retTyExpr] = do
+  paramTys <- mapM toCTypeArg paramTyExprs
+  retTy <- toCTypeArg retTyExpr
+  Right $ CST.ExprFFICallback name paramTys retTy
+toFFICallback sp _ = Left $ ConvertError sp "invalid ffi-callback: expected (ffi-callback name (param-types...) return-type)"
+
+toCTypeArg :: SExpr -> Either ConvertError Ty.CType
+toCTypeArg (Loc.Located _ (SType inner)) = toCType inner
+-- (%ARR N %ElemType) is parsed as a list: [%ARR, N, %ElemType]
+toCTypeArg (Loc.Located _ (SList (Loc.Located _ (SType (Loc.Located _ (SAtom "ARR"))) : rest))) =
+  toArrType rest
+toCTypeArg (Loc.Located sp _) = Left $ ConvertError sp "invalid C type in ffi declaration"
+
+toArrType :: [SExpr] -> Either ConvertError Ty.CType
+toArrType [Loc.Located _ (SInt n), elemExpr] = do
+  elemTy <- toCTypeArg elemExpr
+  Right $ Ty.CArr (fromIntegral n) elemTy
+toArrType _ = Left $ ConvertError dummySpan "invalid array type: expected (%ARR count %ElemType)"
+
+toCType :: SExpr -> Either ConvertError Ty.CType
+toCType (Loc.Located _ (SAtom name)) = case name of
+  -- Backward-compatible aliases: existing pllisp types map to native-size C types
+  "INT"  -> Right Ty.CI64
+  "FLT"  -> Right Ty.CF64
+  "STR"  -> Right Ty.CPtr
+  "UNIT" -> Right Ty.CVoid
+  -- Explicit C type names
+  "I8"   -> Right Ty.CI8
+  "I16"  -> Right Ty.CI16
+  "I32"  -> Right Ty.CI32
+  "I64"  -> Right Ty.CI64
+  "U8"   -> Right Ty.CU8
+  "U16"  -> Right Ty.CU16
+  "U32"  -> Right Ty.CU32
+  "U64"  -> Right Ty.CU64
+  "F32"  -> Right Ty.CF32
+  "F64"  -> Right Ty.CF64
+  "PTR"  -> Right Ty.CPtr
+  "VOID" -> Right Ty.CVoid
+  other  -> Right $ Ty.CStruct other  -- struct name reference for nested structs
+toCType (Loc.Located sp _) = Left $ ConvertError sp "invalid C type in ffi declaration"
 
 -- PATTERNS
 

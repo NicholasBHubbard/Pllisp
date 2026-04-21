@@ -5,7 +5,7 @@ module Main (main) where
 import System.Environment (getArgs)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FilePath (takeDirectory, dropExtension, (</>))
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, removeFile)
 import System.Process (readProcessWithExitCode)
 
 import qualified Data.Map.Strict as M
@@ -27,6 +27,7 @@ import qualified Pllisp.SExpr          as SExpr
 import qualified Pllisp.Stdlib         as Stdlib
 import qualified Pllisp.Resolve        as Resolve
 import qualified Pllisp.SrcLoc         as Loc
+import qualified Pllisp.Type           as Ty
 import qualified Pllisp.TypeCheck      as TC
 
 main :: IO ()
@@ -77,10 +78,14 @@ compileProg fp src render prog = do
                       ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
                       base = dropExtension fp
                       llFile = base ++ ".ll"
+                      bridgeFile = base ++ "_ffi_bridge.c"
                       exeFile = base
                   T.IO.writeFile llFile ir
+                  T.IO.writeFile bridgeFile Ty.ffiBridgeC
                   (ec, _, err') <- readProcessWithExitCode
-                    "clang" [llFile, "-o", exeFile, "-lm", "-lpcre2-8"] ""
+                    "clang" [llFile, bridgeFile, "-o", exeFile,
+                             "-lm", "-lpcre2-8", "-lffi"] ""
+                  removeFile bridgeFile
                   case ec of
                     ExitFailure _ -> do
                       putStrLn ("clang failed:\n" ++ err')

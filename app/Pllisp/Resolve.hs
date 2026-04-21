@@ -41,7 +41,11 @@ data RExprF
   | RKeyArg CST.Symbol RExpr
   | RCls CST.Symbol [CST.Symbol] [CST.ClassMethod]
   | RInst CST.Symbol Ty.Type [(CST.Symbol, RExpr)]
-  | RFFI CST.Symbol [Ty.Type] Ty.Type
+  | RFFI CST.Symbol [Ty.CType] Ty.CType
+  | RFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
+  | RFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | RFFIEnum CST.Symbol [(CST.Symbol, Integer)]
+  | RFFICallback CST.Symbol [Ty.CType] Ty.CType
   deriving (Eq, Show)
 
 data RLamList = RLamList
@@ -80,7 +84,8 @@ resolveWith importedNames normMap cst =
   let ctorNames = S.fromList (extractCtorNames cst)
       classMethodNames = S.fromList (extractClassMethodNames cst)
       ffiNames = S.fromList (extractFFINames cst)
-      initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, classMethodNames, ffiNames, importedNames]]
+      enumNames = S.fromList (extractEnumNames cst)
+      initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, classMethodNames, ffiNames, enumNames, importedNames]]
       (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) (initialScope, normMap) ()
   in if null errors
      then Right result
@@ -102,6 +107,15 @@ extractFFINames :: CST.CST -> [CST.Symbol]
 extractFFINames = concatMap go
   where
     go (Loc.Located _ (CST.ExprFFI name _ _)) = [name]
+    go (Loc.Located _ (CST.ExprFFIStruct name _)) = [name]
+    go (Loc.Located _ (CST.ExprFFIVar name _ _)) = [name]
+    go (Loc.Located _ (CST.ExprFFICallback name _ _)) = [name]
+    go _ = []
+
+extractEnumNames :: CST.CST -> [CST.Symbol]
+extractEnumNames = concatMap go
+  where
+    go (Loc.Located _ (CST.ExprFFIEnum _ variants)) = map fst variants
     go _ = []
 
 resolveExpr :: CST.Expr -> Resolve RExpr
@@ -148,6 +162,14 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ RInst className ty rmethods
   CST.ExprFFI name paramTys retTy ->
     pure $ RFFI name paramTys retTy
+  CST.ExprFFIStruct name fields ->
+    pure $ RFFIStruct name fields
+  CST.ExprFFIVar name paramTys retTy ->
+    pure $ RFFIVar name paramTys retTy
+  CST.ExprFFIEnum name variants ->
+    pure $ RFFIEnum name variants
+  CST.ExprFFICallback name paramTys retTy ->
+    pure $ RFFICallback name paramTys retTy
   CST.ExprFieldAccess field subExpr -> do
     rexpr <- resolveExpr subExpr
     pure $ RFieldAccess field rexpr

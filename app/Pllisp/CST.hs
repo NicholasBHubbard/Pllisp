@@ -42,7 +42,11 @@ data ExprF
   | ExprKeyArg Symbol Expr              -- &key name value (only in app args)
   | ExprCls Symbol [Symbol] [ClassMethod]  -- (CLS Name (tyvars...) methods...)
   | ExprInst Symbol Ty.Type [(Symbol, Expr)]  -- (INST ClassName %Type methods...)
-  | ExprFFI Symbol [Ty.Type] Ty.Type  -- (FFI name (param-types...) return-type)
+  | ExprFFI Symbol [Ty.CType] Ty.CType  -- (FFI name (c-param-types...) c-return-type)
+  | ExprFFIStruct Symbol [(Symbol, Ty.CType)]  -- (FFI-STRUCT Name (field %CType)...)
+  | ExprFFIVar Symbol [Ty.CType] Ty.CType  -- (FFI-VAR name (fixed-params...) ret)
+  | ExprFFIEnum Symbol [(Symbol, Integer)]  -- (FFI-ENUM Name (Variant value)...)
+  | ExprFFICallback Symbol [Ty.CType] Ty.CType  -- (FFI-CALLBACK name (c-param-types...) c-return-type)
   deriving (Eq, Show)
 
 data ClassMethod = ClassMethod

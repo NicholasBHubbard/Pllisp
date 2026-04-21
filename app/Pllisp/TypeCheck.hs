@@ -24,15 +24,24 @@ typecheck importedCtx exprs =
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
       ffiDecls = extractFFIDecls exprs
       ffiCtx = buildFFIContext ffiDecls
+      ffiStructDecls = extractFFIStructDecls exprs
+      ffiStructCtorCtx = buildFFIStructCtorContext ffiStructDecls
+      ffiStructFieldMap = buildFFIStructFieldMap ffiStructDecls
+      ffiVarDecls = extractFFIVarDecls exprs
+      ffiVarCtx = buildFFIContext ffiVarDecls
+      variadicNames = S.fromList [name | (name, _, _) <- ffiVarDecls]
+      enumCtx = buildEnumContext exprs
+      callbackCtx = buildCallbackContext exprs
       -- Build class method schemes and instance env
       classDecls = extractClassDecls exprs
       (classEnv, methodEnv, methodCtx) = buildClassContext classDecls
-      initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx, ffiCtx, methodCtx]
-      fieldMap = buildFieldMap typeDecls
+      initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx, ffiCtx, ffiStructCtorCtx, ffiVarCtx, enumCtx, callbackCtx, methodCtx]
+      fieldMap = M.union (buildFieldMap typeDecls) ffiStructFieldMap
       -- Type-check instance method bodies in a first pass
       instDecls = extractInstDecls exprs
       (instanceEnv, instErrs) = buildInstanceEnv classEnv methodEnv initialCtx fieldMap instDecls
-      env = InferEnv initialCtx fieldMap M.empty methodEnv instanceEnv
+      structFieldsMap = M.fromList ffiStructDecls
+      env = InferEnv initialCtx fieldMap M.empty methodEnv instanceEnv variadicNames structFieldsMap
       (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) env 0
   in case solveAll constraints of
     Left solveErrs -> Left (instErrs ++ inferErrs ++ solveErrs)
@@ -90,12 +99,17 @@ data InstanceInfo = InstanceInfo
 type ClassEnv = M.Map CST.Symbol [CST.Symbol]     -- class name -> type var names
 type InstanceEnv = M.Map CST.Symbol [InstanceInfo] -- class name -> instances
 
+-- | Full struct field info: all fields including arrays
+type StructFieldMap = M.Map CST.Symbol [(CST.Symbol, Ty.CType)]
+
 data InferEnv = InferEnv
-  { ieCtx       :: !Context
-  , ieFields    :: !FieldMap
-  , ieFuncs     :: !FuncInfoMap
-  , ieMethods   :: !MethodEnv
-  , ieInstances :: !InstanceEnv
+  { ieCtx          :: !Context
+  , ieFields       :: !FieldMap
+  , ieFuncs        :: !FuncInfoMap
+  , ieMethods      :: !MethodEnv
+  , ieInstances    :: !InstanceEnv
+  , ieVariadics    :: !(S.Set CST.Symbol)
+  , ieStructFields :: !StructFieldMap
   }
 
 -- | Inference monad that collects errors instead of failing
@@ -138,7 +152,11 @@ data TRExprF
   | TRCase TRExpr [(TRPattern, TRExpr)]
   | TRLoop [(CST.Symbol, Ty.Type)] TRExpr
   | TRRecur [TRExpr]
-  | TRFFI CST.Symbol [Ty.Type] Ty.Type
+  | TRFFI CST.Symbol [Ty.CType] Ty.CType
+  | TRFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
+  | TRFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | TRFFIEnum CST.Symbol [(CST.Symbol, Integer)]
+  | TRFFICallback CST.Symbol [Ty.CType] Ty.CType
   deriving (Eq, Show)
 
 data TRPattern
@@ -213,6 +231,10 @@ instance Substitutable TRExprF where
   tvs (TRLoop params body) = foldr (S.union . tvs . snd) S.empty params `S.union` tvs body
   tvs (TRRecur args) = tvs args
   tvs (TRFFI _ _ _) = S.empty
+  tvs (TRFFIStruct _ _) = S.empty
+  tvs (TRFFIVar _ _ _) = S.empty
+  tvs (TRFFIEnum _ _) = S.empty
+  tvs (TRFFICallback _ _ _) = S.empty
 
   apply _ (TRLit l) = TRLit l
   apply _ (TRBool b) = TRBool b
@@ -227,6 +249,10 @@ instance Substitutable TRExprF where
   apply s (TRLoop params body) = TRLoop [(n, apply s t) | (n, t) <- params] (apply s body)
   apply s (TRRecur args) = TRRecur (apply s args)
   apply _ (TRFFI n pts rt) = TRFFI n pts rt
+  apply _ (TRFFIStruct n fs) = TRFFIStruct n fs
+  apply _ (TRFFIVar n pts rt) = TRFFIVar n pts rt
+  apply _ (TRFFIEnum n vs) = TRFFIEnum n vs
+  apply _ (TRFFICallback n pts rt) = TRFFICallback n pts rt
 
 compose :: Subst -> Subst -> Subst
 compose a b = M.map (apply a) (b `M.union` a)
@@ -239,15 +265,24 @@ extractTypeDecls = foldr go []
     go (Loc.Located _ (Res.RType name params ctors)) acc = (name, params, ctors) : acc
     go _ acc = acc
 
-extractFFIDecls :: [Res.RExpr] -> [(CST.Symbol, [Ty.Type], Ty.Type)]
+extractFFIDecls :: [Res.RExpr] -> [(CST.Symbol, [Ty.CType], Ty.CType)]
 extractFFIDecls = foldr go []
   where
     go (Loc.Located _ (Res.RFFI name paramTys retTy)) acc = (name, paramTys, retTy) : acc
     go _ acc = acc
 
-buildFFIContext :: [(CST.Symbol, [Ty.Type], Ty.Type)] -> Context
-buildFFIContext = M.fromList . map (\(name, paramTys, retTy) ->
-  (name, Forall S.empty (Ty.TyFun paramTys retTy)))
+buildFFIContext :: [(CST.Symbol, [Ty.CType], Ty.CType)] -> Context
+buildFFIContext = M.fromList . map (\(name, paramCTys, retCTy) ->
+  let -- CPtr parameters become polymorphic type variables so they accept
+      -- any pointer type (strings, structs, closures, etc.)
+      (paramTys, nextVar) = foldr (\ct (acc, n) -> case ct of
+        Ty.CPtr -> (Ty.TyVar n : acc, n + 1)
+        _       -> (Ty.cTypeToPllisp ct : acc, n)) ([], 100) paramCTys
+      (retTy, maxVar) = case retCTy of
+        Ty.CPtr -> (Ty.TyVar nextVar, nextVar + 1)
+        _       -> (Ty.cTypeToPllisp retCTy, nextVar)
+      ptrVars = S.fromList [100 .. maxVar - 1]
+  in (name, Forall ptrVars (Ty.TyFun paramTys retTy)))
 
 buildCtorContext :: [(CST.Symbol, [CST.Symbol], [CST.DataCon])] -> Context
 buildCtorContext = M.fromList . concatMap buildCtors
@@ -274,6 +309,58 @@ buildCtorContext = M.fromList . concatMap buildCtors
       Ty.TyCon name args -> Ty.TyCon name (map (resolveTypeParams paramMap) args)
       Ty.TyFun args ret -> Ty.TyFun (map (resolveTypeParams paramMap) args) (resolveTypeParams paramMap ret)
       _ -> ty
+
+-- FFI STRUCT CONTEXT
+
+extractFFIStructDecls :: [Res.RExpr] -> [(CST.Symbol, [(CST.Symbol, Ty.CType)])]
+extractFFIStructDecls = foldr go []
+  where
+    go (Loc.Located _ (Res.RFFIStruct name fields)) acc = (name, fields) : acc
+    go _ acc = acc
+
+buildFFIStructCtorContext :: [(CST.Symbol, [(CST.Symbol, Ty.CType)])] -> Context
+buildFFIStructCtorContext = M.fromList . map (\(name, fields) ->
+  let scalarFields = filter (isScalarCType . snd) fields
+      argTys = map (Ty.cTypeToPllisp . snd) scalarFields
+      resultTy = Ty.TyCon name []
+      ctorTy = if null argTys then resultTy else Ty.TyFun argTys resultTy
+  in (name, Forall S.empty ctorTy))
+
+isScalarCType :: Ty.CType -> Bool
+isScalarCType (Ty.CArr _ _) = False
+isScalarCType _ = True
+
+buildFFIStructFieldMap :: [(CST.Symbol, [(CST.Symbol, Ty.CType)])] -> FieldMap
+buildFFIStructFieldMap = M.fromList . concatMap go
+  where
+    go (ctorName, fields) =
+      let n = length fields
+      in [(fname, (ctorName, idx, n)) | (idx, (fname, _)) <- zip [0..] fields]
+
+-- FFI VARIADIC CONTEXT
+
+extractFFIVarDecls :: [Res.RExpr] -> [(CST.Symbol, [Ty.CType], Ty.CType)]
+extractFFIVarDecls = foldr go []
+  where
+    go (Loc.Located _ (Res.RFFIVar name paramTys retTy)) acc = (name, paramTys, retTy) : acc
+    go _ acc = acc
+
+-- FFI ENUM CONTEXT
+
+buildEnumContext :: [Res.RExpr] -> Context
+buildEnumContext = M.fromList . concatMap go
+  where
+    go (Loc.Located _ (Res.RFFIEnum _ variants)) =
+      [(name, Forall S.empty Ty.TyInt) | (name, _) <- variants]
+    go _ = []
+
+buildCallbackContext :: [Res.RExpr] -> Context
+buildCallbackContext = M.fromList . concatMap go
+  where
+    go (Loc.Located _ (Res.RFFICallback name paramCTys retCTy)) =
+      let closureTy = Ty.TyFun (map Ty.cTypeToPllisp paramCTys) (Ty.cTypeToPllisp retCTy)
+      in [(name, Forall S.empty (Ty.TyFun [closureTy] Ty.TyStr))]
+    go _ = []
 
 buildFieldMap :: [(CST.Symbol, [CST.Symbol], [CST.DataCon])] -> FieldMap
 buildFieldMap = M.fromList . concatMap go
@@ -340,7 +427,7 @@ buildInstanceEnv _classEnv methodEnv ctx fieldMap instDecls =
   in (instEnv, errs)
   where
     checkInst (className, instTy, methods) =
-      let env = InferEnv ctx fieldMap M.empty methodEnv M.empty
+      let env = InferEnv ctx fieldMap M.empty methodEnv M.empty S.empty M.empty
           (typedMethods, _, (constraints, inferErrs)) =
             RWS.runRWS (traverse (checkMethod className instTy) methods) env 0
           (solveErrs, resolvedMethods) = case solveAll constraints of
@@ -743,7 +830,17 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
           pure (posAts ++ keyAts)
 
     rt <- fresh
-    constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
+    variadics <- ieVariadics <$> RWS.ask
+    let isVariadic = case fexpr of
+          Loc.Located _ (Res.RVar vb) -> S.member (Res.symName vb) variadics
+          _ -> False
+    if isVariadic
+      then case typeOf ft of
+        Ty.TyFun fixedTys fRet -> do
+          sequence_ [constrain sp (typeOf a) ft' | (a, ft') <- zip ats fixedTys]
+          constrain sp fRet rt
+        _ -> constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
+      else constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
     pure $ Ty.Typed rt (TRApp ft ats)
 
   Res.RKeyArg _ _ -> do
@@ -801,37 +898,63 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ Ty.Typed (Ty.TyCon name []) (TRType name params ctors)
   Res.RFFI name paramTys retTy ->
     pure $ Ty.Typed Ty.TyUnit (TRFFI name paramTys retTy)
+  Res.RFFIStruct name fields ->
+    pure $ Ty.Typed Ty.TyUnit (TRFFIStruct name fields)
+  Res.RFFIVar name paramTys retTy ->
+    pure $ Ty.Typed Ty.TyUnit (TRFFIVar name paramTys retTy)
+  Res.RFFIEnum name variants ->
+    pure $ Ty.Typed Ty.TyUnit (TRFFIEnum name variants)
+  Res.RFFICallback name paramTys retTy ->
+    pure $ Ty.Typed Ty.TyUnit (TRFFICallback name paramTys retTy)
   Res.RFieldAccess fieldName subExpr -> do
     scrutExpr <- infer subExpr
     let scrutTy = typeOf scrutExpr
     fmap <- ieFields <$> RWS.ask
+    structFields <- ieStructFields <$> RWS.ask
     case M.lookup fieldName fmap of
       Nothing -> do
         t <- recordError sp ("no field '" ++ T.unpack fieldName ++ "'")
         pure $ Ty.Typed t TRUnit
-      Just (ctorName, fieldIdx, numFields) -> do
-        ctx <- askCtx
-        ctorTy <- case M.lookup ctorName ctx of
-          Just scheme -> instantiate scheme
-          Nothing     -> recordError sp ("unknown constructor " ++ T.unpack ctorName)
-        let (argTys, resultTy) = case ctorTy of
-              Ty.TyFun as r -> (as, r)
-              t             -> ([], t)
-        constrain sp scrutTy resultTy
-        if fieldIdx >= length argTys || numFields /= length argTys
-          then do
-            t <- recordError sp ("field index out of bounds for " ++ T.unpack fieldName)
-            pure $ Ty.Typed t TRUnit
-          else do
-            let fieldTy = argTys !! fieldIdx
+      Just (ctorName, fieldIdx, numFields) ->
+        -- For FFI structs: use full field list (includes arrays)
+        case M.lookup ctorName structFields of
+          Just allFields -> do
+            let resultTy = Ty.TyCon ctorName []
+            constrain sp scrutTy resultTy
+            let allFieldTys = map (Ty.cTypeToPllisp . snd) allFields
+                fieldTy = allFieldTys !! fieldIdx
                 pats = [if i == fieldIdx
                         then TRPatVar fieldName ft
                         else TRPatWild ft
-                       | (i, ft) <- zip [0..] argTys]
+                       | (i, ft) <- zip [0..] allFieldTys]
                 pat = TRPatCon ctorName scrutTy pats
                 binding = Res.VarBinding 0 fieldName
                 body = Loc.Located sp (Ty.Typed fieldTy (TRVar binding))
             pure $ Ty.Typed fieldTy (TRCase scrutExpr [(pat, body)])
+          Nothing -> do
+            -- Regular ADT field access
+            ctx <- askCtx
+            ctorTy <- case M.lookup ctorName ctx of
+              Just scheme -> instantiate scheme
+              Nothing     -> recordError sp ("unknown constructor " ++ T.unpack ctorName)
+            let (argTys, resultTy) = case ctorTy of
+                  Ty.TyFun as r -> (as, r)
+                  t             -> ([], t)
+            constrain sp scrutTy resultTy
+            if fieldIdx >= length argTys || numFields /= length argTys
+              then do
+                t <- recordError sp ("field index out of bounds for " ++ T.unpack fieldName)
+                pure $ Ty.Typed t TRUnit
+              else do
+                let fieldTy = argTys !! fieldIdx
+                    pats = [if i == fieldIdx
+                            then TRPatVar fieldName ft
+                            else TRPatWild ft
+                           | (i, ft) <- zip [0..] argTys]
+                    pat = TRPatCon ctorName scrutTy pats
+                    binding = Res.VarBinding 0 fieldName
+                    body = Loc.Located sp (Ty.Typed fieldTy (TRVar binding))
+                pure $ Ty.Typed fieldTy (TRCase scrutExpr [(pat, body)])
   Res.RCase scrutinee arms -> do
     scrutExpr <- infer scrutinee
     let scrutTy = typeOf scrutExpr

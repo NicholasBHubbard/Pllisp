@@ -24,8 +24,9 @@ data CtorInfo = CtorInfo
   } deriving (Show)
 
 data FFIInfo = FFIInfo
-  { ffiParamTys :: [Ty.Type]
-  , ffiRetTy    :: Ty.Type
+  { ffiParamCTys :: [Ty.CType]
+  , ffiRetCTy    :: Ty.CType
+  , ffiIsVariadic :: !Bool
   } deriving (Show)
 
 data CgState = CgState
@@ -38,7 +39,9 @@ data CgState = CgState
   , csInstrs  :: [T.Text]                  -- instructions, reverse order
   , csTcoLoop :: Maybe (T.Text, [(CST.Symbol, T.Text, Ty.Type)])
                  -- TCO: (loop label, [(param name, alloca operand, type)])
-  , csFFI    :: M.Map CST.Symbol FFIInfo
+  , csFFI       :: M.Map CST.Symbol FFIInfo
+  , csStructs   :: M.Map CST.Symbol Ty.StructLayout -- FFI struct layouts
+  , csCallbacks :: M.Map CST.Symbol ([Ty.CType], Ty.CType) -- callback: param CTypes, ret CType
   }
 
 type CgM = State CgState
@@ -52,11 +55,14 @@ slotSize = 8
 codegen :: LL.LLProgram -> T.Text
 codegen prog = evalState go initState
   where
-    ctors    = collectCtors (LL.llExprs prog)
-    ffis     = collectFFI (LL.llExprs prog)
-    defMap   = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
-    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis
-    ffiDecls = map genFFIDecl (M.toList ffis)
+    ctors     = collectCtors (LL.llExprs prog)
+    ffis      = collectFFI (LL.llExprs prog)
+    structs   = collectFFIStructs (LL.llExprs prog)
+    callbacks = collectCallbacks (LL.llExprs prog)
+    defMap    = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
+    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis structs callbacks
+    ffiList = filter (not . isBuiltinExtern . fst) (M.toList ffis)
+    ffiDecls = map genFFIDecl ffiList
 
     go :: CgM T.Text
     go = do
@@ -110,7 +116,31 @@ externDecls = T.unlines
   , "declare void @pcre2_code_free_8(ptr)"
   , "declare i32 @pcre2_substitute_8(ptr, ptr, i64, i64, i32, ptr, ptr, ptr, i64, ptr, ptr)"
   , "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)"
+  -- libffi bridge
+  , "declare void @pll_ffi_call(ptr, i32, ptr, i32, ptr, ptr)"
+  , "declare void @pll_ffi_call_var(ptr, i32, i32, ptr, i32, ptr, ptr)"
+  , "declare ptr @pll_make_callback(ptr, i32, ptr, i32)"
+  , "declare i64 @pll_test_apply_int(ptr, i64)"
+  , "declare i64 @pll_point_sum(ptr)"
+  , "declare void @pll_point_scale(ptr, i64)"
   ]
+
+-- Functions already declared in externDecls that shouldn't be re-declared by FFI
+builtinExterns :: S.Set CST.Symbol
+builtinExterns = S.fromList
+  [ "GC_MALLOC", "GC_REALLOC", "GC_INIT", "GC_GCOLLECT", "GC_GET_HEAP_SIZE"
+  , "PUTS", "STRLEN", "STRCMP", "STRCPY", "STRCAT", "STRSTR", "MEMCPY"
+  , "SNPRINTF", "FGETS", "FEOF"
+  , "PCRE2_COMPILE_8", "PCRE2_MATCH_DATA_CREATE_FROM_PATTERN_8"
+  , "PCRE2_MATCH_8", "PCRE2_GET_OVECTOR_POINTER_8", "PCRE2_GET_OVECTOR_COUNT_8"
+  , "PCRE2_MATCH_DATA_FREE_8", "PCRE2_CODE_FREE_8", "PCRE2_SUBSTITUTE_8"
+  , "PLL_FFI_CALL", "PLL_FFI_CALL_VAR"
+  , "PLL_MAKE_CALLBACK", "PLL_TEST_APPLY_INT"
+  , "PLL_POINT_SUM", "PLL_POINT_SCALE"
+  ]
+
+isBuiltinExtern :: CST.Symbol -> Bool
+isBuiltinExtern name = S.member (T.toUpper name) builtinExterns
 
 fmtConstants :: T.Text
 fmtConstants = T.unlines
@@ -148,20 +178,39 @@ collectCtors = foldl' go M.empty
 collectFFI :: [LL.LLExpr] -> M.Map CST.Symbol FFIInfo
 collectFFI = foldl' go M.empty
   where
-    go acc (Ty.Typed _ (LL.LLFFI name paramTys retTy)) =
-      M.insert name (FFIInfo paramTys retTy) acc
+    go acc (Ty.Typed _ (LL.LLFFI name paramCTys retCTy)) =
+      M.insert name (FFIInfo paramCTys retCTy False) acc
+    go acc (Ty.Typed _ (LL.LLFFIVar name paramCTys retCTy)) =
+      M.insert name (FFIInfo paramCTys retCTy True) acc
+    go acc _ = acc
+
+collectFFIStructs :: [LL.LLExpr] -> M.Map CST.Symbol Ty.StructLayout
+collectFFIStructs = foldl' go M.empty
+  where
+    go acc (Ty.Typed _ (LL.LLFFIStruct name fields)) =
+      M.insert name (Ty.computeStructLayoutWith acc fields) acc
+    go acc _ = acc
+
+collectCallbacks :: [LL.LLExpr] -> M.Map CST.Symbol ([Ty.CType], Ty.CType)
+collectCallbacks = foldl' go M.empty
+  where
+    go acc (Ty.Typed _ (LL.LLFFICallback name paramCTys retCTy)) =
+      M.insert name (paramCTys, retCTy) acc
     go acc _ = acc
 
 genFFIDecl :: (CST.Symbol, FFIInfo) -> T.Text
-genFFIDecl (name, ffi) =
-  let cName = sanitize (T.toLower name)
-      retTyStr = ffiRetType (ffiRetTy ffi)
-      paramTyStrs = T.intercalate ", " (map llvmType (ffiParamTys ffi))
-  in "declare " <> retTyStr <> " @" <> cName <> "(" <> paramTyStrs <> ")"
-
-ffiRetType :: Ty.Type -> T.Text
-ffiRetType Ty.TyUnit = "void"
-ffiRetType t = llvmType t
+genFFIDecl (name, ffi)
+  | ffiIsVariadic ffi =
+    let cName = sanitize (T.toLower name)
+        retTyStr = if ffiRetCTy ffi == Ty.CVoid then "void" else Ty.cTypeLlvm (ffiRetCTy ffi)
+        paramTyStrs = T.intercalate ", " (map Ty.cTypeLlvm (ffiParamCTys ffi))
+        sep = if null (ffiParamCTys ffi) then "" else ", "
+    in "declare " <> retTyStr <> " @" <> cName <> "(" <> paramTyStrs <> sep <> "...)"
+  | otherwise =
+    let cName = sanitize (T.toLower name)
+        retTyStr = if ffiRetCTy ffi == Ty.CVoid then "void" else Ty.cTypeLlvm (ffiRetCTy ffi)
+        paramTyStrs = T.intercalate ", " (map Ty.cTypeLlvm (ffiParamCTys ffi))
+    in "declare " <> retTyStr <> " @" <> cName <> "(" <> paramTyStrs <> ")"
 
 -- LLVM TYPE MAPPING
 
@@ -296,8 +345,13 @@ genMain exprs = do
     ++ [ "}" ]
 
 genTopExpr :: LL.LLExpr -> CgM ()
-genTopExpr (Ty.Typed _ (LL.LLType {})) = pure ()
-genTopExpr (Ty.Typed _ (LL.LLFFI {}))  = pure ()
+genTopExpr (Ty.Typed _ (LL.LLType {}))      = pure ()
+genTopExpr (Ty.Typed _ (LL.LLFFI {}))       = pure ()
+genTopExpr (Ty.Typed _ (LL.LLFFIStruct {})) = pure ()
+genTopExpr (Ty.Typed _ (LL.LLFFIVar {}))    = pure ()
+genTopExpr (Ty.Typed _ (LL.LLFFIEnum _ variants)) =
+  forM_ variants $ \(name, val) -> bindVar name (tshow val)
+genTopExpr (Ty.Typed _ (LL.LLFFICallback {})) = pure ()
 genTopExpr expr = void (genExpr expr)
 
 -- EXPRESSION GENERATION
@@ -339,6 +393,8 @@ genExpr (Ty.Typed t expr) = case expr of
   LL.LLRecur args          -> genRecur t args
   LL.LLType {}             -> pure "0"
   LL.LLFFI {}              -> pure "0"
+  LL.LLFFIStruct {}        -> pure "0"
+  LL.LLFFIVar {}           -> pure "0"
 
 genLit :: CST.Literal -> CgM T.Text
 genLit (CST.LitInt n) = pure (tshow n)
@@ -407,17 +463,94 @@ genApp resTy func args = do
   argResults <- mapM (\a -> do op <- genExpr a; pure (Ty.ty a, op)) args
   ctors <- gets csCtors
   ffis <- gets csFFI
+  structs <- gets csStructs
+  cbs <- gets csCallbacks
 
   case Ty.val func of
     LL.LLVar name _ | S.member name BuiltIn.builtInNames ->
       genBuiltIn name argResults resTy
+    LL.LLVar name _ | Just layout <- M.lookup name structs ->
+      genStructAlloc layout argResults
     LL.LLVar name _ | M.member name ctors ->
       genCtorAlloc (ctors M.! name) argResults
     LL.LLVar name _ | Just ffi <- M.lookup name ffis ->
       genFFICall name ffi argResults
+    LL.LLVar name _ | Just (paramCTys, retCTy) <- M.lookup name cbs ->
+      genMakeCallback paramCTys retCTy argResults
     _ -> do
       closureOp <- genExpr func
       genClosureCall closureOp argResults resTy
+
+-- FFI CALLBACK WRAPPING
+
+genMakeCallback :: [Ty.CType] -> Ty.CType -> [(Ty.Type, T.Text)] -> CgM T.Text
+genMakeCallback paramCTys retCTy argResults = do
+  -- argResults should be a single closure pointer
+  let (_closureTy, closureOp) = head argResults
+      nargs = length paramCTys
+  -- Build arg_types array as a global constant
+  atArr <- if nargs == 0
+    then pure "null"
+    else do
+      at <- fresh
+      emit (at <> " = alloca [" <> tshow nargs <> " x i32]")
+      forM_ (zip [0 :: Int ..] paramCTys) $ \(i, ct) -> do
+        atPtr <- fresh
+        emit (atPtr <> " = getelementptr [" <> tshow nargs <> " x i32], ptr "
+          <> at <> ", i64 0, i64 " <> tshow i)
+        emit ("store i32 " <> tshow (Ty.cTypeTag ct) <> ", ptr " <> atPtr)
+      pure at
+  -- Call pll_make_callback(closure, nargs, arg_types, ret_type)
+  result <- fresh
+  emit (result <> " = call ptr @pll_make_callback(ptr " <> closureOp
+    <> ", i32 " <> tshow nargs
+    <> ", ptr " <> atArr
+    <> ", i32 " <> tshow (Ty.cTypeTag retCTy) <> ")")
+  pure result
+
+-- FFI STRUCT ALLOCATION
+
+genStructAlloc :: Ty.StructLayout -> [(Ty.Type, T.Text)] -> CgM T.Text
+genStructAlloc layout argResults = do
+  structMap <- gets csStructs
+  let size = Ty.slSize layout
+      -- Pair args with only the scalar (non-array) fields
+      scalarOffsets = filter (not . isArrCType . thd3) (Ty.slOffsets layout)
+  ptr <- fresh
+  emit (ptr <> " = call ptr @GC_malloc(i64 " <> tshow size <> ")")
+  forM_ (zip argResults scalarOffsets) $ \((pTy, op), (_, offset, ct)) ->
+    case ct of
+      Ty.CStruct sName -> do
+        -- nested struct: memcpy from source pointer
+        fldPtr <- fresh
+        emit (fldPtr <> " = getelementptr i8, ptr " <> ptr <> ", i64 " <> tshow offset)
+        let structSize = case M.lookup sName structMap of
+              Just sl -> Ty.slSize sl
+              Nothing -> 8
+        emit ("call void @llvm.memcpy.p0.p0.i64(ptr " <> fldPtr <> ", ptr " <> op
+          <> ", i64 " <> tshow structSize <> ", i1 false)")
+      _ -> do
+        let cLlvm = Ty.cTypeLlvm ct
+            pLlvm = llvmType pTy
+        fldPtr <- fresh
+        emit (fldPtr <> " = getelementptr i8, ptr " <> ptr <> ", i64 " <> tshow offset)
+        if cLlvm == pLlvm
+          then emit ("store " <> pLlvm <> " " <> op <> ", ptr " <> fldPtr)
+          else case Ty.cTypeToPllisp ct of
+            Ty.TyInt -> do
+              t' <- fresh
+              emit (t' <> " = trunc " <> pLlvm <> " " <> op <> " to " <> cLlvm)
+              emit ("store " <> cLlvm <> " " <> t' <> ", ptr " <> fldPtr)
+            Ty.TyFlt -> do
+              t' <- fresh
+              emit (t' <> " = fptrunc " <> pLlvm <> " " <> op <> " to " <> cLlvm)
+              emit ("store " <> cLlvm <> " " <> t' <> ", ptr " <> fldPtr)
+            _ -> emit ("store " <> pLlvm <> " " <> op <> ", ptr " <> fldPtr)
+  pure ptr
+  where
+    isArrCType (Ty.CArr _ _) = True
+    isArrCType _ = False
+    thd3 (_, _, c) = c
 
 -- CLOSURE OPERATIONS
 
@@ -452,21 +585,187 @@ genClosureCall closureOp argResults resTy = do
     <> fnptr <> "(" <> argList <> ")")
   pure result
 
--- FFI CALLS
+-- FFI CALLS (via libffi bridge)
 
 genFFICall :: CST.Symbol -> FFIInfo -> [(Ty.Type, T.Text)] -> CgM T.Text
-genFFICall name ffi argResults = do
+genFFICall name ffi argResults
+  | ffiIsVariadic ffi = genFFICallVar name ffi argResults
+  | otherwise = genFFICallFixed name ffi argResults
+
+-- Variadic FFI: direct LLVM call with all args
+genFFICallVar :: CST.Symbol -> FFIInfo -> [(Ty.Type, T.Text)] -> CgM T.Text
+genFFICallVar name ffi argResults = do
   let cName = sanitize (T.toLower name)
-      retTyStr = ffiRetType (ffiRetTy ffi)
-      argList = T.intercalate ", " [llvmType t <> " " <> op | (t, op) <- argResults]
-  if ffiRetTy ffi == Ty.TyUnit
+      fixedCTys = ffiParamCTys ffi
+      retCTy = ffiRetCTy ffi
+      nFixed = length fixedCTys
+      (fixedArgs, varArgs) = splitAt nFixed argResults
+
+  -- Convert fixed args
+  fixedConverted <- forM (zip fixedCTys fixedArgs) $ \(ct, (pTy, op)) ->
+    convertArg ct pTy op
+
+  -- Convert variadic args using default promotion
+  varConverted <- forM varArgs $ \(pTy, op) ->
+    let ct = pllispToCType pTy
+    in convertArg ct pTy op
+
+  let allArgs = fixedConverted ++ varConverted
+      retLlvm = if retCTy == Ty.CVoid then "void" else Ty.cTypeLlvm retCTy
+      argList = T.intercalate ", " [ty <> " " <> val | (ty, val) <- allArgs]
+      -- LLVM requires the full function type at variadic call sites
+      fixedTyStrs = T.intercalate ", " (map Ty.cTypeLlvm fixedCTys)
+      sep = if null fixedCTys then "" else ", "
+      fnTy = retLlvm <> " (" <> fixedTyStrs <> sep <> "...)"
+
+  if retCTy == Ty.CVoid
     then do
-      emit ("call void @" <> cName <> "(" <> argList <> ")")
+      emit ("call " <> fnTy <> " @" <> cName <> "(" <> argList <> ")")
       pure "0"
     else do
+      callResult <- fresh
+      emit (callResult <> " = call " <> fnTy <> " @" <> cName <> "(" <> argList <> ")")
+      convertRetVal retCTy callResult
+
+-- Convert a pllisp operand to a C type for FFI arg passing
+convertArg :: Ty.CType -> Ty.Type -> T.Text -> CgM (T.Text, T.Text)
+convertArg ct pTy op = do
+  let cLlvm = Ty.cTypeLlvm ct
+      pLlvm = llvmType pTy
+  if cLlvm == pLlvm
+    then pure (cLlvm, op)
+    else case Ty.cTypeToPllisp ct of
+      Ty.TyInt -> do
+        t' <- fresh
+        emit (t' <> " = trunc " <> pLlvm <> " " <> op <> " to " <> cLlvm)
+        pure (cLlvm, t')
+      Ty.TyFlt -> do
+        t' <- fresh
+        emit (t' <> " = fptrunc " <> pLlvm <> " " <> op <> " to " <> cLlvm)
+        pure (cLlvm, t')
+      _ -> pure (pLlvm, op)
+
+-- Convert a C return value back to pllisp representation
+convertRetVal :: Ty.CType -> T.Text -> CgM T.Text
+convertRetVal retCTy loaded = do
+  let retLlvm = Ty.cTypeLlvm retCTy
+      pllispTy = Ty.cTypeToPllisp retCTy
+      pLlvm = llvmType pllispTy
+  if retLlvm == pLlvm
+    then pure loaded
+    else do
       result <- fresh
-      emit (result <> " = call " <> retTyStr <> " @" <> cName <> "(" <> argList <> ")")
+      case pllispTy of
+        Ty.TyInt -> do
+          let ext = if isUnsignedCType retCTy then "zext" else "sext"
+          emit (result <> " = " <> ext <> " " <> retLlvm <> " " <> loaded <> " to " <> pLlvm)
+        Ty.TyFlt ->
+          emit (result <> " = fpext " <> retLlvm <> " " <> loaded <> " to " <> pLlvm)
+        _ -> pure ()
       pure result
+
+-- Map pllisp type to default promoted CType for variadic args
+pllispToCType :: Ty.Type -> Ty.CType
+pllispToCType Ty.TyInt  = Ty.CI64
+pllispToCType Ty.TyFlt  = Ty.CF64
+pllispToCType Ty.TyStr  = Ty.CPtr
+pllispToCType Ty.TyBool = Ty.CI32
+pllispToCType _         = Ty.CPtr  -- pointers for everything else
+
+genFFICallFixed :: CST.Symbol -> FFIInfo -> [(Ty.Type, T.Text)] -> CgM T.Text
+genFFICallFixed name ffi argResults = do
+  let cName = sanitize (T.toLower name)
+      paramCTys = ffiParamCTys ffi
+      retCTy = ffiRetCTy ffi
+      nargs = length paramCTys
+
+  -- Build arg_types array and arg_vals array
+  (atArr, avArr) <- if nargs == 0
+    then pure ("null", "null")
+    else do
+      at <- fresh
+      emit (at <> " = alloca [" <> tshow nargs <> " x i32]")
+      av <- fresh
+      emit (av <> " = alloca [" <> tshow nargs <> " x ptr]")
+
+      forM_ (zip3' [0 :: Int ..] paramCTys argResults) $ \(i, ct, (pTy, op)) -> do
+        let cLlvm = Ty.cTypeLlvm ct
+            pLlvm = llvmType pTy
+            iStr = tshow i
+
+        -- Store CType tag
+        atPtr <- fresh
+        emit (atPtr <> " = getelementptr [" <> tshow nargs <> " x i32], ptr "
+          <> at <> ", i64 0, i64 " <> iStr)
+        emit ("store i32 " <> tshow (Ty.cTypeTag ct) <> ", ptr " <> atPtr)
+
+        -- Convert pllisp value to C type and store in alloca
+        argAlloca <- fresh
+        emit (argAlloca <> " = alloca " <> cLlvm)
+        if cLlvm == pLlvm
+          then emit ("store " <> pLlvm <> " " <> op <> ", ptr " <> argAlloca)
+          else case Ty.cTypeToPllisp ct of
+            Ty.TyInt -> do
+              t' <- fresh
+              emit (t' <> " = trunc " <> pLlvm <> " " <> op <> " to " <> cLlvm)
+              emit ("store " <> cLlvm <> " " <> t' <> ", ptr " <> argAlloca)
+            Ty.TyFlt -> do
+              t' <- fresh
+              emit (t' <> " = fptrunc " <> pLlvm <> " " <> op <> " to " <> cLlvm)
+              emit ("store " <> cLlvm <> " " <> t' <> ", ptr " <> argAlloca)
+            _ -> emit ("store " <> pLlvm <> " " <> op <> ", ptr " <> argAlloca)
+
+        -- Store pointer to arg value
+        avPtr <- fresh
+        emit (avPtr <> " = getelementptr [" <> tshow nargs <> " x ptr], ptr "
+          <> av <> ", i64 0, i64 " <> iStr)
+        emit ("store ptr " <> argAlloca <> ", ptr " <> avPtr)
+
+      pure (at, av)
+
+  -- Return storage
+  let retLlvm = if retCTy == Ty.CVoid then "i8" else Ty.cTypeLlvm retCTy
+  retAlloca <- fresh
+  emit (retAlloca <> " = alloca " <> retLlvm)
+
+  -- Call bridge
+  emit ("call void @pll_ffi_call(ptr @" <> cName
+    <> ", i32 " <> tshow nargs
+    <> ", ptr " <> atArr
+    <> ", i32 " <> tshow (Ty.cTypeTag retCTy)
+    <> ", ptr " <> avArr
+    <> ", ptr " <> retAlloca <> ")")
+
+  -- Load and convert return value
+  if retCTy == Ty.CVoid
+    then pure "0"
+    else do
+      let pllispTy = Ty.cTypeToPllisp retCTy
+          pLlvm = llvmType pllispTy
+      loaded <- fresh
+      emit (loaded <> " = load " <> retLlvm <> ", ptr " <> retAlloca)
+      if retLlvm == pLlvm
+        then pure loaded
+        else do
+          result <- fresh
+          case pllispTy of
+            Ty.TyInt -> do
+              let ext = if isUnsignedCType retCTy then "zext" else "sext"
+              emit (result <> " = " <> ext <> " " <> retLlvm <> " " <> loaded <> " to " <> pLlvm)
+            Ty.TyFlt ->
+              emit (result <> " = fpext " <> retLlvm <> " " <> loaded <> " to " <> pLlvm)
+            _ -> pure ()
+          pure result
+  where
+    zip3' (a:as) (b:bs) (c:cs) = (a,b,c) : zip3' as bs cs
+    zip3' _ _ _ = []
+
+isUnsignedCType :: Ty.CType -> Bool
+isUnsignedCType Ty.CU8  = True
+isUnsignedCType Ty.CU16 = True
+isUnsignedCType Ty.CU32 = True
+isUnsignedCType Ty.CU64 = True
+isUnsignedCType _       = False
 
 -- CONSTRUCTOR OPERATIONS
 
@@ -570,31 +869,77 @@ genPatTest scrOp pat matchLbl nextLbl = case pat of
     emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
 
   LL.LLPatCon ctorName _ _ -> do
-    ctors <- gets csCtors
-    let ci = ctors M.! ctorName
-    tagR <- fresh
-    emit (tagR <> " = load i32, ptr " <> scrOp)
-    cmp <- fresh
-    emit (cmp <> " = icmp eq i32 " <> tagR <> ", " <> tshow (ciTag ci))
-    emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
+    structs <- gets csStructs
+    if M.member ctorName structs
+      then -- FFI struct: no tag, always matches
+        emit ("br label %" <> matchLbl)
+      else do
+        ctors <- gets csCtors
+        let ci = ctors M.! ctorName
+        tagR <- fresh
+        emit (tagR <> " = load i32, ptr " <> scrOp)
+        cmp <- fresh
+        emit (cmp <> " = icmp eq i32 " <> tagR <> ", " <> tshow (ciTag ci))
+        emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
 
   -- Wildcard/var handled in genArms before reaching here
   _ -> emit ("br label %" <> matchLbl)
 
 bindPatVars :: T.Text -> LL.LLPattern -> CgM ()
 bindPatVars scrOp pat = case pat of
-  LL.LLPatCon _ _ subPats ->
-    forM_ (zip [1..] subPats) $ \(i, subPat) -> do
-      let offset = slotSize * (i :: Int)
-      fieldPtr <- fresh
-      emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
-        <> ", i64 " <> tshow offset)
-      let fty = patType subPat
-      fieldVal <- fresh
-      emit (fieldVal <> " = load " <> llvmType fty <> ", ptr " <> fieldPtr)
-      case subPat of
-        LL.LLPatVar name _ -> bindVar name fieldVal
-        _                  -> pure ()
+  LL.LLPatCon ctorName _ subPats -> do
+    structs <- gets csStructs
+    case M.lookup ctorName structs of
+      Just layout -> -- FFI struct: use C offsets and type conversion
+        forM_ (zip subPats (Ty.slOffsets layout)) $ \(subPat, (_, offset, ct)) ->
+          case subPat of
+            LL.LLPatVar name _ -> case ct of
+              Ty.CArr {} -> do
+                -- Array field: return pointer to inline storage
+                fieldPtr <- fresh
+                emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+                  <> ", i64 " <> tshow offset)
+                bindVar name fieldPtr
+              Ty.CStruct _ -> do
+                -- Nested struct: return pointer to inline storage
+                fieldPtr <- fresh
+                emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+                  <> ", i64 " <> tshow offset)
+                bindVar name fieldPtr
+              _ -> do
+                let cLlvm = Ty.cTypeLlvm ct
+                    pllispTy = Ty.cTypeToPllisp ct
+                    pLlvm = llvmType pllispTy
+                fieldPtr <- fresh
+                emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+                  <> ", i64 " <> tshow offset)
+                loaded <- fresh
+                emit (loaded <> " = load " <> cLlvm <> ", ptr " <> fieldPtr)
+                if cLlvm == pLlvm
+                  then bindVar name loaded
+                  else do
+                    converted <- fresh
+                    case pllispTy of
+                      Ty.TyInt -> do
+                        let ext = if isUnsignedCType ct then "zext" else "sext"
+                        emit (converted <> " = " <> ext <> " " <> cLlvm <> " " <> loaded <> " to " <> pLlvm)
+                      Ty.TyFlt ->
+                        emit (converted <> " = fpext " <> cLlvm <> " " <> loaded <> " to " <> pLlvm)
+                      _ -> pure ()
+                    bindVar name converted
+            _ -> pure ()
+      Nothing -> -- Regular ADT: use tag+slot layout
+        forM_ (zip [1..] subPats) $ \(i, subPat) -> do
+          let offset = slotSize * (i :: Int)
+          fieldPtr <- fresh
+          emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+            <> ", i64 " <> tshow offset)
+          let fty = patType subPat
+          fieldVal <- fresh
+          emit (fieldVal <> " = load " <> llvmType fty <> ", ptr " <> fieldPtr)
+          case subPat of
+            LL.LLPatVar name _ -> bindVar name fieldVal
+            _                  -> pure ()
   LL.LLPatVar name _ -> bindVar name scrOp
   _ -> pure ()
 

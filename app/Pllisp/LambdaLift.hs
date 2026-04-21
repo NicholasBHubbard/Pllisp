@@ -47,7 +47,11 @@ data LLExprF
   | LLIf   LLExpr LLExpr LLExpr
   | LLApp  LLExpr [LLExpr]
   | LLType CST.Symbol [CST.Symbol] [CST.DataCon]
-  | LLFFI  CST.Symbol [Ty.Type] Ty.Type
+  | LLFFI  CST.Symbol [Ty.CType] Ty.CType
+  | LLFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
+  | LLFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | LLFFIEnum CST.Symbol [(CST.Symbol, Integer)]
+  | LLFFICallback CST.Symbol [Ty.CType] Ty.CType
   | LLCase LLExpr [(LLPattern, LLExpr)]
   | LLMkClosure CST.Symbol [LLExpr]
   | LLLoop [(CST.Symbol, Ty.Type)] LLExpr
@@ -120,6 +124,10 @@ liftExpr (Ty.Typed t expr) = case expr of
 
   CC.CCType n ps cs -> pure (Ty.Typed t (LLType n ps cs))
   CC.CCFFI n pts rt -> pure (Ty.Typed t (LLFFI n pts rt))
+  CC.CCFFIStruct n fs -> pure (Ty.Typed t (LLFFIStruct n fs))
+  CC.CCFFIVar n pts rt -> pure (Ty.Typed t (LLFFIVar n pts rt))
+  CC.CCFFIEnum n vs -> pure (Ty.Typed t (LLFFIEnum n vs))
+  CC.CCFFICallback n pts rt -> pure (Ty.Typed t (LLFFICallback n pts rt))
 
   CC.CCCase scr arms -> do
     scr' <- liftExpr scr

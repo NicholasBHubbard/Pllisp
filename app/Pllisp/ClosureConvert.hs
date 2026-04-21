@@ -40,7 +40,11 @@ data CCExprF
   | CCIf   CCExpr CCExpr CCExpr
   | CCApp  CCExpr [CCExpr]
   | CCType CST.Symbol [CST.Symbol] [CST.DataCon]
-  | CCFFI  CST.Symbol [Ty.Type] Ty.Type
+  | CCFFI  CST.Symbol [Ty.CType] Ty.CType
+  | CCFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
+  | CCFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | CCFFIEnum CST.Symbol [(CST.Symbol, Integer)]
+  | CCFFICallback CST.Symbol [Ty.CType] Ty.CType
   | CCCase CCExpr [(CCPattern, CCExpr)]
   | CCLoop [(CST.Symbol, Ty.Type)] CCExpr
   | CCRecur [CCExpr]
@@ -70,6 +74,10 @@ convertExpr (Loc.Located _ (Ty.Typed t expr)) = Ty.Typed t $ case expr of
     in CCLet ccBinds (convertExpr body)
   TC.TRType n ps cs -> CCType n ps cs
   TC.TRFFI n pts rt -> CCFFI n pts rt
+  TC.TRFFIStruct n fs -> CCFFIStruct n fs
+  TC.TRFFIVar n pts rt -> CCFFIVar n pts rt
+  TC.TRFFIEnum n vs -> CCFFIEnum n vs
+  TC.TRFFICallback n pts rt -> CCFFICallback n pts rt
   TC.TRCase scr arms ->
     CCCase (convertExpr scr) [(convertPattern p, convertExpr b) | (p, b) <- arms]
   TC.TRLoop params body -> CCLoop params (convertExpr body)

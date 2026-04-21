@@ -13,6 +13,7 @@ import System.Process (readProcessWithExitCode)
 
 import qualified Pllisp.Codegen        as Codegen
 import qualified Pllisp.ClosureConvert as CC
+import qualified Pllisp.Type           as Ty
 import qualified Pllisp.CST            as CST
 import qualified Pllisp.LambdaLift     as LL
 import qualified Pllisp.MacroExpand    as MacroExpand
@@ -1197,6 +1198,242 @@ spec = do
         , "(print (int-to-str (atol \"123\")))"
         ]) >>= (`shouldBe` "123")
 
+  describe "ffi trampolines" $ do
+    it "ffi abs (i32 -> i32) trampoline" $
+      run (T.unlines
+        [ "(ffi abs (%I32) %I32)"
+        , "(print (int-to-str (abs (neg 42))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "ffi fabsf (f32 -> f32) trampoline" $
+      run (T.unlines
+        [ "(ffi fabsf (%F32) %F32)"
+        , "(print (flt-to-str (fabsf (negf 3.5))))"
+        ]) >>= (`shouldBe` "3.5")
+
+    it "ffi mixed types: i32 trampoline result usable as i64" $
+      run (T.unlines
+        [ "(ffi abs (%I32) %I32)"
+        , "(print (int-to-str (add (abs (neg 100)) 1)))"
+        ]) >>= (`shouldBe` "101")
+
+    it "ffi existing types still work without trampoline" $
+      run (T.unlines
+        [ "(ffi labs (%INT) %INT)"
+        , "(print (int-to-str (labs (neg 99))))"
+        ]) >>= (`shouldBe` "99")
+
+  describe "ffi structs" $ do
+    it "allocate struct and read field" $
+      run (T.unlines
+        [ "(ffi-struct Point (x %I32) (y %I32))"
+        , "(let ((p (Point 10 20)))"
+        , "  (print (int-to-str (.x p))))"
+        ]) >>= (`shouldBe` "10")
+
+    it "read second field" $
+      run (T.unlines
+        [ "(ffi-struct Point (x %I32) (y %I32))"
+        , "(let ((p (Point 3 7)))"
+        , "  (print (int-to-str (.y p))))"
+        ]) >>= (`shouldBe` "7")
+
+    it "struct with mixed types" $
+      run (T.unlines
+        [ "(ffi-struct Rec (a %I64) (b %F64) (c %I32))"
+        , "(let ((r (Rec 42 3.14 7)))"
+        , "  (print (int-to-str (.a r))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "struct float field" $
+      run (T.unlines
+        [ "(ffi-struct Rec (a %I64) (b %F64))"
+        , "(let ((r (Rec 1 2.5)))"
+        , "  (print (flt-to-str (.b r))))"
+        ]) >>= (`shouldBe` "2.5")
+
+    it "struct passed to ffi function" $
+      run (T.unlines
+        [ "(ffi-struct Pair (a %I32) (b %I32))"
+        , "(let ((p (Pair 100 200)))"
+        , "  (print (int-to-str (add (.a p) (.b p)))))"
+        ]) >>= (`shouldBe` "300")
+
+  describe "ffi variadics" $ do
+    it "variadic printf one arg" $
+      run (T.unlines
+        [ "(ffi-var printf (%PTR) %I32)"
+        , "(printf \"%ld\" 42)"
+        ]) >>= (`shouldBe` "42")
+
+    it "variadic printf two args" $
+      run (T.unlines
+        [ "(ffi-var printf (%PTR) %I32)"
+        , "(printf \"%ld+%ld\" 10 20)"
+        ]) >>= (`shouldBe` "10+20")
+
+    it "variadic printf float" $
+      run (T.unlines
+        [ "(ffi-var printf (%PTR) %I32)"
+        , "(printf \"%.1f\" 3.5)"
+        ]) >>= (`shouldBe` "3.5")
+
+  -- FEATURE: String marshaling (pllisp strings ARE C char*)
+  describe "ffi string marshaling" $ do
+    it "pass pllisp string to C strlen" $
+      run (T.unlines
+        [ "(ffi strlen (%PTR) %I64)"
+        , "(print (int-to-str (strlen \"hello\")))"
+        ]) >>= (`shouldBe` "5")
+
+    it "pass pllisp string to C puts" $
+      run (T.unlines
+        [ "(ffi puts (%PTR) %I32)"
+        , "(puts \"world\")"
+        ]) >>= (`shouldBe` "world")
+
+    it "receive C string from snprintf into buffer" $
+      run (T.unlines
+        [ "(ffi-var snprintf (%PTR %I64 %PTR) %I32)"
+        , "(let ((buf (substr \"xxxxxxxxxxxxxxxxxxxx\" 0 20)))"
+        , "  (let ((_ (snprintf buf 20 \"%ld\" 42)))"
+        , "    (print buf)))"
+        ]) >>= (`shouldBe` "42")
+
+  -- FEATURE: Enums (named integer constants)
+  describe "ffi enums" $ do
+    it "enum value used as integer" $
+      run (T.unlines
+        [ "(ffi-enum Color (RED 0) (GREEN 1) (BLUE 2))"
+        , "(print (int-to-str GREEN))"
+        ]) >>= (`shouldBe` "1")
+
+    it "enum in comparison" $
+      run (T.unlines
+        [ "(ffi-enum Status (OK 0) (ERR 1))"
+        , "(let ((s OK))"
+        , "  (print (if (eq s OK) \"success\" \"failure\")))"
+        ]) >>= (`shouldBe` "success")
+
+    it "enum passed to function" $
+      run (T.unlines
+        [ "(ffi-enum Dir (UP 0) (DOWN 1) (LEFT 2) (RIGHT 3))"
+        , "(let ((describe (lam (d)"
+        , "        (if (eq d UP) \"up\""
+        , "          (if (eq d RIGHT) \"right\" \"other\")))))"
+        , "  (print (describe RIGHT)))"
+        ]) >>= (`shouldBe` "right")
+
+  -- FEATURE: Arrays (fixed-size inline arrays)
+  describe "ffi arrays" $ do
+    it "struct with byte array, write and read" $
+      run (T.unlines
+        [ "(ffi-struct Buf (data (%ARR 8 %I8)) (len %I32))"
+        , "(ffi-var snprintf (%PTR %I64 %PTR) %I32)"
+        , "(let ((b (Buf 4)))"
+        , "  (let ((_ (snprintf (.data b) 8 \"hey\")))"
+        , "    (print (.data b))))"
+        ]) >>= (`shouldBe` "hey")
+
+    it "struct with int array and scalar field" $
+      run (T.unlines
+        [ "(ffi-struct Pair (data (%ARR 4 %I8)) (tag %I32))"
+        , "(let ((p (Pair 42)))"
+        , "  (print (int-to-str (.tag p))))"
+        ]) >>= (`shouldBe` "42")
+
+  -- FEATURE: Nested structs (struct as field type)
+  describe "ffi nested structs" $ do
+    it "nested struct field access" $
+      run (T.unlines
+        [ "(ffi-struct Point (x %I32) (y %I32))"
+        , "(ffi-struct Line (start %Point) (end %Point))"
+        , "(let ((p1 (Point 1 2))"
+        , "      (p2 (Point 3 4)))"
+        , "  (let ((ln (Line p1 p2)))"
+        , "    (print (int-to-str (.x (.start ln))))))"
+        ]) >>= (`shouldBe` "1")
+
+    it "nested struct second field" $
+      run (T.unlines
+        [ "(ffi-struct Point (x %I32) (y %I32))"
+        , "(ffi-struct Rect (origin %Point) (size %Point))"
+        , "(let ((o (Point 10 20))"
+        , "      (s (Point 100 200)))"
+        , "  (let ((r (Rect o s)))"
+        , "    (print (int-to-str (.y (.size r))))))"
+        ]) >>= (`shouldBe` "200")
+
+  -- FEATURE: Callbacks (pllisp closure as C function pointer)
+  describe "ffi callbacks" $ do
+    it "wrap closure as C function pointer" $
+      run (T.unlines
+        [ "(ffi pll_test_apply_int (%PTR %I64) %I64)"
+        , "(ffi-callback int-cb (%I64) %I64)"
+        , "(let ((doubler (int-cb (lam (x) (mul x 2)))))"
+        , "  (print (int-to-str (pll_test_apply_int doubler 21))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "callback with closure capture" $
+      run (T.unlines
+        [ "(ffi pll_test_apply_int (%PTR %I64) %I64)"
+        , "(ffi-callback int-cb (%I64) %I64)"
+        , "(let ((offset 10)"
+        , "      (adder (int-cb (lam (x) (add x offset)))))"
+        , "  (print (int-to-str (pll_test_apply_int adder 32))))"
+        ]) >>= (`shouldBe` "42")
+
+  -- FEATURE: Struct passed to C functions via pointer
+  describe "ffi struct interop" $ do
+    it "pass struct to C function that reads fields" $
+      run (T.unlines
+        [ "(ffi-struct Point (x %I32) (y %I32))"
+        , "(ffi pll_point_sum (%PTR) %I64)"
+        , "(let ((p (Point 7 11)))"
+        , "  (print (int-to-str (pll_point_sum p))))"
+        ]) >>= (`shouldBe` "18")
+
+    it "pass struct to C function that mutates fields" $
+      run (T.unlines
+        [ "(ffi-struct Point (x %I32) (y %I32))"
+        , "(ffi pll_point_sum (%PTR) %I64)"
+        , "(ffi pll_point_scale (%PTR %I64) %VOID)"
+        , "(let ((p (Point 3 4)))"
+        , "  (let ((_ (pll_point_scale p 10)))"
+        , "    (print (int-to-str (pll_point_sum p)))))"
+        ]) >>= (`shouldBe` "70")
+
+  describe "ffi enum edge cases" $ do
+    it "enum with large values" $
+      run (T.unlines
+        [ "(ffi-enum Flags (NONE 0) (READ 1) (WRITE 2) (EXEC 4) (ALL 7))"
+        , "(print (int-to-str ALL))"
+        ]) >>= (`shouldBe` "7")
+
+    it "enum values used in arithmetic" $
+      run (T.unlines
+        [ "(ffi-enum Prio (LOW 1) (MED 5) (HIGH 10))"
+        , "(print (int-to-str (add LOW HIGH)))"
+        ]) >>= (`shouldBe` "11")
+
+  describe "ffi combined features" $ do
+    it "struct with array field accessed after construction" $
+      run (T.unlines
+        [ "(ffi-struct Msg (tag %I32) (buf (%ARR 16 %I8)))"
+        , "(ffi-var snprintf (%PTR %I64 %PTR) %I32)"
+        , "(let ((m (Msg 42)))"
+        , "  (let ((_ (snprintf (.buf m) 16 \"hello\")))"
+        , "    (print (.buf m))))"
+        ]) >>= (`shouldBe` "hello")
+
+    it "struct passed to C function via polymorphic ptr" $
+      run (T.unlines
+        [ "(ffi-struct Point (x %I32) (y %I32))"
+        , "(ffi pll_point_sum (%PTR) %I64)"
+        , "(let ((a (Point 100 200)))"
+        , "  (print (int-to-str (pll_point_sum a))))"
+        ]) >>= (`shouldBe` "300")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text
@@ -1232,9 +1469,10 @@ runWithStdin :: String -> [String] -> T.Text -> IO String
 runWithStdin stdin' extraArgs src = do
   ir <- pipeline src
   T.IO.writeFile "/tmp/pllisp_test.ll" ir
+  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
   (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc"] ""
+    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
   case ec1 of
     ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do
@@ -1252,9 +1490,10 @@ runWithModule :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO String
 runWithModule modName modSrc unquals mainSrc = do
   ir <- importPipeline modName modSrc unquals mainSrc
   T.IO.writeFile "/tmp/pllisp_test.ll" ir
+  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
   (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc"] ""
+    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
   case ec1 of
     ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do
