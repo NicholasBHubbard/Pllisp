@@ -2,7 +2,7 @@
 
 -- MODULE
 
-module Pllisp.Codegen (codegen) where
+module Pllisp.Codegen (codegen, codegenRepl, collectReplGlobals) where
 
 import qualified Pllisp.BuiltIn as BuiltIn
 import qualified Pllisp.CST as CST
@@ -80,6 +80,145 @@ codegen prog = evalState go initState
         ++ [ rxHelperDefs ]
         ++ defTexts
         ++ [ mainText ]
+
+-- REPL CODEGEN
+
+codegenRepl :: Int -> [(CST.Symbol, Ty.Type)] -> LL.LLProgram -> T.Text
+codegenRepl roundNum priorGlobals prog = evalState go initState
+  where
+    ctors     = collectCtors (LL.llExprs prog)
+    ffis      = collectFFI (LL.llExprs prog)
+    structs   = collectFFIStructs (LL.llExprs prog)
+    callbacks = collectCallbacks (LL.llExprs prog)
+    defMap    = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
+    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis structs callbacks
+    ffiList = filter (not . isBuiltinExtern . fst) (M.toList ffis)
+    ffiDecls = map genFFIDecl ffiList
+    prefix = "__r" <> tshow roundNum <> "_"
+
+    go :: CgM T.Text
+    go = do
+      -- Rename lifted defs with round prefix to avoid cross-.so collisions
+      let renamedDefs = map (renameDef prefix) (LL.llDefs prog)
+          renamedExprs = map (renameExpr prefix) (LL.llExprs prog)
+      modify' (\s -> s { csDefs = M.fromList [(LL.defName d, d) | d <- renamedDefs] })
+      defTexts <- mapM genDef renamedDefs
+      -- Collect top-level globals from let bindings
+      let globals = collectReplGlobals (LL.llExprs prog)
+          globalDecls = map (\(name, ty) ->
+            "@" <> sanitize (T.toLower name) <> " = global " <> llvmType ty <> " " <> llvmZero ty) globals
+          -- Extern declarations for globals from prior rounds
+          priorDecls = map (\(name, ty) ->
+            "@" <> sanitize (T.toLower name) <> " = external global " <> llvmType ty) priorGlobals
+      entryText <- genReplEntry renamedExprs priorGlobals globals
+      strLits  <- gets (reverse . csStrLits)
+      let strDecls = map genStrDecl strLits
+      pure $ T.unlines $
+        [ moduleHeader, "" ]
+        ++ [ externDecls ]
+        ++ ffiDecls
+        ++ [ fmtConstants ]
+        ++ strDecls
+        ++ priorDecls
+        ++ globalDecls
+        ++ [ "" ]
+        ++ [ rxHelperDefs ]
+        ++ defTexts
+        ++ [ entryText ]
+
+-- | Collect named bindings from the top-level LLLet chain that should become globals
+collectReplGlobals :: [LL.LLExpr] -> [(CST.Symbol, Ty.Type)]
+collectReplGlobals exprs = concatMap go exprs
+  where
+    go (Ty.Typed _ (LL.LLLet binds body)) =
+      [(name, Ty.ty rhs) | (name, _, rhs) <- binds, name /= "_"] ++ go body
+    go _ = []
+
+-- | Generate the REPL entry point (no GC_init, no argc/argv)
+genReplEntry :: [LL.LLExpr] -> [(CST.Symbol, Ty.Type)] -> [(CST.Symbol, Ty.Type)] -> CgM T.Text
+genReplEntry exprs priorGlobals newGlobals = do
+  savedVars   <- gets csVars
+  savedInstrs <- gets csInstrs
+  savedBlock  <- gets csBlock
+  modify' (\s -> s { csVars = M.empty, csInstrs = [], csBlock = "entry" })
+
+  -- Load prior globals into vars so this round can reference them
+  forM_ priorGlobals $ \(name, ty) -> do
+    r <- fresh
+    emit (r <> " = load " <> llvmType ty <> ", ptr @" <> sanitize (T.toLower name))
+    modify' (\s -> s { csVars = M.insert name r (csVars s) })
+
+  -- Use replTopExpr which doesn't restore vars from top-level lets,
+  -- so bindings persist in csVars for global storage
+  mapM_ replTopExpr exprs
+
+  -- Store named bindings into globals for future rounds
+  forM_ newGlobals $ \(name, ty) -> do
+    vars <- gets csVars
+    case M.lookup name vars of
+      Just op -> emit ("store " <> llvmType ty <> " " <> op <> ", ptr @" <> sanitize (T.toLower name))
+      Nothing -> pure ()
+
+  emit "ret void"
+
+  instrs <- gets (reverse . csInstrs)
+  modify' (\s -> s { csVars = savedVars, csInstrs = savedInstrs, csBlock = savedBlock })
+
+  pure $ T.unlines $
+    [ "define void @pll_repl_entry() {"
+    , "entry:" ]
+    ++ instrs
+    ++ [ "}" ]
+
+-- | Process a top-level REPL expression, unfolding top-level lets
+-- without restoring vars so bindings persist for global storage.
+replTopExpr :: LL.LLExpr -> CgM ()
+replTopExpr (Ty.Typed _ (LL.LLLet binds body)) = do
+  forM_ binds $ \(name, _, rhs) -> case Ty.val rhs of
+    LL.LLMkClosure fnName envArgs -> do
+      let totalSize = slotSize * (1 + length envArgs)
+      closure <- fresh
+      emit (closure <> " = call ptr @GC_malloc(i64 " <> tshow totalSize <> ")")
+      fillClosure closure fnName envArgs
+      bindVar name closure
+    _ -> do
+      op <- genExpr rhs
+      bindVar name op
+  replTopExpr body
+replTopExpr (Ty.Typed _ (LL.LLType {}))         = pure ()
+replTopExpr (Ty.Typed _ (LL.LLFFI {}))          = pure ()
+replTopExpr (Ty.Typed _ (LL.LLFFIStruct {}))    = pure ()
+replTopExpr (Ty.Typed _ (LL.LLFFIVar {}))       = pure ()
+replTopExpr (Ty.Typed _ (LL.LLFFIEnum _ vs))    = forM_ vs $ \(name, val) -> bindVar name (tshow val)
+replTopExpr (Ty.Typed _ (LL.LLFFICallback {}))  = pure ()
+replTopExpr expr = void (genExpr expr)
+
+-- | Zero initializer for an LLVM type
+llvmZero :: Ty.Type -> T.Text
+llvmZero Ty.TyInt       = "0"
+llvmZero Ty.TyFlt       = "0.0"
+llvmZero Ty.TyBool      = "false"
+llvmZero Ty.TyUnit      = "0"
+llvmZero _               = "null"
+
+-- | Rename a lifted def to include round prefix (name + body references)
+renameDef :: T.Text -> LL.LLDef -> LL.LLDef
+renameDef prefix def = def
+  { LL.defName = prefix <> LL.defName def
+  , LL.defBody = renameExpr prefix (LL.defBody def)
+  }
+
+-- | Rename LLMkClosure references in an expression tree
+renameExpr :: T.Text -> LL.LLExpr -> LL.LLExpr
+renameExpr prefix (Ty.Typed t e) = Ty.Typed t $ case e of
+  LL.LLMkClosure name envs -> LL.LLMkClosure (prefix <> name) (map (renameExpr prefix) envs)
+  LL.LLLet binds body -> LL.LLLet [(n, bt, renameExpr prefix rhs) | (n, bt, rhs) <- binds] (renameExpr prefix body)
+  LL.LLIf c th el -> LL.LLIf (renameExpr prefix c) (renameExpr prefix th) (renameExpr prefix el)
+  LL.LLApp f args -> LL.LLApp (renameExpr prefix f) (map (renameExpr prefix) args)
+  LL.LLCase scr arms -> LL.LLCase (renameExpr prefix scr) [(p, renameExpr prefix b) | (p, b) <- arms]
+  LL.LLLoop ps body -> LL.LLLoop ps (renameExpr prefix body)
+  LL.LLRecur args -> LL.LLRecur (map (renameExpr prefix) args)
+  other -> other
 
 -- MODULE-LEVEL DECLARATIONS
 

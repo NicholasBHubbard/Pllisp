@@ -97,7 +97,8 @@ executable pllisp
                       megaparsec ^>=9.7.0,
                       mtl        ^>=2.3.2,
                       process,
-                      text       ^>=2.1.2
+                      text       ^>=2.1.2,
+                      unix
 
 
     -- Directories containing source files.
@@ -122,6 +123,7 @@ test-suite pllisp-test
                       ModuleSpec,
                       ParserSpec,
                       PropSpec,
+                      ReplSpec,
                       ResolveSpec,
                       SExprSpec,
                       TypeCheckSpec,
@@ -151,6 +153,7 @@ test-suite pllisp-test
                       filepath,
                       process,
                       text       ^>=2.1.2,
+                      unix,
                       hspec      ^>=2.11,
                       QuickCheck ^>=2.15
     default-language: Haskell2010

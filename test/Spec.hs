@@ -14,6 +14,7 @@ import qualified ClosureConvertSpec
 import qualified CodegenSpec
 import qualified LambdaLiftSpec
 import qualified MacroExpandSpec
+import qualified ReplSpec
 import qualified ModuleSpec
 import qualified SExprSpec
 
@@ -33,3 +34,4 @@ main = hspec $ do
   describe "Module"         ModuleSpec.spec
   describe "Codegen"        CodegenSpec.spec
   describe "MacroExpand"    MacroExpandSpec.spec
+  describe "Repl"           ReplSpec.spec
