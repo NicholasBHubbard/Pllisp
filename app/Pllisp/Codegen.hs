@@ -1295,6 +1295,26 @@ genBuiltIn name args _resTy = case name of
     emit (r <> " = call i64 @GC_get_heap_size()")
     pure r
 
+  -- Mutable refs
+  "REF" -> do
+    let (valTy, valOp) = head args
+    ptr <- fresh
+    emit (ptr <> " = call ptr @GC_malloc(i64 8)")
+    emit ("store " <> llvmType valTy <> " " <> valOp <> ", ptr " <> ptr)
+    pure ptr
+
+  "DEREF" -> do
+    let (_, refOp) = head args
+    r <- fresh
+    emit (r <> " = load " <> llvmType _resTy <> ", ptr " <> refOp)
+    pure r
+
+  "SET!" -> do
+    let (_, refOp) = head args
+        (valTy, valOp) = args !! 1
+    emit ("store " <> llvmType valTy <> " " <> valOp <> ", ptr " <> refOp)
+    pure "0"
+
   _ -> error ("Codegen: unknown built-in: " <> T.unpack name)
 
 -- Helpers for binary ops

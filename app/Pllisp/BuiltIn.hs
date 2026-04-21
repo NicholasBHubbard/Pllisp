@@ -16,11 +16,19 @@ type Symbol = T.Text
 
 -- For Resolve: names that are always in scope
 builtInNames :: S.Set Symbol
-builtInNames = M.keysSet builtInTypes
+builtInNames = S.union (M.keysSet builtInTypes) (M.keysSet polyBuiltIns)
 
 -- For TypeCheck: types of built-in functions (monomorphic, so empty forall)
 builtInSchemes :: M.Map Symbol (S.Set Integer, Ty.Type)
-builtInSchemes = M.map (\t -> (S.empty, t)) builtInTypes
+builtInSchemes = M.union polyBuiltIns (M.map (\t -> (S.empty, t)) builtInTypes)
+
+-- Polymorphic built-ins (quantified over type variable 0)
+polyBuiltIns :: M.Map Symbol (S.Set Integer, Ty.Type)
+polyBuiltIns = M.fromList
+  [ ("REF",   (S.singleton 0, Ty.TyFun [Ty.TyVar 0] (Ty.TyCon "REF" [Ty.TyVar 0])))
+  , ("DEREF", (S.singleton 0, Ty.TyFun [Ty.TyCon "REF" [Ty.TyVar 0]] (Ty.TyVar 0)))
+  , ("SET!",  (S.singleton 0, Ty.TyFun [Ty.TyCon "REF" [Ty.TyVar 0], Ty.TyVar 0] Ty.TyUnit))
+  ]
 
 builtInTypes :: M.Map Symbol Ty.Type
 builtInTypes = M.fromList

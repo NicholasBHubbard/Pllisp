@@ -1434,6 +1434,73 @@ spec = do
         , "  (print (int-to-str (pll_point_sum a))))"
         ]) >>= (`shouldBe` "300")
 
+  describe "mutable refs" $ do
+    it "create ref and deref" $
+      run "(print (int-to-str (deref (ref 42))))" >>= (`shouldBe` "42")
+
+    it "set! changes the value" $
+      run (T.unlines
+        [ "(let ((r (ref 10)))"
+        , "  (let ((_ (set! r 20)))"
+        , "    (print (int-to-str (deref r)))))"
+        ]) >>= (`shouldBe` "20")
+
+    it "ref with string" $
+      run (T.unlines
+        [ "(let ((r (ref \"hello\")))"
+        , "  (let ((_ (set! r \"world\")))"
+        , "    (print (deref r))))"
+        ]) >>= (`shouldBe` "world")
+
+    it "ref with bool" $
+      run (T.unlines
+        [ "(let ((r (ref TRUE)))"
+        , "  (let ((_ (set! r FALSE)))"
+        , "    (print (if (deref r) \"yes\" \"no\"))))"
+        ]) >>= (`shouldBe` "no")
+
+    it "multiple set! keeps last value" $
+      run (T.unlines
+        [ "(let ((r (ref 1)))"
+        , "  (let ((_ (set! r 2)))"
+        , "    (let ((_ (set! r 3)))"
+        , "      (print (int-to-str (deref r))))))"
+        ]) >>= (`shouldBe` "3")
+
+    it "ref shared through closure" $
+      run (T.unlines
+        [ "(let ((counter (ref 0))"
+        , "      (inc (lam () (set! counter (add (deref counter) 1)))))"
+        , "  (let ((_ (inc))"
+        , "        (_ (inc))"
+        , "        (_ (inc)))"
+        , "    (print (int-to-str (deref counter)))))"
+        ]) >>= (`shouldBe` "3")
+
+    it "set! returns unit" $
+      run (T.unlines
+        [ "(let ((r (ref 0)))"
+        , "  (let ((u (set! r 42)))"
+        , "    (print (int-to-str (deref r)))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "ref with float" $
+      run (T.unlines
+        [ "(let ((r (ref 3.14)))"
+        , "  (let ((_ (set! r 2.72)))"
+        , "    (print (flt-to-str (deref r)))))"
+        ]) >>= (`shouldBe` "2.72")
+
+    it "ref with ADT value" $
+      run (T.unlines
+        [ "(TYPE Option (a) (Some a) (None))"
+        , "(let ((r (ref None)))"
+        , "  (let ((_ (set! r (Some 42))))"
+        , "    (CASE (deref r)"
+        , "      ((Some x) (print (int-to-str x)))"
+        , "      (None (print \"none\")))))"
+        ]) >>= (`shouldBe` "42")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

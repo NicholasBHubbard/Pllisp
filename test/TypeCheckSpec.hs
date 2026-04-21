@@ -313,6 +313,32 @@ spec = do
         Left errs -> length errs `shouldBe` 1
         Right _   -> expectationFailure "expected error"
 
+  describe "mutable refs" $ do
+    it "ref infers Ref a" $
+      case parseAndTypecheck "(ref 42)" of
+        Right r -> topType r `shouldBe` Ty.TyCon "REF" [Ty.TyInt]
+        Left e  -> expectationFailure (show e)
+
+    it "deref unwraps Ref a to a" $
+      case parseAndTypecheck "(deref (ref 42))" of
+        Right r -> topType r `shouldBe` Ty.TyInt
+        Left e  -> expectationFailure (show e)
+
+    it "set! returns Unit" $
+      case parseAndTypecheck "(let ((r (ref 0))) (set! r 1))" of
+        Right r -> topType r `shouldBe` Ty.TyUnit
+        Left e  -> expectationFailure (show e)
+
+    it "rejects deref on non-ref" $
+      case parseAndTypecheck "(deref 42)" of
+        Left _  -> pure ()
+        Right _ -> expectationFailure "expected type error"
+
+    it "rejects set! with wrong value type" $
+      case parseAndTypecheck "(let ((r (ref 0))) (set! r \"hello\"))" of
+        Left _  -> pure ()
+        Right _ -> expectationFailure "expected type error"
+
 -- Helpers
 
 dummySpan :: Loc.Span

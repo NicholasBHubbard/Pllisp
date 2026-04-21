@@ -13,8 +13,8 @@ import qualified Pllisp.Type as Ty
 spec :: Spec
 spec = do
   describe "builtInNames" $ do
-    it "has 47 entries" $
-      S.size BuiltIn.builtInNames `shouldBe` 47
+    it "has 50 entries" $
+      S.size BuiltIn.builtInNames `shouldBe` 50
 
     it "contains ADD, NOT, PRINT, FLT-TO-STR, EQF" $ do
       S.member "ADD"      BuiltIn.builtInNames `shouldBe` True
@@ -22,6 +22,11 @@ spec = do
       S.member "PRINT"    BuiltIn.builtInNames `shouldBe` True
       S.member "FLT-TO-STR" BuiltIn.builtInNames `shouldBe` True
       S.member "EQF"      BuiltIn.builtInNames `shouldBe` True
+
+    it "contains REF, DEREF, SET!" $ do
+      S.member "REF"   BuiltIn.builtInNames `shouldBe` True
+      S.member "DEREF" BuiltIn.builtInNames `shouldBe` True
+      S.member "SET!"  BuiltIn.builtInNames `shouldBe` True
 
   describe "builtInTypes" $ do
     it "ADD :: Int -> Int -> Int" $
@@ -33,8 +38,14 @@ spec = do
         `shouldBe` Just (Ty.TyFun [Ty.TyInt] Ty.TyInt)
 
   describe "builtInSchemes" $ do
-    it "maps each name to (empty forall, type)" $ do
+    it "monomorphic built-ins have empty forall" $ do
       let check name = case M.lookup name BuiltIn.builtInSchemes of
             Nothing     -> expectationFailure ("missing: " ++ show name)
             Just (vs, _) -> S.null vs `shouldBe` True
-      mapM_ check (S.toList BuiltIn.builtInNames)
+      mapM_ check (S.toList (M.keysSet BuiltIn.builtInTypes))
+
+    it "REF, DEREF, SET! are polymorphic" $ do
+      let check name = case M.lookup name BuiltIn.builtInSchemes of
+            Nothing     -> expectationFailure ("missing: " ++ show name)
+            Just (vs, _) -> S.null vs `shouldBe` False
+      mapM_ check ["REF", "DEREF", "SET!"]
