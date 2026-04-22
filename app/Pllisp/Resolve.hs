@@ -212,9 +212,9 @@ resolvePattern pat sp = case pat of
   CST.PatWild     -> pure (RPatWild, [])
   CST.PatVar s    -> pure (RPatVar s, [s])
   CST.PatCon ctor subpats -> do
-    _ <- resolveSym ctor sp
+    resolved <- resolveSym ctor sp
     (rpats, varss) <- unzip <$> traverse (\p -> resolvePattern p sp) subpats
-    pure (RPatCon ctor rpats, concat varss)
+    pure (RPatCon (symName resolved) rpats, concat varss)
 
 -- HELPERS
 

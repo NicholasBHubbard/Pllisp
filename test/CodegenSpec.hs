@@ -685,6 +685,29 @@ spec = do
       run "(print (int-to-str (if (rx-match /\\Qfoo.bar\\E/ \"fooXbar\") 1 0)))"
         >>= (`shouldBe` "0")
 
+  describe "prelude special import" $ do
+    it "prelude constructors available unqualified" $ do
+      run "(case Nil ((Nil) (print \"ok\")))" >>= (`shouldBe` "ok")
+
+    it "prelude constructors available qualified as PRELUDE.X" $ do
+      run "(case PRELUDE.Nil ((PRELUDE.Nil) (print \"ok\")))" >>= (`shouldBe` "ok")
+
+    it "qualified constructor with arguments in pattern" $ do
+      run (T.unlines
+        [ "(let ((xs (PRELUDE.Cons 1 PRELUDE.Nil)))"
+        , "  (case xs ((PRELUDE.Cons h _) (print (int-to-str h)))))"
+        ]) >>= (`shouldBe` "1")
+
+    it "user module with same constructor name does not collide (qualified only)" $ do
+      let modSrc = "(type Box () (Nil))"
+          mainSrc = T.unlines
+            [ "# prelude Nil and Mod.Nil coexist"
+            , "(do"
+            , "  (case Nil ((Nil) (print \"prelude\")))"
+            , "  (case Mod.Nil ((Mod.Nil) (print \"mod\"))))"
+            ]
+      runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "prelude\nmod")
+
   describe "module imports" $ do
     it "unqualified import" $ do
       let modSrc = "(let ((square (lam ((x %INT)) (mul x x)))) unit)"
@@ -708,6 +731,14 @@ spec = do
             , "  (case b ((MkBox x) (print (int-to-str x)))))"
             ]
       runWithModule "MOD" modSrc ["MKBOX"] mainSrc >>= (`shouldBe` "42")
+
+    it "qualified constructor in pattern" $ do
+      let modSrc = "(type Box (a) (MkBox a))"
+          mainSrc = T.unlines
+            [ "(let ((b (Mod.MkBox 42)))"
+            , "  (case b ((Mod.MkBox x) (print (int-to-str x)))))"
+            ]
+      runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "42")
 
     it "multiple bindings from one module" $ do
       let modSrc = T.unlines
