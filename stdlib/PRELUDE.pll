@@ -1,3 +1,5 @@
+(module PRELUDE)
+
 (mac fun (name params body)
   `(let ((,name (lam ,params ,body)))
      ,name))

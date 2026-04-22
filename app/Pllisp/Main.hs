@@ -40,19 +40,21 @@ main = do
 compileFile :: FilePath -> IO ()
 compileFile fp = do
   src <- T.IO.readFile fp
-  preludeSexprs <- Stdlib.loadPrelude
   stdlibDir <- Stdlib.getStdlibDir
   let render kind sp msg = putStr (Error.renderError src kind sp msg)
       searchDir = takeDirectory fp
   case Parser.parseSExprs fp src of
     Left err -> putStr (MP.errorBundlePretty err)
     Right sexprs -> do
-      let imports = SExpr.preScanImports sexprs
-      macroResult <- loadImportedMacros S.empty searchDir stdlibDir imports
+      let isPrelude = SExpr.preScanModuleName sexprs == Just "PRELUDE"
+          imports = SExpr.preScanImports sexprs
+          macroImports = if isPrelude then imports
+                         else CST.Import "PRELUDE" [] : imports
+      macroResult <- loadImportedMacros S.empty searchDir stdlibDir macroImports
       case macroResult of
         Left err -> putStrLn ("import error: " ++ err)
         Right importedMacros ->
-          case MacroExpand.expand (preludeSexprs ++ importedMacros ++ sexprs) of
+          case MacroExpand.expand (importedMacros ++ sexprs) of
             Left err -> putStrLn ("macro error: " ++ err)
             Right expanded ->
               case SExpr.toProgram expanded of
@@ -66,23 +68,30 @@ compileFile fp = do
 
 compileProg :: FilePath -> T.Text -> (String -> Loc.Span -> String -> IO ()) -> CST.Program -> IO ()
 compileProg fp src render prog = do
-  importResult <- loadImports fp (CST.progImports prog)
+  let isPrelude = CST.progName prog == Just "PRELUDE"
+      explicitImports = CST.progImports prog
+      allImports = if isPrelude then explicitImports
+                   else CST.Import "PRELUDE" [] : explicitImports
+  importResult <- loadImports fp allImports
   case importResult of
     Left err -> putStrLn err
     Right (exportMap, importedTypedModules) -> do
-      let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap (CST.progImports prog)
+      let preludeExports = M.findWithDefault M.empty "PRELUDE" exportMap
+          fixedImports = if isPrelude then explicitImports
+                         else CST.Import "PRELUDE" (M.keys preludeExports) : explicitImports
+          (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap fixedImports
           exprs = Mod.desugarTopLevel (CST.progExprs prog)
       case Resolve.resolveWith resolveScope normMap exprs of
         Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
         Right resolved ->
           case TC.typecheck tcCtx resolved of
             Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
-            Right typed ->
-              case Exhaust.exhaustCheck typed of
+            Right typed -> do
+              let merged = Mod.mergeImportedCode importedTypedModules typed
+              case Exhaust.exhaustCheck merged of
                 errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
                 [] -> do
-                  let merged = Mod.mergeImportedCode importedTypedModules typed
-                      ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+                  let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
                       base = dropExtension fp
                       llFile = base ++ ".ll"
                       bridgeFile = base ++ "_ffi_bridge.c"
@@ -100,53 +109,102 @@ compileProg fp src render prog = do
                     ExitSuccess ->
                       putStrLn ("compiled: " ++ exeFile)
 
--- | Load all imported modules, returning their export maps and typed ASTs.
+-- | Scanned module info (before compilation).
+data ModuleInfo = ModuleInfo
+  { miPath    :: FilePath
+  , miSexprs  :: [SExpr.SExpr]
+  , miImports :: [CST.Import]
+  }
+
+-- | Load all imported modules recursively, returning their export maps and typed ASTs.
 loadImports :: FilePath -> [CST.Import]
   -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme), [TC.TResolvedCST]))
 loadImports _ [] = pure (Right (M.empty, []))
 loadImports fp imports = do
   let searchDir = takeDirectory fp
-  results <- mapM (loadModule searchDir) imports
-  case sequence results of
-    Left err -> pure (Left err)
-    Right triples ->
-      let exportMap = M.fromList [(n, e) | (n, e, _) <- triples]
-          typedMods = [t | (_, _, t) <- triples]
-      in pure (Right (exportMap, typedMods))
-
-loadModule :: FilePath -> CST.Import
-  -> IO (Either String (CST.Symbol, M.Map CST.Symbol TC.Scheme, TC.TResolvedCST))
-loadModule searchDir imp = do
-  let modName = CST.impModule imp
-      modFile = searchDir </> T.unpack modName ++ ".pll"
   stdlibDir <- Stdlib.getStdlibDir
-  mPath <- findModuleFile searchDir stdlibDir modName
-  case mPath of
-    Nothing -> pure (Left ("module not found: " ++ T.unpack modName ++ " (looked for " ++ modFile ++ ")"))
-    Just modPath -> do
-      src <- T.IO.readFile modPath
-      case Parser.parseSExprs modPath src of
-        Left err -> pure (Left ("parse error in module " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
-        Right sexprs -> do
-          preludeSexprs <- Stdlib.loadPrelude
-          -- Pre-scan for imports in this module and load their macros
-          let subImports = SExpr.preScanImports sexprs
-          macroResult <- loadImportedMacros (S.singleton modName) (takeDirectory modPath) stdlibDir subImports
-          case macroResult of
-            Left err -> pure (Left err)
-            Right importedMacros ->
-              case MacroExpand.expand (preludeSexprs ++ importedMacros ++ sexprs) of
-                Left err -> pure (Left ("macro error in module " ++ T.unpack modName ++ ": " ++ err))
-                Right expanded -> case SExpr.toProgram expanded of
-                  Left err -> pure (Left ("syntax error in module " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg err))
-                  Right modProg ->
-                    case Resolve.resolve S.empty (Mod.desugarTopLevel (CST.progExprs modProg)) of
-                      Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-                      Right resolved -> case TC.typecheck M.empty resolved of
-                        Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
-                        Right typed ->
-                          let exports = Mod.collectExports typed
-                          in pure (Right (modName, exports, typed))
+  scanResult <- scanAllModules searchDir stdlibDir imports
+  case scanResult of
+    Left err -> pure (Left err)
+    Right moduleInfos -> do
+      let rawDepMap = M.map (map CST.impModule . miImports) moduleInfos
+          depMap = M.mapWithKey (\k ds ->
+            if k == "PRELUDE" || "PRELUDE" `elem` ds then ds
+            else "PRELUDE" : ds) rawDepMap
+      case Mod.dependencyOrder depMap of
+        Left err -> pure (Left err)
+        Right order ->
+          compileModules moduleInfos order M.empty []
+
+-- | Recursively discover all reachable modules.
+scanAllModules :: FilePath -> FilePath -> [CST.Import]
+  -> IO (Either String (M.Map CST.Symbol ModuleInfo))
+scanAllModules searchDir stdlibDir rootImports =
+  go S.empty M.empty [(imp, searchDir) | imp <- rootImports]
+  where
+    go _ acc [] = pure (Right acc)
+    go visited acc ((CST.Import modName _, dir) : rest)
+      | S.member modName visited = go visited acc rest
+      | otherwise = do
+          mPath <- findModuleFile dir stdlibDir modName
+          case mPath of
+            Nothing -> pure (Left ("module not found: " ++ T.unpack modName))
+            Just modPath -> do
+              src <- T.IO.readFile modPath
+              case Parser.parseSExprs modPath src of
+                Left err -> pure (Left ("parse error in " ++ T.unpack modName
+                  ++ ": " ++ MP.errorBundlePretty err))
+                Right sexprs -> do
+                  let subImports = SExpr.preScanImports sexprs
+                      info = ModuleInfo modPath sexprs subImports
+                      visited' = S.insert modName visited
+                      acc' = M.insert modName info acc
+                      modDir = takeDirectory modPath
+                      newItems = [(imp, modDir) | imp <- subImports]
+                  go visited' acc' (rest ++ newItems)
+
+-- | Compile modules in topological order with accumulated context.
+compileModules :: M.Map CST.Symbol ModuleInfo
+  -> [CST.Symbol] -> M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme) -> [TC.TResolvedCST]
+  -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme), [TC.TResolvedCST]))
+compileModules _ [] accExports accTyped = pure (Right (accExports, accTyped))
+compileModules moduleInfos (modName : rest) accExports accTyped =
+  case M.lookup modName moduleInfos of
+    Nothing -> compileModules moduleInfos rest accExports accTyped
+    Just info -> do
+      let sexprs = miSexprs info
+          modImports = miImports info
+          isPrelude = modName == "PRELUDE"
+          macroImports = if isPrelude then modImports
+                         else CST.Import "PRELUDE" [] : modImports
+      stdlibDir <- Stdlib.getStdlibDir
+      macroResult <- loadImportedMacros (S.singleton modName)
+        (takeDirectory (miPath info)) stdlibDir macroImports
+      case macroResult of
+        Left err -> pure (Left err)
+        Right importedMacros ->
+          case MacroExpand.expand (importedMacros ++ sexprs) of
+            Left err -> pure (Left ("macro error in " ++ T.unpack modName ++ ": " ++ err))
+            Right expanded -> case SExpr.toProgram expanded of
+              Left err -> pure (Left ("syntax error in " ++ T.unpack modName
+                ++ ": " ++ SExpr.ceMsg err))
+              Right modProg -> do
+                let cstImports = CST.progImports modProg
+                    preludeExports = M.findWithDefault M.empty "PRELUDE" accExports
+                    allImports = if isPrelude then cstImports
+                                 else CST.Import "PRELUDE" (M.keys preludeExports) : cstImports
+                    (resolveScope, tcCtx, normMap) =
+                      Mod.buildImportScope accExports allImports
+                    exprs = Mod.desugarTopLevel (CST.progExprs modProg)
+                case Resolve.resolveWith resolveScope normMap exprs of
+                  Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+                  Right resolved -> case TC.typecheck tcCtx resolved of
+                    Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+                    Right typed -> do
+                      let exports = Mod.collectExports typed
+                          accExports' = M.insert modName exports accExports
+                      compileModules moduleInfos rest
+                        accExports' (accTyped ++ [typed])
 
 -- | Find a module file, checking source directory first, then stdlib.
 findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)

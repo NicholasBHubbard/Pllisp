@@ -5,7 +5,6 @@ module CodegenSpec (spec) where
 import Test.Hspec
 
 import qualified Data.Map.Strict as M
-import qualified Data.Set        as S
 import qualified Data.Text       as T
 import qualified Data.Text.IO as T.IO
 import System.Exit (ExitCode(..))
@@ -430,6 +429,13 @@ spec = do
         ]) >>= (`shouldBe` "3")
 
   describe "ADT edge cases" $ do
+    it "constructor inside lambda" $
+      run (T.unlines
+        [ "(type Box (a) (MkBox a))"
+        , "(let ((wrap (lam ((x %INT)) (MkBox x))))"
+        , "  (case (wrap 42)"
+        , "    ((MkBox v) (print (int-to-str v)))))"
+        ]) >>= (`shouldBe` "42")
     it "constructor with two fields" $
       run (T.unlines
         [ "(type Pair (a b) (MkPair a b))"
@@ -738,6 +744,63 @@ spec = do
             ]
           mainSrc = "(my-do (print \"a\") (print \"b\") (print \"c\"))"
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "a\nb\nc")
+
+  describe "recursive module imports" $ do
+    it "chained imports" $ do
+      let modB = "(let ((double (lam ((x %INT)) (mul 2 x)))) unit)"
+          modA = T.unlines
+            [ "(import B (double))"
+            , "(let ((quad (lam ((x %INT)) (double (double x))))) unit)"
+            ]
+          mainSrc = T.unlines
+            [ "(import A (quad))"
+            , "(print (int-to-str (quad 3)))"
+            ]
+      runWithModules [("B", modB), ("A", modA)] mainSrc >>= (`shouldBe` "12")
+
+    it "diamond imports" $ do
+      let modC = "(let ((inc (lam ((x %INT)) (add x 1)))) unit)"
+          modB = T.unlines
+            [ "(import C (inc))"
+            , "(let ((inc2 (lam ((x %INT)) (inc (inc x))))) unit)"
+            ]
+          modA = T.unlines
+            [ "(import C (inc))"
+            , "(let ((inc3 (lam ((x %INT)) (inc (inc (inc x)))))) unit)"
+            ]
+          mainSrc = T.unlines
+            [ "(import A (inc3))"
+            , "(import B (inc2))"
+            , "(print (int-to-str (add (inc2 0) (inc3 0))))"
+            ]
+      runWithModules [("C", modC), ("A", modA), ("B", modB)] mainSrc >>= (`shouldBe` "5")
+
+    it "transitive type" $ do
+      let modBase = "(type Pair (a b) (MkPair a b))"
+          modLib = T.unlines
+            [ "(import BASE (MkPair))"
+            , "(let ((make-pair (lam ((x %INT) (y %INT)) (MkPair x y)))) unit)"
+            ]
+          mainSrc = T.unlines
+            [ "(import BASE (MkPair))"
+            , "(import LIB (make-pair))"
+            , "(let ((p (make-pair 10 32)))"
+            , "  (case p"
+            , "    ((MkPair x y) (print (int-to-str (add x y))))))"
+            ]
+      runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "42")
+
+    it "transitive macro" $ do
+      let modBase = "(mac twice (x) `(do ,x ,x))"
+          modLib = T.unlines
+            [ "(import BASE)"
+            , "(mac quad (x) `(twice (twice ,x)))"
+            ]
+          mainSrc = T.unlines
+            [ "(import LIB)"
+            , "(quad (print \"x\"))"
+            ]
+      runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "x\nx\nx\nx")
 
   describe "macros" $ do
     it "when macro" $ do
@@ -1630,24 +1693,7 @@ spec = do
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text
-pipeline src = do
-  preludeSexprs <- Stdlib.loadPrelude
-  let sexprs = case Parser.parseSExprs "<test>" src of
-        Left e -> error ("parse error: " ++ show e)
-        Right s -> s
-      expanded = case MacroExpand.expand (preludeSexprs ++ sexprs) of
-        Left e -> error ("macro error: " ++ e)
-        Right s -> s
-      prog = case SExpr.toProgram expanded of
-        Left e -> error ("sexpr error: " ++ SExpr.ceMsg e)
-        Right p -> p
-      exprs = CST.progExprs prog
-  case Resolve.resolve S.empty exprs of
-    Left e -> error ("resolve error: " ++ show e)
-    Right resolved -> case TC.typecheck M.empty resolved of
-      Left e -> error ("typecheck error: " ++ show e)
-      Right typed ->
-        pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert typed))
+pipeline = multiModulePipeline []
 
 run :: T.Text -> IO String
 run = runWith []
@@ -1696,43 +1742,89 @@ runWithModule modName modSrc unquals mainSrc = do
         ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
 
 importPipeline :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO T.Text
-importPipeline modName modSrc unquals mainSrc = do
+importPipeline modName modSrc unquals mainSrc =
+  let importForm = if null unquals
+        then "(import " <> modName <> ")\n"
+        else "(import " <> modName <> " (" <> T.intercalate " " unquals <> "))\n"
+  in multiModulePipeline [(modName, modSrc)] (importForm <> mainSrc)
+
+runWithModules :: [(CST.Symbol, T.Text)] -> T.Text -> IO String
+runWithModules modules mainSrc = do
+  ir <- multiModulePipeline modules mainSrc
+  T.IO.writeFile "/tmp/pllisp_test.ll" ir
+  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
+  (ec1, _, err1) <- readProcessWithExitCode
+    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+  case ec1 of
+    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
+    ExitSuccess -> do
+      (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" [] ""
+      case ec2 of
+        ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
+        ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
+
+multiModulePipeline :: [(CST.Symbol, T.Text)] -> T.Text -> IO T.Text
+multiModulePipeline modules mainSrc = do
   preludeSexprs <- Stdlib.loadPrelude
-  -- Parse module and extract macros for export
-  let modSexprs = case Parser.parseSExprs "<mod>" modSrc of
-        Left e -> error ("mod parse: " ++ show e)
+  let parsedModules = [(name, parseMod name src) | (name, src) <- modules]
+      allModules = ("PRELUDE", preludeSexprs) : parsedModules
+      modMap = M.fromList allModules
+      rawDepMap = M.map (map CST.impModule . SExpr.preScanImports) modMap
+      depMap = M.mapWithKey (\k ds ->
+        if k == "PRELUDE" || "PRELUDE" `elem` ds then ds
+        else "PRELUDE" : ds) rawDepMap
+  order <- case Mod.dependencyOrder depMap of
+    Left e  -> error ("dep order: " ++ e)
+    Right o -> pure o
+  let (finalExports, finalTyped, finalMacros) =
+        foldl (compileOneMod modMap) (M.empty, [], []) order
+      mainSexprs = parseMod "MAIN" mainSrc
+      mainExpanded = case MacroExpand.expand (finalMacros ++ mainSexprs) of
+        Left e  -> error ("main macro: " ++ e)
         Right s -> s
-      modMacroDefs = MacroExpand.extractMacroDefs modSexprs
-  -- Compile module (with prelude macros)
-  let parseMod = case MacroExpand.expand (preludeSexprs ++ modSexprs) of
-          Left e -> error ("mod macro: " ++ e)
-          Right expanded -> case SExpr.toProgram expanded of
-            Left e -> error ("mod sexpr: " ++ SExpr.ceMsg e)
+      mainProg = case SExpr.toProgram mainExpanded of
+        Left e  -> error ("main sexpr: " ++ SExpr.ceMsg e)
+        Right p -> p
+      preludeExports = M.findWithDefault M.empty "PRELUDE" finalExports
+      preludeImport = CST.Import "PRELUDE" (M.keys preludeExports)
+      allMainImports = preludeImport : CST.progImports mainProg
+      (rScope, tcCtx, nMap) = Mod.buildImportScope finalExports allMainImports
+      mainExprs = Mod.desugarTopLevel (CST.progExprs mainProg)
+  case Resolve.resolveWith rScope nMap mainExprs of
+    Left e  -> error ("main resolve: " ++ show e)
+    Right resolved -> case TC.typecheck tcCtx resolved of
+      Left e  -> error ("main typecheck: " ++ show e)
+      Right typed ->
+        let merged = Mod.mergeImportedCode finalTyped typed
+        in pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+  where
+    parseMod name src = case Parser.parseSExprs "<mod>" src of
+      Left e  -> error ("parse " ++ T.unpack name ++ ": " ++ show e)
+      Right s -> s
+
+    compileOneMod modMap (accExports, accTyped, accMacros) modName =
+      let sexprs = modMap M.! modName
+          thisMacros = MacroExpand.extractMacroDefs sexprs
+          isPrelude = modName == "PRELUDE"
+          expanded = case MacroExpand.expand (accMacros ++ sexprs) of
+            Left e  -> error ("macro " ++ T.unpack modName ++ ": " ++ e)
+            Right s -> s
+          modProg = case SExpr.toProgram expanded of
+            Left e  -> error ("sexpr " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg e)
             Right p -> p
-      modTyped =
-          let exprs = Mod.desugarTopLevel (CST.progExprs parseMod)
-          in case Resolve.resolve S.empty exprs of
-            Left e -> error ("mod resolve: " ++ show e)
-            Right resolved -> case TC.typecheck M.empty resolved of
-              Left e -> error ("mod typecheck: " ++ show e)
-              Right typed -> typed
-      modExports = Mod.collectExports modTyped
-      exportMap = M.singleton modName modExports
-      imports = [CST.Import modName unquals]
-      (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap imports
-  -- Compile main (with prelude + imported module macros)
-  let parseMain = case Parser.parseSExprs "<main>" mainSrc of
-        Left e -> error ("main parse: " ++ show e)
-        Right s -> case MacroExpand.expand (preludeSexprs ++ modMacroDefs ++ s) of
-          Left e -> error ("main macro: " ++ e)
-          Right expanded -> case SExpr.toProgram expanded of
-            Left e -> error ("main sexpr: " ++ SExpr.ceMsg e)
-            Right p -> p
-      exprs = Mod.desugarTopLevel (CST.progExprs parseMain)
-  case Resolve.resolveWith resolveScope normMap exprs of
-        Left e -> error ("main resolve: " ++ show e)
-        Right resolved -> case TC.typecheck tcCtx resolved of
-          Left e -> error ("main typecheck: " ++ show e)
-          Right typed ->
-            let merged = Mod.mergeImportedCode [modTyped] typed
-            in pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+          preludeExports = M.findWithDefault M.empty "PRELUDE" accExports
+          cstImports = CST.progImports modProg
+          allImports = if isPrelude then cstImports
+                       else CST.Import "PRELUDE" (M.keys preludeExports) : cstImports
+          (rScope, tcCtx, nMap) = Mod.buildImportScope accExports allImports
+          exprs = Mod.desugarTopLevel (CST.progExprs modProg)
+          typed = case Resolve.resolveWith rScope nMap exprs of
+            Left e  -> error ("resolve " ++ T.unpack modName ++ ": " ++ show e)
+            Right resolved -> case TC.typecheck tcCtx resolved of
+              Left e  -> error ("tc " ++ T.unpack modName ++ ": " ++ show e)
+              Right t -> t
+          modExports = Mod.collectExports typed
+      in (M.insert modName modExports accExports,
+          accTyped ++ [typed],
+          accMacros ++ thisMacros)

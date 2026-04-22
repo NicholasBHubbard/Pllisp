@@ -29,6 +29,12 @@ data SExprF
 
 -- PRE-SCAN
 
+-- | Scan raw SExprs for (module ...) form before macro expansion.
+preScanModuleName :: [SExpr] -> Maybe T.Text
+preScanModuleName [] = Nothing
+preScanModuleName (Loc.Located _ (SList [Loc.Located _ (SAtom "MODULE"), Loc.Located _ (SAtom name)]) : _) = Just name
+preScanModuleName (_ : rest) = preScanModuleName rest
+
 -- | Scan raw SExprs for (import ...) forms before macro expansion.
 preScanImports :: [SExpr] -> [CST.Import]
 preScanImports [] = []

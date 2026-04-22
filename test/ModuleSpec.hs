@@ -27,27 +27,38 @@ spec = do
       CST.symName (fst (head binds)) `shouldBe` "_"
       Loc.locVal body `shouldBe` CST.ExprUnit
 
-    it "top-level let flattens bindings and body becomes _ binding" $ do
+    it "top-level let splices bindings into nested chain" $ do
       let result = desugar "(let ((x 1)) x)"
       length result `shouldBe` 1
+      -- (let ((x 1)) (let ((_ x)) unit))
       let Loc.Located _ (CST.ExprLet binds body) = head result
-      length binds `shouldBe` 2
+      length binds `shouldBe` 1
       CST.symName (fst (head binds)) `shouldBe` "X"
-      CST.symName (fst (binds !! 1)) `shouldBe` "_"
-      Loc.locVal body `shouldBe` CST.ExprUnit
+      -- body is let ((_ x)) unit
+      case Loc.locVal body of
+        CST.ExprLet innerBinds innerBody -> do
+          length innerBinds `shouldBe` 1
+          CST.symName (fst (head innerBinds)) `shouldBe` "_"
+          Loc.locVal innerBody `shouldBe` CST.ExprUnit
+        _ -> expectationFailure "expected nested let"
 
-    it "multiple forms desugar into flat let" $ do
-      let result = desugar "(let ((x 1)) x) (add x 1) (let ((y 2)) y) (add y 1)"
+    it "multiple forms desugar into nested let chain" $ do
+      -- (let ((x 1)) x) (add x 1) becomes:
+      -- (let ((x 1)) (let ((_ x)) (let ((_ (add x 1))) unit)))
+      let result = desugar "(let ((x 1)) x) (add x 1)"
       length result `shouldBe` 1
-      let Loc.Located _ (CST.ExprLet binds body) = head result
-      length binds `shouldBe` 6
-      CST.symName (fst (head binds)) `shouldBe` "X"
-      CST.symName (fst (binds !! 1)) `shouldBe` "_"  -- body of first let (x)
-      CST.symName (fst (binds !! 2)) `shouldBe` "_"  -- bare (add x 1)
-      CST.symName (fst (binds !! 3)) `shouldBe` "Y"
-      CST.symName (fst (binds !! 4)) `shouldBe` "_"  -- body of second let (y)
-      CST.symName (fst (binds !! 5)) `shouldBe` "_"  -- bare (add y 1)
-      Loc.locVal body `shouldBe` CST.ExprUnit
+      let Loc.Located _ (CST.ExprLet binds1 body1) = head result
+      length binds1 `shouldBe` 1
+      CST.symName (fst (head binds1)) `shouldBe` "X"
+      -- body1: (let ((_ x)) ...)
+      let CST.ExprLet binds2 body2 = Loc.locVal body1
+      length binds2 `shouldBe` 1
+      CST.symName (fst (head binds2)) `shouldBe` "_"
+      -- body2: (let ((_ (add x 1))) unit)
+      let CST.ExprLet binds3 body3 = Loc.locVal body2
+      length binds3 `shouldBe` 1
+      CST.symName (fst (head binds3)) `shouldBe` "_"
+      Loc.locVal body3 `shouldBe` CST.ExprUnit
 
     it "type declarations stay separate from the let" $ do
       let result = desugar "(type Foo () (Bar)) 42"
@@ -93,6 +104,11 @@ spec = do
     it "collects let binding schemes" $ do
       let exports = collectExports "(let ((x 1)) x)"
       M.lookup "X" exports `shouldBe` Just (TC.Forall S.empty Ty.TyInt)
+
+    it "collects bindings across nested chain" $ do
+      let exports = collectExports "(let ((x 1)) x) (let ((y 2)) y)"
+      M.member "X" exports `shouldBe` True
+      M.member "Y" exports `shouldBe` True
 
     it "excludes _ bindings from exports" $ do
       let exports = collectExports "(let ((_ 1)) unit)"
@@ -181,18 +197,32 @@ spec = do
         Loc.Located _ (Ty.Typed _ (TC.TRType "M" _ _)) -> pure ()
         other -> expectationFailure ("expected TRType M, got: " ++ show other)
 
-    it "merges imported let bindings into local let" $ do
+    it "merges imported let bindings wrapping local code" $ do
       let importedTyped = typecheckSrc "(let ((x 1)) x)"
           localTyped    = typecheckSrc "(let ((y 2)) y)"
           merged = Mod.mergeImportedCode [importedTyped] localTyped
-      -- Should have one let with both X and Y bindings
-      let letExprs = [binds | Loc.Located _ (Ty.Typed _ (TC.TRLet binds _)) <- merged]
+      -- Imported X wraps the local code as an outer let
+      case [e | e@(Loc.Located _ (Ty.Typed _ (TC.TRLet _ _))) <- merged] of
+        [Loc.Located _ (Ty.Typed _ (TC.TRLet outerBinds body))] -> do
+          let outerNames = [n | (n, _, _) <- outerBinds, n /= "_"]
+          elem "X" outerNames `shouldBe` True
+          -- Body should be the local code (a let with Y)
+          case body of
+            Loc.Located _ (Ty.Typed _ (TC.TRLet innerBinds _)) -> do
+              let innerNames = [n | (n, _, _) <- innerBinds, n /= "_"]
+              elem "Y" innerNames `shouldBe` True
+            _ -> expectationFailure "expected local let as body"
+        other -> expectationFailure ("expected 1 outer let, got " ++ show (length other))
+
+    it "passes through local code when no imports have bindings" $ do
+      let localTyped = typecheckSrc "(let ((x 1)) x)"
+          merged = Mod.mergeImportedCode [] localTyped
+          letExprs = [bs | Loc.Located _ (Ty.Typed _ (TC.TRLet bs _)) <- merged]
       case letExprs of
         [binds] -> do
           let names = [n | (n, _, _) <- binds, n /= "_"]
           elem "X" names `shouldBe` True
-          elem "Y" names `shouldBe` True
-        other -> expectationFailure ("expected 1 merged let, got " ++ show (length other))
+        _ -> expectationFailure "expected local let preserved"
 
   describe "module name validation" $ do
     it "accepts matching name and filename" $ do

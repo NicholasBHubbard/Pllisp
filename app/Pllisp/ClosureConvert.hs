@@ -17,7 +17,9 @@ import qualified Data.Set as S
 -- ENTRY POINT
 
 closureConvert :: TC.TResolvedCST -> CCProgram
-closureConvert = map convertExpr
+closureConvert exprs =
+  let ctorNames = collectCtorNames exprs
+  in map (convertExpr ctorNames) exprs
 
 -- CORE
 
@@ -61,17 +63,17 @@ data CCPattern
 -- CONVERSION
 
 -- | Convert a single top-level typed expression, stripping the Located wrapper.
-convertExpr :: TC.TRExpr -> CCExpr
-convertExpr (Loc.Located _ (Ty.Typed t expr)) = Ty.Typed t $ case expr of
+convertExpr :: S.Set CST.Symbol -> TC.TRExpr -> CCExpr
+convertExpr ctors (Loc.Located _ (Ty.Typed t expr)) = Ty.Typed t $ case expr of
   TC.TRLit l    -> CCLit l
   TC.TRBool b   -> CCBool b
   TC.TRUnit     -> CCUnit
   TC.TRVar vb   -> CCVar (Res.symName vb) t
-  TC.TRIf c t e -> CCIf (convertExpr c) (convertExpr t) (convertExpr e)
-  TC.TRApp f as -> CCApp (convertExpr f) (map convertExpr as)
+  TC.TRIf c t e -> CCIf (go c) (go t) (go e)
+  TC.TRApp f as -> CCApp (go f) (map go as)
   TC.TRLet binds body ->
-    let ccBinds = [(n, bt, convertExpr rhs) | (n, bt, rhs) <- binds]
-    in CCLet ccBinds (convertExpr body)
+    let ccBinds = [(n, bt, go rhs) | (n, bt, rhs) <- binds]
+    in CCLet ccBinds (go body)
   TC.TRType n ps cs -> CCType n ps cs
   TC.TRFFI n pts rt -> CCFFI n pts rt
   TC.TRFFIStruct n fs -> CCFFIStruct n fs
@@ -79,16 +81,16 @@ convertExpr (Loc.Located _ (Ty.Typed t expr)) = Ty.Typed t $ case expr of
   TC.TRFFIEnum n vs -> CCFFIEnum n vs
   TC.TRFFICallback n pts rt -> CCFFICallback n pts rt
   TC.TRCase scr arms ->
-    CCCase (convertExpr scr) [(convertPattern p, convertExpr b) | (p, b) <- arms]
-  TC.TRLoop params body -> CCLoop params (convertExpr body)
-  TC.TRRecur args -> CCRecur (map convertExpr args)
+    CCCase (go scr) [(convertPattern p, go b) | (p, b) <- arms]
+  TC.TRLoop params body -> CCLoop params (go body)
+  TC.TRRecur args -> CCRecur (map go args)
   TC.TRLam params retTy body ->
-    -- This is the interesting case: compute free variables of the lambda body,
-    -- subtract the params (and built-ins/constructors), and attach them.
     let bodyFvMap  = freeVars body
         paramNames = S.fromList (map fst params)
-        free       = M.withoutKeys bodyFvMap (S.union paramNames globalNames)
-    in CCLam params (M.toList free) retTy (convertExpr body)
+        free       = M.withoutKeys bodyFvMap (S.unions [paramNames, globalNames, ctors])
+    in CCLam params (M.toList free) retTy (go body)
+  where
+    go = convertExpr ctors
 
 convertPattern :: TC.TRPattern -> CCPattern
 convertPattern pat = case pat of
@@ -106,6 +108,11 @@ convertPattern pat = case pat of
 -- | Names that should never appear as captured free variables.
 globalNames :: S.Set CST.Symbol
 globalNames = BuiltIn.builtInNames
+
+-- | Collect all constructor names from type declarations in the AST.
+collectCtorNames :: TC.TResolvedCST -> S.Set CST.Symbol
+collectCtorNames exprs = S.fromList
+  [CST.dcName dc | Loc.Located _ (Ty.Typed _ (TC.TRType _ _ dcs)) <- exprs, dc <- dcs]
 
 -- | Free variables of a TRExpr. Returns a map from symbol to its type.
 freeVars :: TC.TRExpr -> M.Map CST.Symbol Ty.Type

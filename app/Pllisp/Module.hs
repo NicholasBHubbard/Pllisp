@@ -17,36 +17,47 @@ import           System.FilePath (takeBaseName, takeFileName)
 -- TOP-LEVEL DESUGARING
 
 -- | Desugar a list of top-level expressions into type declarations followed by
--- a single flat let with unit body. Type declarations pass through unchanged.
--- Top-level lets have their bindings flattened and their body bound to _.
--- Bare expressions are bound to _.
+-- a nested let chain. Type/FFI declarations pass through unchanged.
+-- Top-level lets have their bindings spliced into the chain with the body
+-- continuing to subsequent expressions. Bare expressions become _ bindings.
+-- This preserves proper let-polymorphism (each let group is generalized before
+-- its body) while making cross-expression bindings visible.
 desugarTopLevel :: CST.CST -> CST.CST
 desugarTopLevel exprs =
-  let (types, binds) = foldr classifyExpr ([], []) exprs
-  in types ++ case binds of
+  let (decls, rest) = partition isDeclLike exprs
+  in decls ++ case rest of
     [] -> []
-    _  -> [mkLet binds]
+    _  -> [buildNestedLet rest]
   where
-    classifyExpr :: CST.Expr -> ([CST.Expr], [(CST.TSymbol, CST.Expr)]) -> ([CST.Expr], [(CST.TSymbol, CST.Expr)])
-    classifyExpr loc@(Loc.Located _ (CST.ExprType _ _ _)) (ts, bs) = (loc : ts, bs)
-    classifyExpr loc@(Loc.Located _ (CST.ExprCls _ _ _)) (ts, bs) = (loc : ts, bs)
-    classifyExpr loc@(Loc.Located _ (CST.ExprInst _ _ _)) (ts, bs) = (loc : ts, bs)
-    classifyExpr (Loc.Located _ (CST.ExprLet letBinds body)) (ts, bs) =
-      (ts, letBinds ++ [(wildSym, body)] ++ bs)
-    classifyExpr expr (ts, bs) =
-      (ts, [(wildSym, expr)] ++ bs)
+    isDeclLike (Loc.Located _ e) = case e of
+      CST.ExprType{}        -> True
+      CST.ExprCls{}         -> True
+      CST.ExprInst{}        -> True
+      CST.ExprFFI{}         -> True
+      CST.ExprFFIStruct{}   -> True
+      CST.ExprFFIVar{}      -> True
+      CST.ExprFFIEnum{}     -> True
+      CST.ExprFFICallback{} -> True
+      _                     -> False
 
-    wildSym :: CST.TSymbol
+    buildNestedLet [] = unitExpr
+    buildNestedLet [Loc.Located _ (CST.ExprLet binds body)] =
+      mkLet binds (buildNestedLet [body])
+    buildNestedLet [expr] =
+      mkLet [(wildSym, expr)] unitExpr
+    buildNestedLet (Loc.Located _ (CST.ExprLet binds body) : rest) =
+      mkLet binds (buildNestedLet (body : rest))
+    buildNestedLet (expr : rest) =
+      mkLet [(wildSym, expr)] (buildNestedLet rest)
+
     wildSym = CST.TSymbol "_" Nothing
-
-    mkLet :: [(CST.TSymbol, CST.Expr)] -> CST.Expr
-    mkLet binds = Loc.Located dummySpan (CST.ExprLet binds unitExpr)
-
-    unitExpr :: CST.Expr
+    mkLet binds body = Loc.Located dummySpan (CST.ExprLet binds body)
     unitExpr = Loc.Located dummySpan CST.ExprUnit
-
-    dummySpan :: Loc.Span
     dummySpan = Loc.Span (Loc.Pos "<desugar>" 0 0) (Loc.Pos "<desugar>" 0 0)
+
+    partition _ [] = ([], [])
+    partition p (x:xs) = let (ys, ns) = partition p xs
+                         in if p x then (x:ys, ns) else (ys, x:ns)
 
 -- EXPORT COLLECTION
 
@@ -59,48 +70,57 @@ collectExports typed =
       ctorExports = TC.buildCtorContext typeDecls
   in M.union letExports ctorExports
   where
-    collectLetExports (Loc.Located _ (Ty.Typed _ (TC.TRLet binds _))) =
-      M.fromList [(n, TC.generalize M.empty t) | (n, t, _) <- binds, n /= "_"]
+    collectLetExports (Loc.Located _ (Ty.Typed _ (TC.TRLet binds body))) =
+      let named = M.fromList [(n, TC.generalize M.empty t) | (n, t, _) <- binds, n /= "_"]
+          fromBody = collectLetExports body
+      in M.union named fromBody
     collectLetExports _ = M.empty
 
 -- MERGE IMPORTED CODE
 
 -- | Merge imported modules' typed ASTs into the local module's typed AST.
 -- Type declarations from imports are prepended. Let-bindings from imports
--- are prepended into the local module's top-level let so they share scope.
+-- wrap the local module's code as an outer let, preserving the local nested
+-- let chain structure.
 mergeImportedCode :: [TC.TResolvedCST] -> TC.TResolvedCST -> TC.TResolvedCST
 mergeImportedCode importedModules localTyped =
-  let -- Extract type decls and let-bindings from each imported module
-      (impTypes, impBinds) = mconcat (map splitTyped importedModules)
-      -- Split local typed into types and lets
-      (localTypes, localBinds, localBody) = splitLocal localTyped
-  in impTypes ++ localTypes ++ case impBinds ++ localBinds of
-    []    -> maybeBody localBody
-    binds -> [mkTypedLet binds localBody]
+  let (impTypes, impBinds) = mconcat (map splitTyped importedModules)
+      (localTypes, localCode) = splitLocal localTyped
+  in impTypes ++ localTypes ++ case (impBinds, localCode) of
+    ([], [])   -> []
+    ([], code) -> code
+    (bs, [])   -> [mkTypedLet bs unitExpr]
+    (bs, code) -> [mkTypedLet bs (wrapCode code)]
   where
-    splitTyped :: TC.TResolvedCST -> ([TC.TRExpr], [(CST.Symbol, Ty.Type, TC.TRExpr)])
     splitTyped exprs =
-      let types = [e | e@(Loc.Located _ (Ty.Typed _ (TC.TRType _ _ _))) <- exprs]
-          binds = concat [bs | Loc.Located _ (Ty.Typed _ (TC.TRLet bs _)) <- exprs]
-      in (types, binds)
+      let decls = filter isDecl exprs
+          binds = concatMap collectBinds exprs
+      in (decls, binds)
 
-    splitLocal :: TC.TResolvedCST -> ([TC.TRExpr], [(CST.Symbol, Ty.Type, TC.TRExpr)], Maybe TC.TRExpr)
-    splitLocal exprs =
-      let types = [e | e@(Loc.Located _ (Ty.Typed _ (TC.TRType _ _ _))) <- exprs]
-          bindsAndBody = [(bs, b) | Loc.Located _ (Ty.Typed _ (TC.TRLet bs b)) <- exprs]
-      in case bindsAndBody of
-        [(bs, body)] -> (types, bs, Just body)
-        _            -> (types, [], Nothing)
+    collectBinds :: TC.TRExpr -> [(CST.Symbol, Ty.Type, TC.TRExpr)]
+    collectBinds (Loc.Located _ (Ty.Typed _ (TC.TRLet bs body))) =
+      let named = [(n, t, e) | (n, t, e) <- bs, n /= "_"]
+      in named ++ collectBinds body
+    collectBinds _ = []
 
-    maybeBody Nothing  = []
-    maybeBody (Just b) = [b]
+    splitLocal exprs = (filter isDecl exprs, filter (not . isDecl) exprs)
 
-    mkTypedLet binds mBody =
-      let body = case mBody of
-            Just b  -> b
-            Nothing -> Loc.Located dummySp (Ty.Typed Ty.TyUnit TC.TRUnit)
-      in Loc.Located dummySp (Ty.Typed (TC.typeOf body) (TC.TRLet binds body))
+    isDecl (Loc.Located _ (Ty.Typed _ e)) = case e of
+      TC.TRType{}        -> True
+      TC.TRFFI{}         -> True
+      TC.TRFFIStruct{}   -> True
+      TC.TRFFIVar{}      -> True
+      TC.TRFFIEnum{}     -> True
+      TC.TRFFICallback{} -> True
+      _                  -> False
 
+    wrapCode [single] = single
+    wrapCode _        = unitExpr
+
+    mkTypedLet binds body =
+      Loc.Located dummySp (Ty.Typed (TC.typeOf body) (TC.TRLet binds body))
+
+    unitExpr = Loc.Located dummySp (Ty.Typed Ty.TyUnit TC.TRUnit)
     dummySp = Loc.Span (Loc.Pos "<merge>" 0 0) (Loc.Pos "<merge>" 0 0)
 
 -- IMPORT SCOPE BUILDING
