@@ -954,19 +954,42 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
           keyAts <- traverse (\(_, e) -> infer e) keyExprs
           pure (posAts ++ keyAts)
 
-    rt <- fresh
     variadics <- ieVariadics <$> RWS.ask
     let isVariadic = case fexpr of
           Loc.Located _ (Res.RVar vb) -> S.member (Res.symName vb) variadics
           _ -> False
-    if isVariadic
-      then case typeOf ft of
-        Ty.TyFun fixedTys fRet -> do
-          sequence_ [constrain sp (typeOf a) ft' | (a, ft') <- zip ats fixedTys]
-          constrain sp fRet rt
-        _ -> constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
-      else constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
-    pure $ Ty.Typed rt (TRApp ft ats)
+        canPartialApply = not isVariadic && case funcInfo of
+          Just (FuncInfo _ FIPlain) -> True
+          Nothing                   -> True
+          _                         -> False
+    case typeOf ft of
+      Ty.TyFun paramTys retTy
+        | canPartialApply, not (null ats), length ats < length paramTys -> do
+          -- Partial application: eta-expand into a closure
+          let nSupplied    = length ats
+              suppliedTys  = take nSupplied paramTys
+              remainingTys = drop nSupplied paramTys
+              curryRetTy   = Ty.TyFun remainingTys retTy
+          sequence_ [constrain sp (typeOf a) pt | (a, pt) <- zip ats suppliedTys]
+          n <- RWS.get
+          let nRemaining = length remainingTys
+              freshNames = [T.pack ("$$pa" ++ show (n + fromIntegral i)) | i <- [0..nRemaining-1]]
+          RWS.put (n + fromIntegral nRemaining)
+          let freshParams = zip freshNames remainingTys
+              freshVars   = [Loc.Located sp (Ty.Typed rty (TRVar (Res.VarBinding 0 name)))
+                            | (name, rty) <- freshParams]
+              innerApp    = Loc.Located sp (Ty.Typed retTy (TRApp ft (ats ++ freshVars)))
+          pure $ Ty.Typed curryRetTy (TRLam freshParams retTy innerApp)
+      _ -> do
+        rt <- fresh
+        if isVariadic
+          then case typeOf ft of
+            Ty.TyFun fixedTys fRet -> do
+              sequence_ [constrain sp (typeOf a) ft' | (a, ft') <- zip ats fixedTys]
+              constrain sp fRet rt
+            _ -> constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
+          else constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
+        pure $ Ty.Typed rt (TRApp ft ats)
 
   Res.RKeyArg _ _ -> do
     t <- recordError sp "&key argument outside function application"

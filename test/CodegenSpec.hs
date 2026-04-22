@@ -113,6 +113,50 @@ spec = do
         , "      (print (int-to-str (g 12))))))"
         ]) >>= (`shouldBe` "42")
 
+  describe "partial application" $ do
+    it "partially apply built-in" $
+      run (T.unlines
+        [ "(let ((inc (add 1)))"
+        , "  (print (int-to-str (inc 41))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "partially apply user function" $
+      run (T.unlines
+        [ "(let ((f (lam ((a %INT) (b %INT) (c %INT)) (add a (add b c)))))"
+        , "  (let ((g (f 10)))"
+        , "    (print (int-to-str (g 20 12)))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "chain partial applications" $
+      run (T.unlines
+        [ "(let ((f (lam ((a %INT) (b %INT) (c %INT)) (add a (add b c)))))"
+        , "  (let ((g (f 10)))"
+        , "    (let ((h (g 20)))"
+        , "      (print (int-to-str (h 12))))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "partial apply constructor" $
+      run (T.unlines
+        [ "(type Pair () (MkPair %INT %INT))"
+        , "(let ((mk (MkPair 1)))"
+        , "  (case (mk 2)"
+        , "    ((MkPair a b) (print (int-to-str (add a b))))))"
+        ]) >>= (`shouldBe` "3")
+
+    it "pass partial application as argument" $
+      run (T.unlines
+        [ "(let ((apply (lam (f (x %INT)) (f x))))"
+        , "  (print (int-to-str (apply (add 1) 41))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "partial apply used multiple times" $
+      run (T.unlines
+        [ "(let ((inc (add 1)))"
+        , "  (do (print (int-to-str (inc 10)))"
+        , "      (print (int-to-str (inc 20)))"
+        , "      (print (int-to-str (inc 30)))))"
+        ]) >>= (`shouldBe` "11\n21\n31")
+
   describe "algebraic data types" $ do
     it "constructor and case match" $
       run (T.unlines
