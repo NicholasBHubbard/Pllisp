@@ -696,6 +696,11 @@ spec = do
           mainSrc = "(print (int-to-str (Mod.square 7)))"
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "49")
 
+    it "aliased import uses alias as qualifier" $ do
+      let modSrc = "(let ((square (lam ((x %INT)) (mul x x)))) unit)"
+          mainSrc = "(import MOD M)\n(print (int-to-str (M.square 7)))"
+      runWithModules [("MOD", modSrc)] mainSrc >>= (`shouldBe` "49")
+
     it "imported type constructors" $ do
       let modSrc = "(type Box (a) (MkBox a))"
           mainSrc = T.unlines
@@ -1787,7 +1792,7 @@ multiModulePipeline modules mainSrc = do
         Left e  -> error ("main sexpr: " ++ SExpr.ceMsg e)
         Right p -> p
       preludeExports = M.findWithDefault M.empty "PRELUDE" finalExports
-      preludeImport = CST.Import "PRELUDE" (M.keys preludeExports)
+      preludeImport = CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports)
       allMainImports = preludeImport : CST.progImports mainProg
       (rScope, tcCtx, nMap) = Mod.buildImportScope finalExports allMainImports
       mainExprs = Mod.desugarTopLevel (CST.progExprs mainProg)
@@ -1816,7 +1821,7 @@ multiModulePipeline modules mainSrc = do
           preludeExports = M.findWithDefault M.empty "PRELUDE" accExports
           cstImports = CST.progImports modProg
           allImports = if isPrelude then cstImports
-                       else CST.Import "PRELUDE" (M.keys preludeExports) : cstImports
+                       else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
           (rScope, tcCtx, nMap) = Mod.buildImportScope accExports allImports
           exprs = Mod.desugarTopLevel (CST.progExprs modProg)
           typed = case Resolve.resolveWith rScope nMap exprs of

@@ -44,8 +44,13 @@ importParser :: Parser CST.Import
 importParser = MP.label "import declaration" $ MP.try $ parens $ do
   _ <- ident' "IMPORT"
   modName <- symbolParser
-  unquals <- MP.option [] $ parens (MP.many symbolParser)
-  pure (CST.Import modName unquals)
+  mNext <- MP.optional (Left <$> MP.try symbolParser MP.<|> Right <$> parens (MP.many symbolParser))
+  case mNext of
+    Nothing           -> pure (CST.Import modName modName [])
+    Just (Right uqs)  -> pure (CST.Import modName modName uqs)
+    Just (Left alias) -> do
+      unquals <- MP.option [] $ parens (MP.many symbolParser)
+      pure (CST.Import modName alias unquals)
 
 exprParser :: Parser CST.Expr
 exprParser = MP.label "expression" $ located $ MP.choice

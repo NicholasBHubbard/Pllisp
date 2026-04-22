@@ -125,10 +125,33 @@ mergeImportedCode importedModules localTyped =
 
 -- IMPORT SCOPE BUILDING
 
+-- | Check for unqualified name collisions across imports.
+-- Returns Left with error message if the same unqualified name is imported
+-- from multiple modules.
+checkImportCollisions
+  :: M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)
+  -> [CST.Import]
+  -> Either String ()
+checkImportCollisions exports imports =
+  let unqualPairs = concatMap getUnquals imports
+      grouped = M.fromListWith (++) [(n, [m]) | (n, m) <- unqualPairs]
+      collisions = M.filter (\ms -> length ms > 1) grouped
+  in if M.null collisions then Right ()
+     else Left $ unlines
+       [ "ambiguous import: " ++ T.unpack name ++ " is imported unqualified from "
+         ++ T.unpack (T.intercalate ", " mods)
+       | (name, mods) <- M.toList collisions]
+  where
+    getUnquals (CST.Import modName _ unquals) =
+      let modExports = M.findWithDefault M.empty modName exports
+      in [(n, modName) | n <- unquals, M.member n modExports]
+
 -- | Given loaded module exports and import declarations, build:
 -- 1. A set of names for the resolver (qualified + unqualified)
--- 2. A type context for the typechecker (both forms, so qualified refs typecheck)
+-- 2. A type context for the typechecker (qualified + explicitly unqualified)
 -- 3. A normalization map (qualified → unqualified) for the resolver
+-- Qualified names use impAlias, not impModule. Only explicitly listed
+-- unquals appear as unqualified names.
 buildImportScope
   :: M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)  -- module name → exports
   -> [CST.Import]
@@ -137,16 +160,18 @@ buildImportScope exports imports =
   let (resolveNames, tcPairs, normPairs) = mconcat (map buildOne imports)
   in (S.fromList resolveNames, M.fromList tcPairs, M.fromList normPairs)
   where
-    buildOne (CST.Import modName unquals) =
+    buildOne (CST.Import modName alias unquals) =
       let modExports = M.findWithDefault M.empty modName exports
-          -- Qualified: MODNAME.NAME → scheme
-          qualNames  = [modName <> "." <> n | (n, _) <- M.toList modExports]
-          qualCtx    = [(modName <> "." <> n, scheme) | (n, scheme) <- M.toList modExports]
-          -- Unqualified: selectively in resolve scope, always in TC context
+          -- Qualified: ALIAS.NAME in resolve scope
+          qualNames = [alias <> "." <> n | (n, _) <- M.toList modExports]
+          -- Unqualified: only explicitly listed names in resolve scope
           unqualNames = [n | (n, _) <- M.toList modExports, n `elem` unquals]
+          -- TC context: qualified forms + all unqualified forms (needed for
+          -- normalization: resolver maps ALIAS.NAME → NAME, so TC needs NAME)
+          qualCtx     = [(alias <> "." <> n, scheme) | (n, scheme) <- M.toList modExports]
           allUnqualCtx = M.toList modExports
-          -- Normalization map: MODNAME.NAME → NAME
-          normMap = [(modName <> "." <> n, n) | (n, _) <- M.toList modExports]
+          -- Normalization map: ALIAS.NAME → NAME
+          normMap = [(alias <> "." <> n, n) | (n, _) <- M.toList modExports]
       in (qualNames ++ unqualNames, qualCtx ++ allUnqualCtx, normMap)
 
 -- DEPENDENCY ORDERING

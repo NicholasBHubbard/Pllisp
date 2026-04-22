@@ -78,11 +78,20 @@ partitionImports = go [] []
     go imps other (sx : rest) = go imps (sx : other) rest
 
 toImport :: SExpr -> Either ConvertError CST.Import
+-- (import FOO)
 toImport (Loc.Located _ (SList [Loc.Located _ (SAtom "IMPORT"), Loc.Located _ (SAtom modName)])) =
-  Right $ CST.Import modName []
+  Right $ CST.Import modName modName []
+-- (import FOO (x y))
 toImport (Loc.Located _ (SList [Loc.Located _ (SAtom "IMPORT"), Loc.Located _ (SAtom modName), Loc.Located _ (SList unquals)])) = do
   names <- mapM toAtomName unquals
-  Right $ CST.Import modName names
+  Right $ CST.Import modName modName names
+-- (import FOO F)
+toImport (Loc.Located _ (SList [Loc.Located _ (SAtom "IMPORT"), Loc.Located _ (SAtom modName), Loc.Located _ (SAtom alias)])) =
+  Right $ CST.Import modName alias []
+-- (import FOO F (x y))
+toImport (Loc.Located _ (SList [Loc.Located _ (SAtom "IMPORT"), Loc.Located _ (SAtom modName), Loc.Located _ (SAtom alias), Loc.Located _ (SList unquals)])) = do
+  names <- mapM toAtomName unquals
+  Right $ CST.Import modName alias names
 toImport (Loc.Located sp _) = Left $ ConvertError sp "invalid import"
 
 toAtomName :: SExpr -> Either ConvertError T.Text

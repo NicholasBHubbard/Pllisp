@@ -49,7 +49,7 @@ compileFile fp = do
       let isPrelude = SExpr.preScanModuleName sexprs == Just "PRELUDE"
           imports = SExpr.preScanImports sexprs
           macroImports = if isPrelude then imports
-                         else CST.Import "PRELUDE" [] : imports
+                         else CST.Import "PRELUDE" "PRELUDE" [] : imports
       macroResult <- loadImportedMacros S.empty searchDir stdlibDir macroImports
       case macroResult of
         Left err -> putStrLn ("import error: " ++ err)
@@ -71,43 +71,46 @@ compileProg fp src render prog = do
   let isPrelude = CST.progName prog == Just "PRELUDE"
       explicitImports = CST.progImports prog
       allImports = if isPrelude then explicitImports
-                   else CST.Import "PRELUDE" [] : explicitImports
+                   else CST.Import "PRELUDE" "PRELUDE" [] : explicitImports
   importResult <- loadImports fp allImports
   case importResult of
     Left err -> putStrLn err
     Right (exportMap, importedTypedModules) -> do
       let preludeExports = M.findWithDefault M.empty "PRELUDE" exportMap
           fixedImports = if isPrelude then explicitImports
-                         else CST.Import "PRELUDE" (M.keys preludeExports) : explicitImports
-          (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap fixedImports
-          exprs = Mod.desugarTopLevel (CST.progExprs prog)
-      case Resolve.resolveWith resolveScope normMap exprs of
-        Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
-        Right resolved ->
-          case TC.typecheck tcCtx resolved of
-            Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
-            Right typed -> do
-              let merged = Mod.mergeImportedCode importedTypedModules typed
-              case Exhaust.exhaustCheck merged of
-                errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
-                [] -> do
-                  let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
-                      base = dropExtension fp
-                      llFile = base ++ ".ll"
-                      bridgeFile = base ++ "_ffi_bridge.c"
-                      exeFile = base
-                  T.IO.writeFile llFile ir
-                  T.IO.writeFile bridgeFile Ty.ffiBridgeC
-                  (ec, _, err') <- readProcessWithExitCode
-                    "clang" [llFile, bridgeFile, "-o", exeFile,
-                             "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-                  removeFile bridgeFile
-                  case ec of
-                    ExitFailure _ -> do
-                      putStrLn ("clang failed:\n" ++ err')
-                      exitFailure
-                    ExitSuccess ->
-                      putStrLn ("compiled: " ++ exeFile)
+                         else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : explicitImports
+      case Mod.checkImportCollisions exportMap fixedImports of
+        Left err -> putStrLn err
+        Right () -> do
+          let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap fixedImports
+              exprs = Mod.desugarTopLevel (CST.progExprs prog)
+          case Resolve.resolveWith resolveScope normMap exprs of
+            Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
+            Right resolved ->
+              case TC.typecheck tcCtx resolved of
+                Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
+                Right typed -> do
+                  let merged = Mod.mergeImportedCode importedTypedModules typed
+                  case Exhaust.exhaustCheck merged of
+                    errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
+                    [] -> do
+                      let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+                          base = dropExtension fp
+                          llFile = base ++ ".ll"
+                          bridgeFile = base ++ "_ffi_bridge.c"
+                          exeFile = base
+                      T.IO.writeFile llFile ir
+                      T.IO.writeFile bridgeFile Ty.ffiBridgeC
+                      (ec, _, err') <- readProcessWithExitCode
+                        "clang" [llFile, bridgeFile, "-o", exeFile,
+                                 "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+                      removeFile bridgeFile
+                      case ec of
+                        ExitFailure _ -> do
+                          putStrLn ("clang failed:\n" ++ err')
+                          exitFailure
+                        ExitSuccess ->
+                          putStrLn ("compiled: " ++ exeFile)
 
 -- | Scanned module info (before compilation).
 data ModuleInfo = ModuleInfo
@@ -143,7 +146,7 @@ scanAllModules searchDir stdlibDir rootImports =
   go S.empty M.empty [(imp, searchDir) | imp <- rootImports]
   where
     go _ acc [] = pure (Right acc)
-    go visited acc ((CST.Import modName _, dir) : rest)
+    go visited acc ((CST.Import modName _ _, dir) : rest)
       | S.member modName visited = go visited acc rest
       | otherwise = do
           mPath <- findModuleFile dir stdlibDir modName
@@ -176,7 +179,7 @@ compileModules moduleInfos (modName : rest) accExports accTyped =
           modImports = miImports info
           isPrelude = modName == "PRELUDE"
           macroImports = if isPrelude then modImports
-                         else CST.Import "PRELUDE" [] : modImports
+                         else CST.Import "PRELUDE" "PRELUDE" [] : modImports
       stdlibDir <- Stdlib.getStdlibDir
       macroResult <- loadImportedMacros (S.singleton modName)
         (takeDirectory (miPath info)) stdlibDir macroImports
@@ -192,19 +195,22 @@ compileModules moduleInfos (modName : rest) accExports accTyped =
                 let cstImports = CST.progImports modProg
                     preludeExports = M.findWithDefault M.empty "PRELUDE" accExports
                     allImports = if isPrelude then cstImports
-                                 else CST.Import "PRELUDE" (M.keys preludeExports) : cstImports
-                    (resolveScope, tcCtx, normMap) =
-                      Mod.buildImportScope accExports allImports
-                    exprs = Mod.desugarTopLevel (CST.progExprs modProg)
-                case Resolve.resolveWith resolveScope normMap exprs of
-                  Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-                  Right resolved -> case TC.typecheck tcCtx resolved of
-                    Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
-                    Right typed -> do
-                      let exports = Mod.collectExports typed
-                          accExports' = M.insert modName exports accExports
-                      compileModules moduleInfos rest
-                        accExports' (accTyped ++ [typed])
+                                 else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
+                case Mod.checkImportCollisions accExports allImports of
+                  Left err -> pure (Left err)
+                  Right () -> do
+                    let (resolveScope, tcCtx, normMap) =
+                          Mod.buildImportScope accExports allImports
+                        exprs = Mod.desugarTopLevel (CST.progExprs modProg)
+                    case Resolve.resolveWith resolveScope normMap exprs of
+                      Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+                      Right resolved -> case TC.typecheck tcCtx resolved of
+                        Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+                        Right typed -> do
+                          let exports = Mod.collectExports typed
+                              accExports' = M.insert modName exports accExports
+                          compileModules moduleInfos rest
+                            accExports' (accTyped ++ [typed])
 
 -- | Find a module file, checking source directory first, then stdlib.
 findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)

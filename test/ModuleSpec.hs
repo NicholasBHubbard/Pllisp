@@ -153,39 +153,91 @@ spec = do
         Right _ -> expectationFailure "expected cycle error"
 
   describe "buildImportScope" $ do
-    it "builds qualified names from exports" $ do
+    it "qualified-only import: ALIAS.NAME in scope, bare NAME not" $ do
       let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
-          imports = [CST.Import "FOO" []]
+          imports = [CST.Import "FOO" "FOO" []]
           (resolveScope, tcCtx, normMap) = Mod.buildImportScope exports imports
       S.member "FOO.BAR" resolveScope `shouldBe` True
       S.member "BAR" resolveScope `shouldBe` False
       M.member "FOO.BAR" tcCtx `shouldBe` True
-      -- Unqualified always in TC context (needed for normalized names)
+      -- BAR is in TC context (needed for normalization) but not in resolve scope
       M.member "BAR" tcCtx `shouldBe` True
       M.lookup "FOO.BAR" normMap `shouldBe` Just "BAR"
 
-    it "adds unqualified names from impUnqual" $ do
+    it "import with unquals: both qualified and unqualified in scope" $ do
       let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
-          imports = [CST.Import "FOO" ["BAR"]]
+          imports = [CST.Import "FOO" "FOO" ["BAR"]]
           (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
       S.member "FOO.BAR" resolveScope `shouldBe` True
       S.member "BAR" resolveScope `shouldBe` True
       M.member "FOO.BAR" tcCtx `shouldBe` True
       M.member "BAR" tcCtx `shouldBe` True
 
-    it "handles multiple imports" $ do
+    it "alias changes qualified prefix" $ do
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+          imports = [CST.Import "FOO" "F" []]
+          (resolveScope, tcCtx, normMap) = Mod.buildImportScope exports imports
+      S.member "F.BAR" resolveScope `shouldBe` True
+      S.member "FOO.BAR" resolveScope `shouldBe` False
+      M.member "F.BAR" tcCtx `shouldBe` True
+      M.member "FOO.BAR" tcCtx `shouldBe` False
+      M.lookup "F.BAR" normMap `shouldBe` Just "BAR"
+
+    it "alias with unquals" $ do
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+          imports = [CST.Import "FOO" "F" ["BAR"]]
+          (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
+      S.member "F.BAR" resolveScope `shouldBe` True
+      S.member "BAR" resolveScope `shouldBe` True
+      S.member "FOO.BAR" resolveScope `shouldBe` False
+
+    it "original module name not usable when alias is set" $ do
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+          imports = [CST.Import "FOO" "F" []]
+          (resolveScope, _, _) = Mod.buildImportScope exports imports
+      S.member "FOO.BAR" resolveScope `shouldBe` False
+      S.member "F.BAR" resolveScope `shouldBe` True
+
+    it "multiple imports with no collisions" $ do
       let exports = M.fromList
             [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
             , ("B", M.singleton "Y" (TC.Forall S.empty Ty.TyStr))
             ]
-          imports = [CST.Import "A" ["X"], CST.Import "B" []]
+          imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" []]
           (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
       S.member "A.X" resolveScope `shouldBe` True
       S.member "X" resolveScope `shouldBe` True
       S.member "B.Y" resolveScope `shouldBe` True
       S.member "Y" resolveScope `shouldBe` False
-      -- TC context has all unqualified + qualified: A.X, X, B.Y, Y
+      -- TC context: A.X, X, B.Y, Y (all unquals in TC for normalization)
       M.size tcCtx `shouldBe` 4
+
+  describe "checkImportCollisions" $ do
+    it "accepts non-overlapping unquals" $ do
+      let exports = M.fromList
+            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
+            , ("B", M.singleton "Y" (TC.Forall S.empty Ty.TyStr))
+            ]
+          imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" ["Y"]]
+      Mod.checkImportCollisions exports imports `shouldBe` Right ()
+
+    it "detects unqualified name collision" $ do
+      let exports = M.fromList
+            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
+            , ("B", M.singleton "X" (TC.Forall S.empty Ty.TyStr))
+            ]
+          imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" ["X"]]
+      case Mod.checkImportCollisions exports imports of
+        Left _  -> pure ()
+        Right _ -> expectationFailure "expected collision error"
+
+    it "no collision when same name is only qualified" $ do
+      let exports = M.fromList
+            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
+            , ("B", M.singleton "X" (TC.Forall S.empty Ty.TyStr))
+            ]
+          imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" []]
+      Mod.checkImportCollisions exports imports `shouldBe` Right ()
 
   describe "mergeImportedCode" $ do
     it "prepends imported type decls" $ do

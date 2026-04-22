@@ -264,12 +264,28 @@ spec = do
       length (CST.progImports prog) `shouldBe` 1
       let imp = head (CST.progImports prog)
       CST.impModule imp `shouldBe` "FOO"
+      CST.impAlias imp `shouldBe` "FOO"
       CST.impUnqual imp `shouldBe` []
 
     it "parses import with unqualified symbols" $ do
       prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(import Foo (bar baz))"
       let imp = head (CST.progImports prog)
       CST.impModule imp `shouldBe` "FOO"
+      CST.impAlias imp `shouldBe` "FOO"
+      CST.impUnqual imp `shouldBe` ["BAR", "BAZ"]
+
+    it "parses import with alias" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(import Foo F)"
+      let imp = head (CST.progImports prog)
+      CST.impModule imp `shouldBe` "FOO"
+      CST.impAlias imp `shouldBe` "F"
+      CST.impUnqual imp `shouldBe` []
+
+    it "parses import with alias and unqualified symbols" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(import Foo F (bar baz))"
+      let imp = head (CST.progImports prog)
+      CST.impModule imp `shouldBe` "FOO"
+      CST.impAlias imp `shouldBe` "F"
       CST.impUnqual imp `shouldBe` ["BAR", "BAZ"]
 
     it "parses multiple imports" $ do

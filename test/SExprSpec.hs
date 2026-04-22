@@ -316,7 +316,22 @@ spec = do
       length (CST.progImports prog) `shouldBe` 1
       let imp = head (CST.progImports prog)
       CST.impModule imp `shouldBe` "FOO"
+      CST.impAlias imp `shouldBe` "FOO"
       CST.impUnqual imp `shouldBe` ["BAR", "BAZ"]
+
+    it "import with alias" $ do
+      prog <- viaSExpr "(import Foo F (bar))"
+      let imp = head (CST.progImports prog)
+      CST.impModule imp `shouldBe` "FOO"
+      CST.impAlias imp `shouldBe` "F"
+      CST.impUnqual imp `shouldBe` ["BAR"]
+
+    it "import with alias only" $ do
+      prog <- viaSExpr "(import Foo F)"
+      let imp = head (CST.progImports prog)
+      CST.impModule imp `shouldBe` "FOO"
+      CST.impAlias imp `shouldBe` "F"
+      CST.impUnqual imp `shouldBe` []
 
     it "full program" $ do
       prog <- viaSExpr "(module Main) (import Foo) 42"

@@ -91,5 +91,6 @@ data Program = Program
 
 data Import = Import
   { impModule :: Symbol
+  , impAlias  :: Symbol    -- qualifier prefix (defaults to impModule)
   , impUnqual :: [Symbol]
   } deriving (Eq, Show)
