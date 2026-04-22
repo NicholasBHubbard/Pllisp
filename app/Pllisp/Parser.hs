@@ -295,7 +295,7 @@ keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE", "MODULE
 rawIdent :: Parser T.Text
 rawIdent = do
   first <- MP.C.char '_' <|> MP.C.char '&' <|> MP.C.letterChar
-  rest  <- MP.many (MP.C.char '_' <|> MP.C.char '-' <|> MP.C.char '!' <|> MP.C.alphaNumChar)
+  rest  <- MP.many (MP.C.char '_' <|> MP.C.char '-' <|> MP.C.char '!' <|> MP.C.char '?' <|> MP.C.alphaNumChar)
   pure $ T.toUpper (T.pack (first:rest))
 
 ident :: Parser T.Text

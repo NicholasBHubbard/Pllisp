@@ -900,6 +900,53 @@ spec = do
         , "(print (int-to-str (first-of (42 99))))"
         ]) >>= (`shouldBe` "42")
 
+  describe "if-let / when-let / unless-let" $ do
+    it "if-let on truthy Maybe" $ do
+      run (T.unlines
+        [ "(let ((x (Just 42)))"
+        , "  (if-let (y x) (print \"yes\") (print \"no\")))"
+        ]) >>= (`shouldBe` "yes")
+
+    it "if-let on falsy Maybe" $ do
+      run (T.unlines
+        [ "(let ((x Nothing))"
+        , "  (if-let (y x) (print \"yes\") (print \"no\")))"
+        ]) >>= (`shouldBe` "no")
+
+    it "if-let binds the value" $ do
+      run (T.unlines
+        [ "(let ((x (Just 42)))"
+        , "  (if-let (y x)"
+        , "    (case y ((Just v) (print (int-to-str v))))"
+        , "    (print \"none\")))"
+        ]) >>= (`shouldBe` "42")
+
+    it "when-let on truthy" $ do
+      run (T.unlines
+        [ "(let ((x (Cons 1 Nil)))"
+        , "  (when-let (y x) (print \"yes\")))"
+        ]) >>= (`shouldBe` "yes")
+
+    it "when-let on falsy" $ do
+      run (T.unlines
+        [ "(let ((x Nil))"
+        , "  (when-let (y x) (print \"found\")))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "done")
+
+    it "unless-let on falsy" $ do
+      run (T.unlines
+        [ "(let ((x Nothing))"
+        , "  (unless-let (y x) (print \"empty\")))"
+        ]) >>= (`shouldBe` "empty")
+
+    it "unless-let on truthy" $ do
+      run (T.unlines
+        [ "(let ((x (Just 1)))"
+        , "  (unless-let (y x) (print \"empty\")))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "done")
+
   describe "record types" $ do
     it "record field access string" $
       run (T.unlines
@@ -1203,6 +1250,52 @@ spec = do
         , "(let ((display (lam (x) (print (show x)))))"
         , "  (display Red))"
         ]) >>= (`shouldBe` "red")
+
+  describe "parametric typeclass instances" $ do
+    it "instance for Maybe a matches Maybe Int" $
+      run (T.unlines
+        [ "(cls TRUTHY (a) (truthy? %a %BOOL))"
+        , "(inst TRUTHY %(Maybe a)"
+        , "  (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
+        , "(print (if (truthy? (Just 1)) \"yes\" \"no\"))"
+        ]) >>= (`shouldBe` "yes")
+
+    it "instance for Maybe a matches Nothing" $
+      run (T.unlines
+        [ "(cls TRUTHY (a) (truthy? %a %BOOL))"
+        , "(inst TRUTHY %(Maybe a)"
+        , "  (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
+        , "(print (if (truthy? Nothing) \"yes\" \"no\"))"
+        ]) >>= (`shouldBe` "no")
+
+    it "instance for List a" $
+      run (T.unlines
+        [ "(cls TRUTHY (a) (truthy? %a %BOOL))"
+        , "(inst TRUTHY %(List a)"
+        , "  (truthy? (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))"
+        , "(print (if (truthy? (Cons 1 Nil)) \"yes\" \"no\"))"
+        ]) >>= (`shouldBe` "yes")
+
+    it "parametric and concrete instances coexist" $
+      run (T.unlines
+        [ "(cls SHOW (a) (show %a %STR))"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+        , "(inst SHOW %(Maybe a)"
+        , "  (show (lam ((x %(Maybe a))) (case x ((Just _) \"Just\") (_ \"Nothing\")))))"
+        , "(do"
+        , "  (print (show 42))"
+        , "  (print (show (Just 1))))"
+        ]) >>= (`shouldBe` "42\nJust")
+
+    it "instance for Either a b (two type params)" $
+      run (T.unlines
+        [ "(cls TRUTHY (a) (truthy? %a %BOOL))"
+        , "(inst TRUTHY %(Either a b)"
+        , "  (truthy? (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))"
+        , "(do"
+        , "  (print (if (truthy? (Right 1)) \"yes\" \"no\"))"
+        , "  (print (if (truthy? (Left 1)) \"yes\" \"no\")))"
+        ]) >>= (`shouldBe` "yes\nno")
 
   describe "garbage collection" $ do
     it "gc-collect runs without error" $
@@ -1638,13 +1731,15 @@ spec = do
         [ "(TYPE Name () (MkName %Str))"
         , "(let ((n (MkName \"alice\"))) (CASE n ((MkName s) (print s))))"
         ])
-      -- The main function should NOT contain GC_malloc for MkName
+      -- Newtype (single-constructor, single-field) should be erased.
+      -- Dict-passing may add GC_malloc for class instance closures,
+      -- but no allocation should appear for MkName itself.
+      -- Check: no GC_malloc that stores a string pointer (MkName stores %Str).
+      -- Dict allocations store function pointers (@__lambda_*), not strings.
       let mainLines = dropWhile (not . T.isPrefixOf "define i32 @main") (T.lines ir)
-          mainBody = takeWhile (not . T.isPrefixOf "}") (drop 1 mainLines)
-      -- No GC_malloc in main = newtype was erased
-      any (T.isInfixOf "GC_malloc") mainBody `shouldBe` False
-      -- No tag store either
-      any (T.isInfixOf "store i32 0") mainBody `shouldBe` False
+          mainBody = T.unlines (takeWhile (not . T.isPrefixOf "}") (drop 1 mainLines))
+      -- MkName would need tag + string pointer. If erased, no such pattern.
+      T.isInfixOf "store ptr @str" mainBody `shouldBe` False
 
     it "single-ctor single-field string wrapper is zero-cost" $
       run (T.unlines
@@ -1813,8 +1908,8 @@ multiModulePipeline modules mainSrc = do
   order <- case Mod.dependencyOrder depMap of
     Left e  -> error ("dep order: " ++ e)
     Right o -> pure o
-  let (finalExports, finalTyped, finalMacros) =
-        foldl (compileOneMod modMap) (M.empty, [], []) order
+  let (finalExports, finalTyped, finalMacros, finalEnvs) =
+        foldl (compileOneMod modMap) (M.empty, [], [], TC.emptyTCEnvs) order
       mainSexprs = parseMod "MAIN" mainSrc
       mainExpanded = case MacroExpand.expand (finalMacros ++ mainSexprs) of
         Left e  -> error ("main macro: " ++ e)
@@ -1829,9 +1924,9 @@ multiModulePipeline modules mainSrc = do
       mainExprs = Mod.desugarTopLevel (CST.progExprs mainProg)
   case Resolve.resolveWith rScope nMap mainExprs of
     Left e  -> error ("main resolve: " ++ show e)
-    Right resolved -> case TC.typecheck tcCtx resolved of
+    Right resolved -> case TC.typecheckWith finalEnvs tcCtx resolved of
       Left e  -> error ("main typecheck: " ++ show e)
-      Right typed ->
+      Right (typed, _) ->
         let merged = Mod.mergeImportedCode finalTyped typed
         in pure $ Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
   where
@@ -1839,7 +1934,7 @@ multiModulePipeline modules mainSrc = do
       Left e  -> error ("parse " ++ T.unpack name ++ ": " ++ show e)
       Right s -> s
 
-    compileOneMod modMap (accExports, accTyped, accMacros) modName =
+    compileOneMod modMap (accExports, accTyped, accMacros, accEnvs) modName =
       let sexprs = modMap M.! modName
           thisMacros = MacroExpand.extractMacroDefs sexprs
           isPrelude = modName == "PRELUDE"
@@ -1855,12 +1950,13 @@ multiModulePipeline modules mainSrc = do
                        else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
           (rScope, tcCtx, nMap) = Mod.buildImportScope accExports allImports
           exprs = Mod.desugarTopLevel (CST.progExprs modProg)
-          typed = case Resolve.resolveWith rScope nMap exprs of
+          (typed, modEnvs) = case Resolve.resolveWith rScope nMap exprs of
             Left e  -> error ("resolve " ++ T.unpack modName ++ ": " ++ show e)
-            Right resolved -> case TC.typecheck tcCtx resolved of
+            Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
               Left e  -> error ("tc " ++ T.unpack modName ++ ": " ++ show e)
-              Right t -> t
-          modExports = Mod.collectExports typed
+              Right r -> r
+          modExports = Mod.collectExports modEnvs typed
       in (M.insert modName modExports accExports,
           accTyped ++ [typed],
-          accMacros ++ thisMacros)
+          accMacros ++ thisMacros,
+          modEnvs)

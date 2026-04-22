@@ -28,3 +28,26 @@
 
 (mac unless (cond body)
   `(if ,cond unit ,body))
+
+(cls TRUTHY (a) (truthy? %a %BOOL))
+
+(inst TRUTHY %(Maybe a)
+  (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))
+
+(inst TRUTHY %(List a)
+  (truthy? (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))
+
+(inst TRUTHY %(Either a b)
+  (truthy? (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))
+
+(mac if-let ((name expr) then else)
+  `(let ((,name ,expr))
+     (if (truthy? ,name) ,then ,else)))
+
+(mac when-let ((name expr) body)
+  `(let ((,name ,expr))
+     (when (truthy? ,name) ,body)))
+
+(mac unless-let ((name expr) body)
+  `(let ((,name ,expr))
+     (unless (truthy? ,name) ,body)))

@@ -146,7 +146,9 @@ compileRound preludeSexprs stRef roundNum src = do
           ExitFailure _ -> error ("clang .so failed:\n" ++ err' ++ "\nIR:\n" ++ T.unpack ir)
           ExitSuccess -> do
             -- Update state with new globals and defs
-            let newGlobals = Codegen.collectReplGlobals (LL.llExprs llProg)
+            let allNewGlobals = Codegen.collectReplGlobals (LL.llExprs llProg)
+                existingNames = S.fromList (map fst (rsGlobals st))
+                newGlobals = filter (\(n, _) -> not (S.member n existingNames)) allNewGlobals
                 newNames = S.fromList (map fst newGlobals)
                 -- Build schemes for new globals (monomorphic)
                 newSchemes = M.fromList [(n, TC.Forall S.empty t) | (n, t) <- newGlobals]

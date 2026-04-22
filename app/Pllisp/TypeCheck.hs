@@ -15,10 +15,51 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 
+-- CLASS/INSTANCE ENVIRONMENTS
+
+data TCEnvs = TCEnvs
+  { tceClassEnv    :: ClassEnv
+  , tceMethodEnv   :: MethodEnv
+  , tceInstanceEnv :: InstanceEnv
+  } deriving (Show)
+
+emptyTCEnvs :: TCEnvs
+emptyTCEnvs = TCEnvs M.empty M.empty M.empty
+
+mergeTCEnvs :: TCEnvs -> TCEnvs -> TCEnvs
+mergeTCEnvs a b = TCEnvs
+  { tceClassEnv    = M.union (tceClassEnv a) (tceClassEnv b)
+  , tceMethodEnv   = M.union (tceMethodEnv a) (tceMethodEnv b)
+  , tceInstanceEnv = M.unionWith (++) (tceInstanceEnv a) (tceInstanceEnv b)
+  }
+
+methodSchemes :: TCEnvs -> M.Map CST.Symbol Scheme
+methodSchemes envs =
+  M.mapWithKey mkScheme (tceMethodEnv envs)
+  where
+    mkScheme _name mi =
+      let className = miClass mi
+          tvars = M.findWithDefault [] className (tceClassEnv envs)
+          paramMap = M.fromList (zip tvars [0..])
+          paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
+          resolvedArgs = map (resolveTP paramMap) (miArgTys mi)
+          resolvedRet  = resolveTP paramMap (miRetTy mi)
+      in Forall paramSet (Ty.TyFun resolvedArgs resolvedRet)
+    resolveTP pm ty = case ty of
+      Ty.TyCon name [] -> case M.lookup name pm of
+        Just idx -> Ty.TyVar idx
+        Nothing  -> ty
+      Ty.TyCon name args -> Ty.TyCon name (map (resolveTP pm) args)
+      Ty.TyFun args ret -> Ty.TyFun (map (resolveTP pm) args) (resolveTP pm ret)
+      _ -> ty
+
 -- ENTRY POINT
 
 typecheck :: Context -> Res.ResolvedCST -> Either [TypeError] TResolvedCST
-typecheck importedCtx exprs =
+typecheck importedCtx exprs = fmap fst (typecheckWith emptyTCEnvs importedCtx exprs)
+
+typecheckWith :: TCEnvs -> Context -> Res.ResolvedCST -> Either [TypeError] (TResolvedCST, TCEnvs)
+typecheckWith importedEnvs importedCtx exprs =
   let typeDecls = extractTypeDecls exprs
       ctorCtx = buildCtorContext typeDecls
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
@@ -34,21 +75,30 @@ typecheck importedCtx exprs =
       callbackCtx = buildCallbackContext exprs
       -- Build class method schemes and instance env
       classDecls = extractClassDecls exprs
-      (classEnv, methodEnv, methodCtx) = buildClassContext classDecls
+      (localClassEnv, localMethodEnv, methodCtx) = buildClassContext classDecls
+      classEnv = M.union localClassEnv (tceClassEnv importedEnvs)
+      methodEnv = M.union localMethodEnv (tceMethodEnv importedEnvs)
       initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx, ffiCtx, ffiStructCtorCtx, ffiVarCtx, enumCtx, callbackCtx, methodCtx]
       fieldMap = M.union (buildFieldMap typeDecls) ffiStructFieldMap
       -- Type-check instance method bodies in a first pass
       instDecls = extractInstDecls exprs
-      (instanceEnv, instErrs) = buildInstanceEnv classEnv methodEnv initialCtx fieldMap instDecls
+      localTypeNames = S.fromList [name | (name, _, _) <- typeDecls]
+      importedTypeNames = collectTypeNames importedCtx
+      ffiStructNames = S.fromList [name | (name, _) <- ffiStructDecls]
+      knownTypeNames = S.unions [localTypeNames, importedTypeNames, ffiStructNames]
+      (localInstanceEnv, instErrs) = buildInstanceEnv classEnv methodEnv initialCtx fieldMap knownTypeNames instDecls
+      instanceEnv = M.unionWith (++) localInstanceEnv (tceInstanceEnv importedEnvs)
       structFieldsMap = M.fromList ffiStructDecls
       env = InferEnv initialCtx fieldMap M.empty methodEnv instanceEnv variadicNames structFieldsMap
       (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) env 0
+      localEnvs = TCEnvs localClassEnv localMethodEnv localInstanceEnv
+      fullEnvs = mergeTCEnvs localEnvs importedEnvs
   in case solveAll constraints of
     Left solveErrs -> Left (instErrs ++ inferErrs ++ solveErrs)
     Right subst
       | not (null instErrs) -> Left instErrs
       | not (null inferErrs) -> Left inferErrs
-      | otherwise -> Right (tcoPass (dictPass classEnv methodEnv instanceEnv (apply subst typed)))
+      | otherwise -> Right (tcoPass (dictPass classEnv methodEnv instanceEnv (apply subst typed)), fullEnvs)
 
 -- TYPES
 
@@ -90,9 +140,11 @@ data MethodInfo = MethodInfo
 
 type MethodEnv = M.Map CST.Symbol MethodInfo
 
--- | Info about a typeclass instance: concrete type + typed method impls.
+-- | Info about a typeclass instance: type pattern + typed method impls.
+-- iiTyVars holds names that act as type variables in iiType (match anything).
 data InstanceInfo = InstanceInfo
   { iiType    :: Ty.Type
+  , iiTyVars  :: S.Set CST.Symbol
   , iiMethods :: M.Map CST.Symbol TRExpr
   } deriving (Show)
 
@@ -265,6 +317,15 @@ extractTypeDecls = foldr go []
     go (Loc.Located _ (Res.RType name params ctors)) acc = (name, params, ctors) : acc
     go _ acc = acc
 
+-- | Extract type constructor names from a context by scanning constructor
+-- return types (the TyCon head of function return types in schemes).
+collectTypeNames :: Context -> S.Set CST.Symbol
+collectTypeNames ctx = S.fromList [n | Forall _ ty <- M.elems ctx, n <- headTyCons ty]
+  where
+    headTyCons (Ty.TyFun _ (Ty.TyCon n _)) = [n]
+    headTyCons (Ty.TyCon n _) = [n]
+    headTyCons _ = []
+
 extractFFIDecls :: [Res.RExpr] -> [(CST.Symbol, [Ty.CType], Ty.CType)]
 extractFFIDecls = foldr go []
   where
@@ -418,9 +479,10 @@ buildClassContext decls =
 
 -- | Type-check instance method bodies and build the instance environment.
 buildInstanceEnv :: ClassEnv -> MethodEnv -> Context -> FieldMap
+                 -> S.Set CST.Symbol  -- known type constructor names
                  -> [(CST.Symbol, Ty.Type, [(CST.Symbol, Res.RExpr)])]
                  -> (InstanceEnv, [TypeError])
-buildInstanceEnv _classEnv methodEnv ctx fieldMap instDecls =
+buildInstanceEnv _classEnv methodEnv ctx fieldMap knownTypes instDecls =
   let results = map checkInst instDecls
       instEnv = M.fromListWith (++) [(cls, [inst]) | (cls, inst, _) <- results]
       errs = concatMap (\(_, _, es) -> es) results
@@ -434,12 +496,23 @@ buildInstanceEnv _classEnv methodEnv ctx fieldMap instDecls =
             Left es -> (es, typedMethods)
             Right subst -> ([], map (\(n, e) -> (n, apply subst e)) typedMethods)
           methodMap = M.fromList resolvedMethods
-          inst = InstanceInfo instTy methodMap
+          tyVars = extractInstTyVars knownTypes instTy
+          inst = InstanceInfo instTy tyVars methodMap
       in (className, inst, inferErrs ++ solveErrs)
 
     checkMethod _className _instTy (mname, body) = do
       typed <- infer body
       pure (mname, typed)
+
+-- | Extract type variable names from an instance type.
+-- A TyCon name [] that is NOT a known type constructor is a type variable.
+extractInstTyVars :: S.Set CST.Symbol -> Ty.Type -> S.Set CST.Symbol
+extractInstTyVars knownTypes = go
+  where
+    go (Ty.TyCon name []) | not (S.member name knownTypes) = S.singleton name
+    go (Ty.TyCon _ args) = S.unions (map go args)
+    go (Ty.TyFun args ret) = S.unions (go ret : map go args)
+    go _ = S.empty
 
 -- DICTIONARY PASSING
 
@@ -736,15 +809,30 @@ resolveInstanceType minfo fty = case fty of
   Ty.TyFun (argTy : _) _ -> argTy  -- first arg determines instance type
   _ -> fty
 
--- | Look up an instance for a class and concrete type, returning a specific method.
+-- | Look up an instance for a class and type, returning a specific method.
+-- Supports parametric instances: type variables in the instance pattern match any type.
 lookupInstance :: InstanceEnv -> CST.Symbol -> Ty.Type -> CST.Symbol -> Maybe TRExpr
 lookupInstance ienv className instTy methodName =
   case M.lookup className ienv of
     Nothing -> Nothing
     Just insts ->
-      case filter (\ii -> iiType ii == instTy) insts of
+      case filter (\ii -> matchInstanceType (iiTyVars ii) (iiType ii) instTy) insts of
         (ii : _) -> M.lookup methodName (iiMethods ii)
         [] -> Nothing
+
+-- | Structural matching of an instance type pattern against a target type.
+-- TyCon names in the tyVars set act as wildcards (match any type).
+matchInstanceType :: S.Set CST.Symbol -> Ty.Type -> Ty.Type -> Bool
+matchInstanceType tyVars pat target = case (pat, target) of
+  (Ty.TyCon n [], _) | S.member n tyVars -> True
+  (Ty.TyCon n1 as1, Ty.TyCon n2 as2) ->
+    n1 == n2 && length as1 == length as2
+    && all (uncurry (matchInstanceType tyVars)) (zip as1 as2)
+  (Ty.TyFun as1 r1, Ty.TyFun as2 r2) ->
+    length as1 == length as2
+    && all (uncurry (matchInstanceType tyVars)) (zip as1 as2)
+    && matchInstanceType tyVars r1 r2
+  _ -> pat == target
 
 -- INFERENCE
 

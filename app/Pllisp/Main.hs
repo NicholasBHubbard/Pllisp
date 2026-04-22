@@ -75,7 +75,7 @@ compileProg fp src render prog = do
   importResult <- loadImports fp allImports
   case importResult of
     Left err -> putStrLn err
-    Right (exportMap, importedTypedModules) -> do
+    Right (exportMap, importedTypedModules, importedEnvs) -> do
       let preludeExports = M.findWithDefault M.empty "PRELUDE" exportMap
           fixedImports = if isPrelude then explicitImports
                          else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : explicitImports
@@ -87,9 +87,9 @@ compileProg fp src render prog = do
           case Resolve.resolveWith resolveScope normMap exprs of
             Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
             Right resolved ->
-              case TC.typecheck tcCtx resolved of
+              case TC.typecheckWith importedEnvs tcCtx resolved of
                 Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
-                Right typed -> do
+                Right (typed, _) -> do
                   let merged = Mod.mergeImportedCode importedTypedModules typed
                   case Exhaust.exhaustCheck merged of
                     errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
@@ -119,10 +119,10 @@ data ModuleInfo = ModuleInfo
   , miImports :: [CST.Import]
   }
 
--- | Load all imported modules recursively, returning their export maps and typed ASTs.
+-- | Load all imported modules recursively, returning their export maps, typed ASTs, and class envs.
 loadImports :: FilePath -> [CST.Import]
-  -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme), [TC.TResolvedCST]))
-loadImports _ [] = pure (Right (M.empty, []))
+  -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme), [TC.TResolvedCST], TC.TCEnvs))
+loadImports _ [] = pure (Right (M.empty, [], TC.emptyTCEnvs))
 loadImports fp imports = do
   let searchDir = takeDirectory fp
   stdlibDir <- Stdlib.getStdlibDir
@@ -137,7 +137,7 @@ loadImports fp imports = do
       case Mod.dependencyOrder depMap of
         Left err -> pure (Left err)
         Right order ->
-          compileModules moduleInfos order M.empty []
+          compileModules moduleInfos order M.empty [] TC.emptyTCEnvs
 
 -- | Recursively discover all reachable modules.
 scanAllModules :: FilePath -> FilePath -> [CST.Import]
@@ -168,12 +168,12 @@ scanAllModules searchDir stdlibDir rootImports =
 
 -- | Compile modules in topological order with accumulated context.
 compileModules :: M.Map CST.Symbol ModuleInfo
-  -> [CST.Symbol] -> M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme) -> [TC.TResolvedCST]
-  -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme), [TC.TResolvedCST]))
-compileModules _ [] accExports accTyped = pure (Right (accExports, accTyped))
-compileModules moduleInfos (modName : rest) accExports accTyped =
+  -> [CST.Symbol] -> M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme) -> [TC.TResolvedCST] -> TC.TCEnvs
+  -> IO (Either String (M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme), [TC.TResolvedCST], TC.TCEnvs))
+compileModules _ [] accExports accTyped accEnvs = pure (Right (accExports, accTyped, accEnvs))
+compileModules moduleInfos (modName : rest) accExports accTyped accEnvs =
   case M.lookup modName moduleInfos of
-    Nothing -> compileModules moduleInfos rest accExports accTyped
+    Nothing -> compileModules moduleInfos rest accExports accTyped accEnvs
     Just info -> do
       let sexprs = miSexprs info
           modImports = miImports info
@@ -204,13 +204,13 @@ compileModules moduleInfos (modName : rest) accExports accTyped =
                         exprs = Mod.desugarTopLevel (CST.progExprs modProg)
                     case Resolve.resolveWith resolveScope normMap exprs of
                       Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
-                      Right resolved -> case TC.typecheck tcCtx resolved of
+                      Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
                         Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
-                        Right typed -> do
-                          let exports = Mod.collectExports typed
+                        Right (typed, modEnvs) -> do
+                          let exports = Mod.collectExports modEnvs typed
                               accExports' = M.insert modName exports accExports
                           compileModules moduleInfos rest
-                            accExports' (accTyped ++ [typed])
+                            accExports' (accTyped ++ [typed]) modEnvs
 
 -- | Find a module file, checking source directory first, then stdlib.
 findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)

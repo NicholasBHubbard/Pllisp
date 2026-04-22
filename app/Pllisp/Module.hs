@@ -63,12 +63,13 @@ desugarTopLevel exprs =
 
 -- | Collect exported symbols from a typechecked program.
 -- Exports include: let binding names (excluding _) and constructor names from type decls.
-collectExports :: TC.TResolvedCST -> M.Map CST.Symbol TC.Scheme
-collectExports typed =
+collectExports :: TC.TCEnvs -> TC.TResolvedCST -> M.Map CST.Symbol TC.Scheme
+collectExports envs typed =
   let letExports  = M.unions (map collectLetExports typed)
       typeDecls   = [(n, ps, cs) | Loc.Located _ (Ty.Typed _ (TC.TRType n ps cs)) <- typed]
       ctorExports = TC.buildCtorContext typeDecls
-  in M.union letExports ctorExports
+      methExports = TC.methodSchemes envs
+  in M.unions [letExports, ctorExports, methExports]
   where
     collectLetExports (Loc.Located _ (Ty.Typed _ (TC.TRLet binds body))) =
       let named = M.fromList [(n, TC.generalize M.empty t) | (n, t, _) <- binds, n /= "_"]

@@ -312,4 +312,4 @@ collectExports src = case Parser.parseProgram "<test>" src of
     Left _       -> error "resolve error in test"
     Right resolved -> case TC.typecheck M.empty resolved of
       Left _     -> error "typecheck error in test"
-      Right typed -> Mod.collectExports typed
+      Right typed -> Mod.collectExports TC.emptyTCEnvs typed

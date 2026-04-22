@@ -105,7 +105,9 @@ codegenRepl roundNum priorGlobals prog = evalState go initState
       modify' (\s -> s { csDefs = M.fromList [(LL.defName d, d) | d <- renamedDefs] })
       defTexts <- mapM genDef renamedDefs
       -- Collect top-level globals from let bindings
-      let globals = collectReplGlobals (LL.llExprs prog)
+      let allGlobals = collectReplGlobals (LL.llExprs prog)
+          priorNames = S.fromList (map fst priorGlobals)
+          globals = filter (\(n, _) -> not (S.member n priorNames)) allGlobals
           globalDecls = map (\(name, ty) ->
             "@" <> sanitize (T.toLower name) <> " = global " <> llvmType ty <> " " <> llvmZero ty) globals
           -- Extern declarations for globals from prior rounds
