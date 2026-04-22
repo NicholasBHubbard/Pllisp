@@ -203,9 +203,15 @@ compileModules moduleInfos (modName : rest) accExports accTyped accEnvs =
                           Mod.buildImportScope accExports allImports
                         exprs = Mod.desugarTopLevel (CST.progExprs modProg)
                     case Resolve.resolveWith resolveScope normMap exprs of
-                      Left _ -> pure (Left ("resolve error in module " ++ T.unpack modName))
+                      Left errs -> do
+                        src <- T.IO.readFile (miPath info)
+                        pure (Left (concatMap (\e ->
+                          Error.renderError src "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs))
                       Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
-                        Left _ -> pure (Left ("type error in module " ++ T.unpack modName))
+                        Left errs -> do
+                          src <- T.IO.readFile (miPath info)
+                          pure (Left (concatMap (\e ->
+                            Error.renderError src "type" (TC.teSpan e) (TC.teMsg e)) errs))
                         Right (typed, modEnvs) -> do
                           let exports = Mod.collectExports modEnvs typed
                               accExports' = M.insert modName exports accExports

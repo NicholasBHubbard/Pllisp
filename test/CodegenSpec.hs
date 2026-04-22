@@ -1308,11 +1308,11 @@ spec = do
           ])
         "no instance"
 
-    it "error on truthy? call with no TRUTHY instance for INT" $
+    it "error on truthy? call with no matching instance" $
       shouldFailToCompile
         (T.unlines
-          [ "(cls TRUTHY (a) (truthy? %a %BOOL))"
-          , "(truthy? 42)"
+          [ "(type Pair (a b) (Pair a b))"
+          , "(truthy? (Pair 1 2))"
           ])
         "no instance"
 
