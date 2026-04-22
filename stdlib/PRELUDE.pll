@@ -20,16 +20,22 @@
 (mac do (first &rest rest)
   `(let ((_ ,first)) (do ,@rest)))
 
+(mac if_ (cond then else)
+  `(if (truthy? ,cond) ,then ,else))
+
 (mac cond ((test body)) `(when ,test ,body))
 (mac cond ((test body) &rest rest) `(if ,test ,body (cond ,@rest)))
 
 (mac when (cond body)
-  `(if ,cond ,body unit))
+  `(if_ ,cond ,body unit))
 
 (mac unless (cond body)
-  `(if ,cond unit ,body))
+  `(if_ ,cond unit ,body))
 
 (cls TRUTHY (a) (truthy? %a %BOOL))
+
+(inst TRUTHY %BOOL
+  (truthy? (lam ((x %BOOL)) x)))
 
 (inst TRUTHY %(Maybe a)
   (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))

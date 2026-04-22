@@ -98,7 +98,12 @@ typecheckWith importedEnvs importedCtx exprs =
     Right subst
       | not (null instErrs) -> Left instErrs
       | not (null inferErrs) -> Left inferErrs
-      | otherwise -> Right (tcoPass (dictPass classEnv methodEnv instanceEnv (apply subst typed)), fullEnvs)
+      | otherwise ->
+          let resolved = apply subst typed
+              missingInst = validateInstances methodEnv instanceEnv resolved
+          in if not (null missingInst)
+             then Left missingInst
+             else Right (tcoPass (dictPass classEnv methodEnv instanceEnv resolved), fullEnvs)
 
 -- TYPES
 
@@ -527,6 +532,38 @@ type DictParamCtx = M.Map (CST.Symbol, Integer) CST.Symbol
 
 dictSp :: Loc.Span
 dictSp = Loc.Span (Loc.Pos "<dict>" 0 0) (Loc.Pos "<dict>" 0 0)
+
+-- | Check that all monomorphic class method calls have matching instances.
+validateInstances :: MethodEnv -> InstanceEnv -> TResolvedCST -> [TypeError]
+validateInstances me ie = concatMap checkExpr
+  where
+    checkExpr (Loc.Located sp (Ty.Typed _ node)) = case node of
+      TRApp (Loc.Located _ (Ty.Typed fty (TRVar vb))) args
+        | Just mi <- M.lookup (Res.symName vb) me ->
+          let iT = resolveInstanceType mi fty
+          in case iT of
+            Ty.TyVar _ -> concatMap checkExpr args
+            _ -> case lookupInstance ie (miClass mi) iT (Res.symName vb) of
+              Just _  -> concatMap checkExpr args
+              Nothing ->
+                TypeError sp ("no instance of class " ++ T.unpack (miClass mi)
+                             ++ " for type " ++ showType iT)
+                : concatMap checkExpr args
+      TRApp f as -> checkExpr f ++ concatMap checkExpr as
+      TRLam _ _ b -> checkExpr b
+      TRLet bs b -> concatMap (\(_, _, e) -> checkExpr e) bs ++ checkExpr b
+      TRIf c t e -> checkExpr c ++ checkExpr t ++ checkExpr e
+      TRCase s as -> checkExpr s ++ concatMap (\(_, e) -> checkExpr e) as
+      _ -> []
+
+    showType Ty.TyInt = "INT"
+    showType Ty.TyFlt = "FLT"
+    showType Ty.TyStr = "STR"
+    showType Ty.TyBool = "BOOL"
+    showType Ty.TyUnit = "UNIT"
+    showType (Ty.TyCon n []) = T.unpack n
+    showType (Ty.TyCon n ts) = T.unpack n ++ " " ++ unwords (map showType ts)
+    showType t = show t
 
 -- | Haskell-style dictionary passing for typeclass methods.
 -- Monomorphic calls: inline instance implementation (static dispatch).

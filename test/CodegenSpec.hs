@@ -7,6 +7,8 @@ import Test.Hspec
 import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 import qualified Data.Text.IO as T.IO
+import Control.Exception (ErrorCall(..), try, evaluate)
+import Data.List (isInfixOf)
 import System.Exit (ExitCode(..))
 import System.Process (readProcessWithExitCode)
 
@@ -1297,6 +1299,54 @@ spec = do
         , "  (print (if (truthy? (Left 1)) \"yes\" \"no\")))"
         ]) >>= (`shouldBe` "yes\nno")
 
+  describe "typeclass errors" $ do
+    it "error on class method call with no matching instance" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(cls SHOW (a) (show %a %STR))"
+          , "(show 42)"
+          ])
+        "no instance"
+
+    it "error on truthy? call with no TRUTHY instance for INT" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(cls TRUTHY (a) (truthy? %a %BOOL))"
+          , "(truthy? 42)"
+          ])
+        "no instance"
+
+  describe "BOOL TRUTHY instance" $ do
+    it "if_ with true" $
+      run "(if_ true (print \"yes\") (print \"no\"))" >>= (`shouldBe` "yes")
+
+    it "if_ with false" $
+      run "(if_ false (print \"yes\") (print \"no\"))" >>= (`shouldBe` "no")
+
+    it "when with true" $
+      run (T.unlines
+        [ "(when true (print \"yes\"))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "yes\ndone")
+
+    it "when with false" $
+      run (T.unlines
+        [ "(when false (print \"nope\"))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "done")
+
+    it "unless with false" $
+      run (T.unlines
+        [ "(unless false (print \"ran\"))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "ran\ndone")
+
+    it "unless with true" $
+      run (T.unlines
+        [ "(unless true (print \"nope\"))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "done")
+
   describe "garbage collection" $ do
     it "gc-collect runs without error" $
       run (T.unlines
@@ -1960,3 +2010,14 @@ multiModulePipeline modules mainSrc = do
           accTyped ++ [typed],
           accMacros ++ thisMacros,
           modEnvs)
+
+shouldFailToCompile :: T.Text -> String -> IO ()
+shouldFailToCompile src msg = do
+  result <- try (pipeline src >>= evaluate) :: IO (Either ErrorCall T.Text)
+  case result of
+    Left (ErrorCall e)
+      | msg `isInfixOf` e -> pure ()
+      | otherwise -> expectationFailure
+          ("expected error containing " ++ show msg ++ " but got:\n" ++ e)
+    Right _ -> expectationFailure
+      ("expected compilation to fail with: " ++ msg ++ " but it succeeded")
