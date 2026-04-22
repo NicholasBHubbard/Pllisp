@@ -157,6 +157,24 @@ spec = do
         , "      (print (int-to-str (inc 30)))))"
         ]) >>= (`shouldBe` "11\n21\n31")
 
+    it "supply 2 of 3 args" $
+      run (T.unlines
+        [ "(let ((f (lam ((a %INT) (b %INT) (c %INT)) (add a (add b c)))))"
+        , "  (let ((g (f 10 20)))"
+        , "    (print (int-to-str (g 12)))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "partial apply float built-in" $
+      run (T.unlines
+        [ "(let ((add5 (addf 5.0)))"
+        , "  (print (flt-to-str (add5 2.5))))"
+        ]) >>= (`shouldBe` "7.5")
+
+    it "over-application is still an error" $
+      shouldFailToCompile
+        "(add 1 2 3)"
+        "different arities"
+
   describe "algebraic data types" $ do
     it "constructor and case match" $
       run (T.unlines
