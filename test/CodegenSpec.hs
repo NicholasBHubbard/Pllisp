@@ -175,6 +175,34 @@ spec = do
         "(add 1 2 3)"
         "different arities"
 
+    it "partial apply with &opt" $
+      run (T.unlines
+        [ "(let ((f (lam ((a %INT) (b %INT) %opt (c 10)) (add a (add b c)))))"
+        , "  (let ((g (f 1)))"
+        , "    (print (int-to-str (g 2)))))"
+        ]) >>= (`shouldBe` "13")
+
+    it "partial apply with &opt, 2 required" $
+      run (T.unlines
+        [ "(let ((f (lam ((a %INT) (b %INT) %opt (c 100)) (add a (add b c)))))"
+        , "  (let ((g (f 1)))"
+        , "    (print (int-to-str (g 2)))))"
+        ]) >>= (`shouldBe` "103")
+
+    it "partial apply with &rest" $
+      run (T.unlines
+        [ "(let ((f (lam ((a %INT) (b %INT) &rest xs) (add a b))))"
+        , "  (let ((g (f 10)))"
+        , "    (print (int-to-str (g 20)))))"
+        ]) >>= (`shouldBe` "30")
+
+    it "partial apply with &key" $
+      run (T.unlines
+        [ "(let ((f (lam ((a %INT) (b %INT) &key (c 100)) (add a (add b c)))))"
+        , "  (let ((g (f 1)))"
+        , "    (print (int-to-str (g 2)))))"
+        ]) >>= (`shouldBe` "103")
+
   describe "algebraic data types" $ do
     it "constructor and case match" $
       run (T.unlines

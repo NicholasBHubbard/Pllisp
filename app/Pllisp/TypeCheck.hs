@@ -910,77 +910,85 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     posAts <- traverse infer posExprs
     -- Look up function metadata for call-site rewriting
     funcInfo <- lookupFuncInfo fexpr
-    ats <- case funcInfo of
-      Just (FuncInfo reqArity (FIOpt defaults)) -> do
-        -- Fill in missing optional args with defaults
-        let nPos = length posAts
-            totalArity = reqArity + length defaults
-        if nPos >= totalArity then pure posAts
-        else if nPos < reqArity then pure posAts  -- too few, unification will error
-        else do
-          let nMissing = totalArity - nPos
-              missingDefaults = drop (nPos - reqArity) defaults
-          defaultAts <- traverse infer (take nMissing missingDefaults)
-          pure (posAts ++ defaultAts)
-
-      Just (FuncInfo reqArity FIRest) -> do
-        -- Always pack args beyond reqArity into a Cons/Nil list
-        let nPos = length posAts
-        if nPos < reqArity then pure posAts  -- too few, unification will error
-        else do
-          let reqArgs  = take reqArity posAts
-              restArgs = drop reqArity posAts
-          elemTy <- if null restArgs then fresh
-                    else pure (typeOf (head restArgs))
-          listExpr <- buildListExpr sp elemTy restArgs
-          pure (reqArgs ++ [listExpr])
-
-      Just (FuncInfo reqArity (FIKey keyNames defaults)) -> do
-        -- Reorder keyword args to match definition order
-        keyAts <- traverse (\(_, e) -> infer e) keyExprs
-        let keyMap = M.fromList (zip (map fst keyExprs) keyAts)
-        reorderedKeys <- sequence
-          [ case M.lookup name keyMap of
-              Just expr -> pure expr
-              Nothing   -> infer (defaults !! idx)
-          | (idx, name) <- zip [0..] keyNames
-          ]
-        pure (posAts ++ reorderedKeys)
-
-      _ -> do
-        -- No metadata or plain function — handle any inline key args
-        if null keyExprs then pure posAts
-        else do
-          keyAts <- traverse (\(_, e) -> infer e) keyExprs
-          pure (posAts ++ keyAts)
-
     variadics <- ieVariadics <$> RWS.ask
     let isVariadic = case fexpr of
           Loc.Located _ (Res.RVar vb) -> S.member (Res.symName vb) variadics
           _ -> False
-        canPartialApply = not isVariadic && case funcInfo of
-          Just (FuncInfo _ FIPlain) -> True
-          Nothing                   -> True
-          _                         -> False
+        reqArity = case funcInfo of
+          Just (FuncInfo ra _) -> ra
+          Nothing -> case typeOf ft of
+            Ty.TyFun ps _ -> length ps
+            _             -> 0
+
+    -- Partial application: fewer positional args than required arity
     case typeOf ft of
       Ty.TyFun paramTys retTy
-        | canPartialApply, not (null ats), length ats < length paramTys -> do
-          -- Partial application: eta-expand into a closure
-          let nSupplied    = length ats
-              suppliedTys  = take nSupplied paramTys
-              remainingTys = drop nSupplied paramTys
-              curryRetTy   = Ty.TyFun remainingTys retTy
-          sequence_ [constrain sp (typeOf a) pt | (a, pt) <- zip ats suppliedTys]
+        | not isVariadic, not (null posAts), null keyExprs
+        , length posAts < reqArity -> do
+          let nSupplied      = length posAts
+              suppliedTys    = take nSupplied paramTys
+              remainingReqTys = take (reqArity - nSupplied) (drop nSupplied paramTys)
+          sequence_ [constrain sp (typeOf a) pt | (a, pt) <- zip posAts suppliedTys]
+          -- Fresh params for remaining required args
           n <- RWS.get
-          let nRemaining = length remainingTys
+          let nRemaining = length remainingReqTys
               freshNames = [T.pack ("$$pa" ++ show (n + fromIntegral i)) | i <- [0..nRemaining-1]]
           RWS.put (n + fromIntegral nRemaining)
-          let freshParams = zip freshNames remainingTys
+          let freshParams = zip freshNames remainingReqTys
               freshVars   = [Loc.Located sp (Ty.Typed rty (TRVar (Res.VarBinding 0 name)))
                             | (name, rty) <- freshParams]
-              innerApp    = Loc.Located sp (Ty.Typed retTy (TRApp ft (ats ++ freshVars)))
+          -- Bake in defaults/rest for non-required params
+          extraArgs <- case funcInfo of
+            Just (FuncInfo _ (FIOpt defaults)) -> traverse infer defaults
+            Just (FuncInfo _ FIRest) -> do
+              elemTy <- fresh
+              restExpr <- buildListExpr sp elemTy []
+              pure [restExpr]
+            Just (FuncInfo _ (FIKey _ defaults)) -> traverse infer defaults
+            _ -> pure []
+          let innerArgs  = posAts ++ freshVars ++ extraArgs
+              innerApp   = Loc.Located sp (Ty.Typed retTy (TRApp ft innerArgs))
+              curryRetTy = Ty.TyFun remainingReqTys retTy
           pure $ Ty.Typed curryRetTy (TRLam freshParams retTy innerApp)
+
       _ -> do
+        -- Normal call: funcInfo dispatch for defaults/rest/keys
+        ats <- case funcInfo of
+          Just (FuncInfo ra (FIOpt defaults)) -> do
+            let nPos = length posAts
+                totalArity = ra + length defaults
+            if nPos >= totalArity then pure posAts
+            else if nPos < ra then pure posAts
+            else do
+              let nMissing = totalArity - nPos
+                  missingDefaults = drop (nPos - ra) defaults
+              defaultAts <- traverse infer (take nMissing missingDefaults)
+              pure (posAts ++ defaultAts)
+          Just (FuncInfo ra FIRest) -> do
+            let nPos = length posAts
+            if nPos < ra then pure posAts
+            else do
+              let reqArgs  = take ra posAts
+                  restArgs = drop ra posAts
+              elemTy <- if null restArgs then fresh
+                        else pure (typeOf (head restArgs))
+              listExpr <- buildListExpr sp elemTy restArgs
+              pure (reqArgs ++ [listExpr])
+          Just (FuncInfo _ (FIKey keyNames defaults)) -> do
+            keyAts <- traverse (\(_, e) -> infer e) keyExprs
+            let keyMap = M.fromList (zip (map fst keyExprs) keyAts)
+            reorderedKeys <- sequence
+              [ case M.lookup name keyMap of
+                  Just expr -> pure expr
+                  Nothing   -> infer (defaults !! idx)
+              | (idx, name) <- zip [0..] keyNames
+              ]
+            pure (posAts ++ reorderedKeys)
+          _ -> do
+            if null keyExprs then pure posAts
+            else do
+              keyAts <- traverse (\(_, e) -> infer e) keyExprs
+              pure (posAts ++ keyAts)
         rt <- fresh
         if isVariadic
           then case typeOf ft of
