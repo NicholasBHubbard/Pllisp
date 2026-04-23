@@ -76,6 +76,11 @@ missingPatterns env ty pats
         case M.lookup name env of
           Nothing    -> []
           Just ctors -> concatMap (missingForCtor env pats) ctors
+      Ty.TyApp f _ -> case tyHead f of  -- unwrap HKT application to find constructor
+        Ty.TyCon name _ -> case M.lookup name env of
+          Nothing    -> []
+          Just ctors -> concatMap (missingForCtor env pats) ctors
+        _ -> []
       _ -> []   -- TyInt / TyFlt / TyStr: infinite domain; only wildcards cover
 
 -- | Find missing patterns for a single constructor.
@@ -97,6 +102,10 @@ checkArgPos env ctor arity rows i =
        (p:_) ->
          let subMissing = missingPatterns env (patternType p) patsForPos
          in map (renderCtorWithMissing ctor arity i) subMissing
+
+tyHead :: Ty.Type -> Ty.Type
+tyHead (Ty.TyApp f _) = tyHead f
+tyHead t = t
 
 -- HELPERS
 
