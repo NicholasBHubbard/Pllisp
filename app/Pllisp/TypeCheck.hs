@@ -44,13 +44,22 @@ methodSchemes envs =
           paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
           resolvedArgs = map (resolveTP paramMap) (miArgTys mi)
           resolvedRet  = resolveTP paramMap (miRetTy mi)
-      in Forall paramSet (Ty.TyFun resolvedArgs resolvedRet)
+          funTy0 = Ty.TyFun resolvedArgs resolvedRet
+          freeNames = collectFreeTyCons funTy0
+          nextIdx = if S.null paramSet then 0 else S.findMax paramSet + 1
+          extraMap = M.fromList (zip (S.toList freeNames) [nextIdx..])
+          funTy = resolveTP extraMap funTy0
+          extraSet = S.fromList [nextIdx .. nextIdx + fromIntegral (S.size freeNames) - 1]
+      in Forall (S.union paramSet extraSet) funTy
     resolveTP pm ty = case ty of
       Ty.TyCon name [] -> case M.lookup name pm of
         Just idx -> Ty.TyVar idx
         Nothing  -> ty
-      Ty.TyCon name args -> Ty.TyCon name (map (resolveTP pm) args)
+      Ty.TyCon name args -> case M.lookup name pm of
+        Just idx -> foldl Ty.TyApp (Ty.TyVar idx) (map (resolveTP pm) args)
+        Nothing  -> Ty.TyCon name (map (resolveTP pm) args)
       Ty.TyFun args ret -> Ty.TyFun (map (resolveTP pm) args) (resolveTP pm ret)
+      Ty.TyApp f a -> Ty.TyApp (resolveTP pm f) (resolveTP pm a)
       _ -> ty
 
 -- ENTRY POINT
@@ -138,9 +147,10 @@ type FuncInfoMap = M.Map CST.Symbol FuncInfo
 
 -- | Info about a typeclass method: which class, original arg types, return type.
 data MethodInfo = MethodInfo
-  { miClass  :: CST.Symbol
-  , miArgTys :: [Ty.Type]    -- uses TyCon "A" [] for class type vars
-  , miRetTy  :: Ty.Type
+  { miClass     :: CST.Symbol
+  , miArgTys    :: [Ty.Type]    -- uses TyCon "A" [] for class type vars
+  , miRetTy     :: Ty.Type
+  , miClassVars :: [CST.Symbol] -- class type parameter names
   } deriving (Eq, Show)
 
 type MethodEnv = M.Map CST.Symbol MethodInfo
@@ -234,11 +244,13 @@ instance Substitutable Ty.Type where
   tvs (Ty.TyVar v)     = S.singleton v
   tvs (Ty.TyFun ats t) = foldr (S.union . tvs) S.empty (t:ats)
   tvs (Ty.TyCon _ ts)  = foldr (S.union . tvs) S.empty ts
+  tvs (Ty.TyApp f a)   = tvs f `S.union` tvs a
   tvs _                = S.empty
 
   apply s t@(Ty.TyVar tv)   = M.findWithDefault t tv s
   apply s (Ty.TyFun ats rt) = Ty.TyFun (map (apply s) ats) (apply s rt)
   apply s (Ty.TyCon sym ts) = Ty.TyCon sym $ map (apply s) ts
+  apply s (Ty.TyApp f a)    = Ty.TyApp (apply s f) (apply s a)
   apply _ t                 = t
 
 instance Substitutable Scheme where
@@ -374,6 +386,7 @@ buildCtorContext = M.fromList . concatMap buildCtors
         Nothing  -> ty
       Ty.TyCon name args -> Ty.TyCon name (map (resolveTypeParams paramMap) args)
       Ty.TyFun args ret -> Ty.TyFun (map (resolveTypeParams paramMap) args) (resolveTypeParams paramMap ret)
+      Ty.TyApp f a -> Ty.TyApp (resolveTypeParams paramMap f) (resolveTypeParams paramMap a)
       _ -> ty
 
 -- FFI STRUCT CONTEXT
@@ -465,36 +478,57 @@ buildClassContext decls =
     buildMethods (className, tvars, methods) =
       let paramMap = M.fromList (zip tvars [0..])
           paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
-      in map (buildMethod className paramMap paramSet) methods
+      in map (buildMethod className tvars paramMap paramSet) methods
 
-    buildMethod className paramMap paramSet (CST.ClassMethod mname argTys retTy) =
+    buildMethod className cvars paramMap paramSet (CST.ClassMethod mname argTys retTy) =
       let resolvedArgs = map (resolveTypeParams' paramMap) argTys
           resolvedRet  = resolveTypeParams' paramMap retTy
-          funTy = Ty.TyFun resolvedArgs resolvedRet
-          scheme = Forall paramSet funTy
-      in (mname, MethodInfo className argTys retTy, scheme)
+          funTy0 = Ty.TyFun resolvedArgs resolvedRet
+          -- Resolve remaining free type names (method-local type variables like a, b)
+          freeNames = collectFreeTyCons funTy0
+          nextIdx = if S.null paramSet then 0 else S.findMax paramSet + 1
+          extraMap = M.fromList (zip (S.toList freeNames) [nextIdx..])
+          funTy = resolveTypeParams' extraMap funTy0
+          extraSet = S.fromList [nextIdx .. nextIdx + fromIntegral (S.size freeNames) - 1]
+          scheme = Forall (S.union paramSet extraSet) funTy
+      in (mname, MethodInfo className argTys retTy cvars, scheme)
 
     resolveTypeParams' paramMap ty = case ty of
       Ty.TyCon name [] -> case M.lookup name paramMap of
         Just idx -> Ty.TyVar idx
         Nothing  -> ty
-      Ty.TyCon name args -> Ty.TyCon name (map (resolveTypeParams' paramMap) args)
+      Ty.TyCon name args -> case M.lookup name paramMap of
+        Just idx -> foldl Ty.TyApp (Ty.TyVar idx) (map (resolveTypeParams' paramMap) args)
+        Nothing  -> Ty.TyCon name (map (resolveTypeParams' paramMap) args)
       Ty.TyFun args ret -> Ty.TyFun (map (resolveTypeParams' paramMap) args) (resolveTypeParams' paramMap ret)
+      Ty.TyApp f a -> Ty.TyApp (resolveTypeParams' paramMap f) (resolveTypeParams' paramMap a)
       _ -> ty
+
+-- | Collect free TyCon names that look like type variables (not builtins).
+collectFreeTyCons :: Ty.Type -> S.Set CST.Symbol
+collectFreeTyCons = go
+  where
+    builtins = S.fromList ["INT", "FLT", "STR", "BOOL", "UNIT", "RX", "REF"]
+    go (Ty.TyCon name []) | not (S.member name builtins) = S.singleton name
+    go (Ty.TyCon _ args) = S.unions (map go args)
+    go (Ty.TyFun args ret) = S.unions (go ret : map go args)
+    go (Ty.TyApp f a) = go f `S.union` go a
+    go _ = S.empty
 
 -- | Type-check instance method bodies and build the instance environment.
 buildInstanceEnv :: ClassEnv -> MethodEnv -> Context -> FieldMap
                  -> S.Set CST.Symbol  -- known type constructor names
                  -> [(CST.Symbol, Ty.Type, [(CST.Symbol, Res.RExpr)])]
                  -> (InstanceEnv, [TypeError])
-buildInstanceEnv _classEnv methodEnv ctx fieldMap knownTypes instDecls =
+buildInstanceEnv classEnv methodEnv ctx fieldMap knownTypes instDecls =
   let results = map checkInst instDecls
       instEnv = M.fromListWith (++) [(cls, [inst]) | (cls, inst, _) <- results]
       errs = concatMap (\(_, _, es) -> es) results
   in (instEnv, errs)
   where
     checkInst (className, instTy, methods) =
-      let env = InferEnv ctx fieldMap M.empty methodEnv M.empty S.empty M.empty
+      let kindErrs = checkInstanceKind classEnv methodEnv className instTy
+          env = InferEnv ctx fieldMap M.empty methodEnv M.empty S.empty M.empty
           (typedMethods, _, (constraints, inferErrs)) =
             RWS.runRWS (traverse (checkMethod className instTy) methods) env 0
           (solveErrs, resolvedMethods) = case solveAll constraints of
@@ -503,7 +537,7 @@ buildInstanceEnv _classEnv methodEnv ctx fieldMap knownTypes instDecls =
           methodMap = M.fromList resolvedMethods
           tyVars = extractInstTyVars knownTypes instTy
           inst = InstanceInfo instTy tyVars methodMap
-      in (className, inst, inferErrs ++ solveErrs)
+      in (className, inst, kindErrs ++ inferErrs ++ solveErrs)
 
     checkMethod _className _instTy (mname, body) = do
       typed <- infer body
@@ -517,7 +551,39 @@ extractInstTyVars knownTypes = go
     go (Ty.TyCon name []) | not (S.member name knownTypes) = S.singleton name
     go (Ty.TyCon _ args) = S.unions (map go args)
     go (Ty.TyFun args ret) = S.unions (go ret : map go args)
+    go (Ty.TyApp f a) = go f `S.union` go a
     go _ = S.empty
+
+-- | Check that instance types have the correct kind for the class.
+-- If a class param appears applied (e.g. (f a)) in method signatures,
+-- the instance type must be a type constructor, not a ground type.
+checkInstanceKind :: ClassEnv -> MethodEnv -> CST.Symbol -> Ty.Type -> [TypeError]
+checkInstanceKind classEnv methodEnv className instTy =
+  let tvars = M.findWithDefault [] className classEnv
+      methods = [mi | (_, mi) <- classMethodOrder className methodEnv]
+  in concatMap (checkParam methods instTy) tvars
+  where
+    checkParam methods iTy paramName =
+      if isHKParam paramName methods && isGroundType iTy
+      then [TypeError dictSp ("kind mismatch: class " ++ T.unpack className
+            ++ " expects a type constructor (kind * -> *) for param "
+            ++ T.unpack paramName ++ ", but got " ++ T.unpack (Ty.renderType iTy))]
+      else []
+
+    isHKParam name mis = any (\mi -> any (appearsApplied name) (miRetTy mi : miArgTys mi)) mis
+
+    appearsApplied name (Ty.TyCon n (_:_)) | n == name = True
+    appearsApplied name (Ty.TyCon _ args) = any (appearsApplied name) args
+    appearsApplied name (Ty.TyFun args ret) = any (appearsApplied name) (ret:args)
+    appearsApplied _ _ = False
+
+    isGroundType Ty.TyInt  = True
+    isGroundType Ty.TyFlt  = True
+    isGroundType Ty.TyStr  = True
+    isGroundType Ty.TyBool = True
+    isGroundType Ty.TyUnit = True
+    isGroundType Ty.TyRx   = True
+    isGroundType _         = False
 
 -- DICTIONARY PASSING
 
@@ -563,6 +629,7 @@ validateInstances me ie = concatMap checkExpr
     showType Ty.TyUnit = "UNIT"
     showType (Ty.TyCon n []) = T.unpack n
     showType (Ty.TyCon n ts) = T.unpack n ++ " " ++ unwords (map showType ts)
+    showType (Ty.TyApp f a) = "(" ++ showType f ++ " " ++ showType a ++ ")"
     showType t = show t
 
 -- | Haskell-style dictionary passing for typeclass methods.
@@ -586,6 +653,7 @@ typeToName Ty.TyUnit = "UNIT"
 typeToName Ty.TyRx = "RX"
 typeToName (Ty.TyCon n []) = n
 typeToName (Ty.TyCon n ts) = n <> "_" <> T.intercalate "_" (map typeToName ts)
+typeToName (Ty.TyApp f a) = typeToName f <> "_" <> typeToName a
 typeToName _ = "X"
 
 classMethodOrder :: CST.Symbol -> MethodEnv -> [(CST.Symbol, MethodInfo)]
@@ -610,8 +678,10 @@ mkDictType className tvars me =
   in Loc.Located dictSp (Ty.Typed (Ty.TyCon dn []) (TRType dn tvars [ctor]))
   where
     rTV pm (Ty.TyCon n []) | Just i <- M.lookup n pm = Ty.TyVar i
+    rTV pm (Ty.TyCon n as) | Just i <- M.lookup n pm = foldl Ty.TyApp (Ty.TyVar i) (map (rTV pm) as)
     rTV pm (Ty.TyCon n as) = Ty.TyCon n (map (rTV pm) as)
     rTV pm (Ty.TyFun as r) = Ty.TyFun (map (rTV pm) as) (rTV pm r)
+    rTV pm (Ty.TyApp f a) = Ty.TyApp (rTV pm f) (rTV pm a)
     rTV _ t = t
 
 -- Generate dictionary instance let-bindings (one per instance)
@@ -642,8 +712,10 @@ mkDictBind className ce me inst =
   in (iName, dTy, app)
   where
     sTV pm ct (Ty.TyCon n []) | Just _ <- M.lookup n pm = ct
+    sTV pm ct (Ty.TyCon n as) | Just _ <- M.lookup n pm = foldl Ty.TyApp ct (map (sTV pm ct) as)
     sTV pm ct (Ty.TyCon n as) = Ty.TyCon n (map (sTV pm ct) as)
     sTV pm ct (Ty.TyFun as r) = Ty.TyFun (map (sTV pm ct) as) (sTV pm ct r)
+    sTV pm ct (Ty.TyApp f a) = Ty.TyApp (sTV pm ct f) (sTV pm ct a)
     sTV _ _ t = t
 
 -- Inject dict bindings into the first TRLet
@@ -841,10 +913,36 @@ mkDictArgForCall _ie dpc callFty dn =
     _ -> error "dictPass: unexpected function type at call site"
 
 -- | Determine the concrete type for the class type variable from the resolved function type.
+-- For simple classes (SHOW, TRUTHY), the class var appears directly as an arg.
+-- For HKT classes (FUNCTOR), the class var appears inside TyApp, so we extract the head.
 resolveInstanceType :: MethodInfo -> Ty.Type -> Ty.Type
 resolveInstanceType minfo fty = case fty of
-  Ty.TyFun (argTy : _) _ -> argTy  -- first arg determines instance type
+  Ty.TyFun instArgs _ ->
+    let classVarNames = S.fromList (miClassVars minfo)
+        origArgs = miArgTys minfo
+    in findClassVar classVarNames origArgs instArgs
   _ -> fty
+  where
+    findClassVar cvs [] _ = fty  -- fallback
+    findClassVar cvs _ [] = fty
+    findClassVar cvs (orig:origs) (inst:insts) =
+      case containsClassVar cvs orig of
+        Just False -> findClassVar cvs origs insts  -- class var not in this arg
+        Just True  -> inst                          -- class var appears bare
+        Nothing    -> extractHead inst              -- class var inside TyApp
+    -- Check if a type contains a class type variable name.
+    -- Returns: Just True = bare class var, Just False = not present, Nothing = inside TyApp
+    containsClassVar cvs (Ty.TyCon name []) | S.member name cvs = Just True
+    containsClassVar cvs (Ty.TyCon name args) | S.member name cvs = Nothing
+    containsClassVar cvs (Ty.TyFun args ret) =
+      if any (\a -> containsClassVar cvs a /= Just False) (ret:args)
+      then Just False  -- present but not bare — but we need to look deeper
+      else Just False
+    containsClassVar _ _ = Just False
+    -- Extract the type constructor head from a fully-applied type
+    extractHead (Ty.TyCon name (_:_)) = Ty.TyCon name []
+    extractHead (Ty.TyApp f _) = extractHead f
+    extractHead t = t
 
 -- | Look up an instance for a class and type, returning a specific method.
 -- Supports parametric instances: type variables in the instance pattern match any type.
@@ -869,6 +967,8 @@ matchInstanceType tyVars pat target = case (pat, target) of
     length as1 == length as2
     && all (uncurry (matchInstanceType tyVars)) (zip as1 as2)
     && matchInstanceType tyVars r1 r2
+  (Ty.TyApp f1 a1, Ty.TyApp f2 a2) ->
+    matchInstanceType tyVars f1 f2 && matchInstanceType tyVars a1 a2
   _ -> pat == target
 
 -- INFERENCE
@@ -1269,6 +1369,15 @@ unify sp t (Ty.TyVar v) = bind sp v t
 unify sp (Ty.TyFun as1 r1) (Ty.TyFun as2 r2) = unifyMany sp (r1:as1) (r2:as2)
 unify sp (Ty.TyCon n1 ts1) (Ty.TyCon n2 ts2)
   | n1 == n2  = unifyMany sp ts1 ts2
+unify sp (Ty.TyApp f1 a1) (Ty.TyApp f2 a2) = do
+  s1 <- unify sp f1 f2
+  s2 <- unify sp (apply s1 a1) (apply s1 a2)
+  Right (compose s2 s1)
+-- TyApp vs TyCon: decompose TyCon "F" [a,b] into TyApp (TyCon "F" [a]) b
+unify sp ta@(Ty.TyApp _ _) (Ty.TyCon name args@(_:_)) =
+  unify sp ta (Ty.TyApp (Ty.TyCon name (init args)) (last args))
+unify sp (Ty.TyCon name args@(_:_)) ta@(Ty.TyApp _ _) =
+  unify sp (Ty.TyApp (Ty.TyCon name (init args)) (last args)) ta
 unify _ Ty.TyInt Ty.TyInt = Right M.empty
 unify _ Ty.TyFlt Ty.TyFlt = Right M.empty
 unify _ Ty.TyStr Ty.TyStr = Right M.empty

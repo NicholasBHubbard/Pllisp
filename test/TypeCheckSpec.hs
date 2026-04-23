@@ -256,6 +256,41 @@ spec = do
         Left errs -> length errs `shouldSatisfy` (>= 1)
         Right _   -> expectationFailure "expected unify error"
 
+    it "unify TyApp with matching structure" $ do
+      case TC.unify dummySpan
+             (Ty.TyApp (Ty.TyVar 0) Ty.TyInt)
+             (Ty.TyApp (Ty.TyCon "MAYBE" []) Ty.TyInt) of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right s -> TC.apply s (Ty.TyVar 0) `shouldBe` Ty.TyCon "MAYBE" []
+
+    it "unify TyApp mismatch" $ do
+      case TC.unify dummySpan
+             (Ty.TyApp (Ty.TyVar 0) Ty.TyInt)
+             Ty.TyBool of
+        Left _ -> pure ()
+        Right _ -> expectationFailure "expected unify error"
+
+    it "unify TyApp vs TyCon decomposes" $ do
+      -- TyApp (TyVar 0) TyInt ~ TyCon "MAYBE" [TyInt]
+      -- should decompose TyCon to TyApp and solve TyVar 0 = TyCon "MAYBE" []
+      case TC.unify dummySpan
+             (Ty.TyApp (Ty.TyVar 0) (Ty.TyVar 1))
+             (Ty.TyCon "MAYBE" [Ty.TyInt]) of
+        Left errs -> expectationFailure (show (map TC.teMsg errs))
+        Right s -> do
+          TC.apply s (Ty.TyVar 0) `shouldBe` Ty.TyCon "MAYBE" []
+          TC.apply s (Ty.TyVar 1) `shouldBe` Ty.TyInt
+
+  describe "TyApp substitution" $ do
+    it "apply substitution to TyApp" $ do
+      let subst = M.singleton 0 (Ty.TyCon "MAYBE" [])
+      TC.apply subst (Ty.TyApp (Ty.TyVar 0) Ty.TyInt)
+        `shouldBe` Ty.TyApp (Ty.TyCon "MAYBE" []) Ty.TyInt
+
+    it "tvs collects variables from TyApp" $ do
+      TC.tvs (Ty.TyApp (Ty.TyVar 0) (Ty.TyVar 1))
+        `shouldBe` S.fromList [0, 1]
+
   describe "bind" $ do
     it "bind TyVar to concrete type" $ do
       TC.bind dummySpan 0 Ty.TyInt `shouldBe` Right (M.singleton 0 Ty.TyInt)
@@ -312,6 +347,74 @@ spec = do
       case TC.solve [c1, c2] of
         Left errs -> length errs `shouldBe` 1
         Right _   -> expectationFailure "expected error"
+
+  describe "higher-kinded types" $ do
+    it "HKT class resolves type params correctly" $ do
+      let src = T.unlines
+            [ "(cls FUNCTOR (f)"
+            , "  (fmap %(a -> b) %(f a) %(f b)))"
+            , "(type Box (a) (MkBox a))"
+            , "(inst FUNCTOR %Box"
+            , "  (fmap (lam ((fn %(a -> b)) (box %(Box a)))"
+            , "    (case box ((MkBox x) (MkBox (fn x)))))))"
+            , "(case (fmap (lam ((x %INT)) (add x 1)) (MkBox 41))"
+            , "  ((MkBox y) y))"
+            ]
+      case parseAndTypecheck src of
+        Left errs -> expectationFailure (unlines (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyInt
+
+    it "Monad bind infers correct type" $ do
+      let src = T.unlines
+            [ "(type Opt (a) (Some a) (None))"
+            , "(cls MONAD (m)"
+            , "  (bind %(m a) %(a -> (m b)) %(m b)))"
+            , "(inst MONAD %Opt"
+            , "  (bind (lam ((mx %(Opt a)) (fn %(a -> (Opt b))))"
+            , "    (case mx"
+            , "      ((None) None)"
+            , "      ((Some x) (fn x))))))"
+            , "(bind (Some 42) (lam ((x %INT)) (Some (add x 1))))"
+            ]
+      case parseAndTypecheck src of
+        Left errs -> expectationFailure (unlines (map TC.teMsg errs))
+        Right typed -> topType typed `shouldBe` Ty.TyApp (Ty.TyCon "OPT" []) Ty.TyInt
+
+  describe "kind validation" $ do
+    it "rejects ground type as HKT class instance" $ do
+      let src = T.unlines
+            [ "(cls FUNCTOR (f)"
+            , "  (fmap %(a -> b) %(f a) %(f b)))"
+            , "(inst FUNCTOR %INT"
+            , "  (fmap (lam ((fn %(a -> b)) (x %INT)) x)))"
+            ]
+      case parseAndTypecheck src of
+        Left _  -> pure ()
+        Right _ -> expectationFailure "expected kind error for INT as FUNCTOR instance"
+
+    it "accepts type constructor as HKT class instance" $ do
+      let src = T.unlines
+            [ "(cls FUNCTOR (f)"
+            , "  (fmap %(a -> b) %(f a) %(f b)))"
+            , "(type Box (a) (MkBox a))"
+            , "(inst FUNCTOR %Box"
+            , "  (fmap (lam ((fn %(a -> b)) (box %(Box a)))"
+            , "    (case box ((MkBox x) (MkBox (fn x)))))))"
+            ]
+      case parseAndTypecheck src of
+        Left errs -> expectationFailure (unlines (map TC.teMsg errs))
+        Right _   -> pure ()
+
+    it "rejects ground type for multi-param HKT" $ do
+      let src = T.unlines
+            [ "(cls MAPPABLE (f)"
+            , "  (mmap %(a -> b) %(f a) %(f b)))"
+            , "(inst MAPPABLE %BOOL"
+            , "  (mmap (lam ((fn %(a -> b)) (x %BOOL)) x)))"
+            ]
+      case parseAndTypecheck src of
+        Left _  -> pure ()
+        Right _ -> expectationFailure "expected kind error for BOOL as MAPPABLE instance"
 
   describe "mutable refs" $ do
     it "ref infers Ref a" $

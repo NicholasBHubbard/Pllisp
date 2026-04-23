@@ -23,6 +23,7 @@ data Type
   | TyRx
   | TyFun [Type] Type
   | TyCon Symbol [Type]  -- user-defined: TyCon "Maybe" [TyInt]
+  | TyApp Type Type      -- HKT application: TyApp (TyVar 0) TyInt
   | TyVar Integer
   deriving (Eq, Show)
 
@@ -328,4 +329,5 @@ renderType t = case t of
   TyFun as r -> "%(" <> T.intercalate " " (map renderType as) <> " -> " <> renderType r <> ")"
   TyCon s [] -> "%" <> s
   TyCon s ts -> "%(" <> s <> " " <> T.intercalate " " (map renderType ts) <> ")"
+  TyApp f a  -> "%(" <> renderType f <> " " <> renderType a <> ")"
   TyVar n    -> "%t" <> T.pack (show n)

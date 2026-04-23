@@ -329,6 +329,7 @@ isConcretePtr _      Ty.TyStr       = True
 isConcretePtr _      Ty.TyRx        = True
 isConcretePtr _      (Ty.TyFun _ _) = True
 isConcretePtr params (Ty.TyCon n _) = not (S.member n params)
+isConcretePtr _      (Ty.TyApp _ _)  = True
 isConcretePtr _      _               = False
 
 collectFFI :: [LL.LLExpr] -> M.Map CST.Symbol FFIInfo
@@ -379,6 +380,7 @@ llvmType Ty.TyUnit      = "i8"
 llvmType Ty.TyRx     = "ptr"
 llvmType (Ty.TyFun _ _) = "ptr"
 llvmType (Ty.TyCon _ _) = "ptr"
+llvmType (Ty.TyApp _ _) = "ptr"
 llvmType (Ty.TyVar _)   = "ptr"
 
 -- STATE HELPERS

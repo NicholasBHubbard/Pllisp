@@ -382,6 +382,25 @@ spec = do
         CST.ExprInst "SHOW" (Ty.TyCon "LIST" [Ty.TyInt]) [("SHOW", _)] -> pure ()
         _ -> expectationFailure (show r)
 
+  describe "function type syntax" $ do
+    it "parses simple function type %(INT -> INT)" $ do
+      r <- either fail pure $ parseOne "(lam ((f %(INT -> INT))) (f 42))"
+      case r of
+        CST.ExprLam (CST.LamList [CST.TSymbol "F" (Just (Ty.TyFun [Ty.TyInt] Ty.TyInt))] _) _ _ -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "parses multi-arg function type %(INT -> INT -> BOOL)" $ do
+      r <- either fail pure $ parseOne "(lam ((f %(INT -> INT -> BOOL))) f)"
+      case r of
+        CST.ExprLam (CST.LamList [CST.TSymbol "F" (Just (Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool))] _) _ _ -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "parses function type with parameterized type" $ do
+      r <- either fail pure $ parseOne "(lam ((f %(INT -> (Maybe %INT)))) f)"
+      case r of
+        CST.ExprLam (CST.LamList [CST.TSymbol "F" (Just (Ty.TyFun [Ty.TyInt] (Ty.TyCon "MAYBE" [Ty.TyInt])))] _) _ _ -> pure ()
+        _ -> expectationFailure (show r)
+
   describe "error cases" $ do
     it "unclosed paren" $ do
       case Parser.parseProgram "<test>" "(add 1 2" of

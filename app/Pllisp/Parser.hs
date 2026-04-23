@@ -207,12 +207,43 @@ typeParserInCtor = MP.choice
   , Ty.TyCon <$> symbolParser <*> pure []  -- bare type variable: a, b, etc.
   ]
 
-typeParserBody :: Parser Ty.Type
-typeParserBody = MP.choice
-  [ parens $ do  -- %(List a) or %(Either a b)
+-- | Parse a type atom: a single type without arrow. Used inside parenthesized types.
+typeAtom :: Parser Ty.Type
+typeAtom = MP.choice
+  [ MP.C.char '%' *> typeParserBody
+  , parens $ do
       name <- ident
       args <- MP.many typeParserInCtor
       pure $ Ty.TyCon name args
+  , ident >>= \t -> case t of
+      "INT"  -> pure Ty.TyInt
+      "FLT"  -> pure Ty.TyFlt
+      "STR"  -> pure Ty.TyStr
+      "BOOL" -> pure Ty.TyBool
+      "UNIT"  -> pure Ty.TyUnit
+      "RX"    -> pure Ty.TyRx
+      other   -> pure (Ty.TyCon other [])
+  ]
+
+arrowSep :: Parser ()
+arrowSep = () <$ lexeme (MP.C.string "->")
+
+typeParserBody :: Parser Ty.Type
+typeParserBody = MP.choice
+  [ parens $ do
+      first <- typeAtom
+      mArrow <- MP.optional arrowSep
+      case mArrow of
+        Just _ -> do
+          rest <- MP.sepBy1 typeAtom arrowSep
+          let allTys = first : rest
+          pure $ Ty.TyFun (init allTys) (last allTys)
+        Nothing -> do
+          args <- MP.many typeParserInCtor
+          case (first, args) of
+            (Ty.TyCon name [], _) -> pure $ Ty.TyCon name args
+            (_, [])               -> pure first
+            _                     -> fail "cannot apply arguments to non-constructor type"
   , ident >>= \t -> case t of
       "INT"  -> pure Ty.TyInt
       "FLT"  -> pure Ty.TyFlt
@@ -295,7 +326,9 @@ keywords = ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE", "MODULE
 rawIdent :: Parser T.Text
 rawIdent = do
   first <- MP.C.char '_' <|> MP.C.char '&' <|> MP.C.letterChar
-  rest  <- MP.many (MP.C.char '_' <|> MP.C.char '-' <|> MP.C.char '!' <|> MP.C.char '?' <|> MP.C.alphaNumChar)
+  rest  <- MP.many (MP.C.char '_'
+                    <|> MP.try (MP.C.char '-' <* MP.notFollowedBy (MP.C.char '>'))
+                    <|> MP.C.char '!' <|> MP.C.char '?' <|> MP.C.alphaNumChar)
   pure $ T.toUpper (T.pack (first:rest))
 
 ident :: Parser T.Text
@@ -350,8 +383,9 @@ sexprParser = located $ MP.choice
   ]
 
 sexprAtomParser :: Parser T.Text
-sexprAtomParser = MP.label "atom" $ lexeme $ dotAccessor <|> regularAtom
+sexprAtomParser = MP.label "atom" $ lexeme $ arrowOp <|> dotAccessor <|> regularAtom
   where
+    arrowOp = MP.try (MP.C.string "->" *> pure "->")
     dotAccessor = MP.try $ do
       _ <- MP.C.char '.'
       s <- rawIdent
