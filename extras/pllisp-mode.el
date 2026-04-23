@@ -17,7 +17,7 @@
   "Built-in constants.")
 
 (defconst pllisp-font-lock-keywords
-  (let ((special-re (concat "(" (regexp-opt pllisp-special-forms t)))
+  (let ((special-re (concat "(" (regexp-opt pllisp-special-forms t) "\\_>"))
         (constant-re (regexp-opt pllisp-constants 'words)))
     `(;; Special forms: highlight keyword after open paren
       (,special-re 1 font-lock-keyword-face)
@@ -54,6 +54,24 @@
     st)
   "Syntax table for pllisp-mode.")
 
+(defun pllisp-indent-line (&optional _whole-exp)
+  "Indent current line as pllisp code.
+Unlike `lisp-indent-line', does not apply multi-level comment indentation."
+  (interactive "P")
+  (let ((indent (calculate-lisp-indent)) shift-amt
+        (pos (- (point-max) (point)))
+        (beg (progn (beginning-of-line) (point))))
+    (skip-chars-forward " \t")
+    (if (null indent)
+        (setq indent (current-column))
+      (when (listp indent) (setq indent (car indent))))
+    (setq shift-amt (- indent (current-column)))
+    (unless (zerop shift-amt)
+      (delete-region beg (point))
+      (indent-to indent))
+    (when (> (- (point-max) pos) (point))
+      (goto-char (- (point-max) pos)))))
+
 ;;;###autoload
 (define-derived-mode pllisp-mode lisp-mode "Pllisp"
   "Major mode for editing pllisp source code."
@@ -63,15 +81,17 @@
   (setq-local comment-start "# ")
   (setq-local comment-start-skip "#+ *")
   (setq-local lisp-body-indent 2)
+  (setq-local indent-line-function #'pllisp-indent-line)
   (setq-local lisp-indent-function #'lisp-indent-function))
 
 ;; Indent rules: number = distinguished args before body
-(dolist (sym '(lam let if case cls inst
+(dolist (sym '(lam let if case cls
                module import ffi ffi-struct
                ffi-var ffi-enum ffi-callback))
   (put sym 'lisp-indent-function 1))
 (dolist (sym '(mac fun type))
   (put sym 'lisp-indent-function 2))
+(put 'inst 'lisp-indent-function 0)
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.pll\\'" . pllisp-mode))
