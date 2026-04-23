@@ -687,10 +687,10 @@ mkDictType className tvars me =
 -- Generate dictionary instance let-bindings (one per instance)
 genDictBinds :: ClassEnv -> MethodEnv -> InstanceEnv -> [(CST.Symbol, Ty.Type, TRExpr)]
 genDictBinds ce me ie =
-  concatMap (\(cn, insts) -> map (mkDictBind cn ce me) insts) (M.toList ie)
+  concatMap (\(cn, insts) -> map (mkDictBind cn ce me ie) insts) (M.toList ie)
 
-mkDictBind :: CST.Symbol -> ClassEnv -> MethodEnv -> InstanceInfo -> (CST.Symbol, Ty.Type, TRExpr)
-mkDictBind className ce me inst =
+mkDictBind :: CST.Symbol -> ClassEnv -> MethodEnv -> InstanceEnv -> InstanceInfo -> (CST.Symbol, Ty.Type, TRExpr)
+mkDictBind className ce me ie inst =
   let iTy = iiType inst
       dName = "__DICT_" <> className
       cName = "__Dict" <> className
@@ -699,10 +699,11 @@ mkDictBind className ce me inst =
       tvars = M.findWithDefault [] className ce
       pm = M.fromList (zip tvars [0..])
       methods = classMethodOrder className me
-      impls = [case M.lookup mn (iiMethods inst) of
-                  Just e -> e
-                  Nothing -> error ("dictPass: missing " ++ T.unpack mn)
-              | (mn, _) <- methods]
+      rawImpls = [case M.lookup mn (iiMethods inst) of
+                     Just e -> e
+                     Nothing -> error ("dictPass: missing " ++ T.unpack mn)
+                 | (mn, _) <- methods]
+      impls = map (dpRewrite ce me ie M.empty M.empty) rawImpls
       fTys = [Ty.TyFun (map (sTV pm iTy) (miArgTys mi)) (sTV pm iTy (miRetTy mi))
              | (_, mi) <- methods]
       cTy = if null fTys then dTy else Ty.TyFun fTys dTy
@@ -790,7 +791,8 @@ dpApp ce me ie nm dpc sp ty fexpr args =
             -- Monomorphic: inline instance impl (static dispatch)
             case lookupInstance ie (miClass mi) iT (Res.symName vb) of
               Just impl ->
-                let Loc.Located _ (Ty.Typed _ implBody) = impl
+                let impl' = dpRewrite ce me ie nm dpc impl
+                    Loc.Located _ (Ty.Typed _ implBody) = impl'
                 in Loc.Located sp (Ty.Typed ty (TRApp (Loc.Located fsp (Ty.Typed fty implBody)) args'))
               Nothing -> Loc.Located sp (Ty.Typed ty (TRApp fexpr args'))
 
@@ -913,33 +915,27 @@ mkDictArgForCall _ie dpc callFty dn =
     _ -> error "dictPass: unexpected function type at call site"
 
 -- | Determine the concrete type for the class type variable from the resolved function type.
--- For simple classes (SHOW, TRUTHY), the class var appears directly as an arg.
--- For HKT classes (FUNCTOR), the class var appears inside TyApp, so we extract the head.
+-- Scans both args and return type for the class variable position.
 resolveInstanceType :: MethodInfo -> Ty.Type -> Ty.Type
 resolveInstanceType minfo fty = case fty of
-  Ty.TyFun instArgs _ ->
-    let classVarNames = S.fromList (miClassVars minfo)
-        origArgs = miArgTys minfo
-    in findClassVar classVarNames origArgs instArgs
+  Ty.TyFun instArgs instRet ->
+    let cvs = S.fromList (miClassVars minfo)
+        origParts = miArgTys minfo ++ [miRetTy minfo]
+        instParts = instArgs ++ [instRet]
+    in findClassVar cvs origParts instParts
   _ -> fty
   where
-    findClassVar cvs [] _ = fty  -- fallback
-    findClassVar cvs _ [] = fty
+    findClassVar _ [] _ = fty
+    findClassVar _ _ [] = fty
     findClassVar cvs (orig:origs) (inst:insts) =
       case containsClassVar cvs orig of
-        Just False -> findClassVar cvs origs insts  -- class var not in this arg
-        Just True  -> inst                          -- class var appears bare
-        Nothing    -> extractHead inst              -- class var inside TyApp
-    -- Check if a type contains a class type variable name.
-    -- Returns: Just True = bare class var, Just False = not present, Nothing = inside TyApp
+        Just False -> findClassVar cvs origs insts
+        Just True  -> inst
+        Nothing    -> extractHead inst
     containsClassVar cvs (Ty.TyCon name []) | S.member name cvs = Just True
-    containsClassVar cvs (Ty.TyCon name args) | S.member name cvs = Nothing
-    containsClassVar cvs (Ty.TyFun args ret) =
-      if any (\a -> containsClassVar cvs a /= Just False) (ret:args)
-      then Just False  -- present but not bare — but we need to look deeper
-      else Just False
+    containsClassVar cvs (Ty.TyCon name _) | S.member name cvs = Nothing
+    containsClassVar cvs (Ty.TyCon _ args) | any (\a -> containsClassVar cvs a /= Just False) args = Nothing
     containsClassVar _ _ = Just False
-    -- Extract the type constructor head from a fully-applied type
     extractHead (Ty.TyCon name (_:_)) = Ty.TyCon name []
     extractHead (Ty.TyApp f _) = extractHead f
     extractHead t = t

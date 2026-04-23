@@ -114,43 +114,34 @@ spec = do
         ]) >>= (`shouldBe` "42")
 
   describe "higher-kinded types" $ do
-    it "Functor fmap with Box" $
+    it "HKT class with custom type" $
       run (T.unlines
-        [ "(cls FUNCTOR (f)"
-        , "  (fmap %(-> a b) %(f a) %(f b)))"
-        , "(type Box (a) (MkBox a))"
-        , "(inst FUNCTOR %Box"
-        , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
+        [ "(type Box (a) (MkBox a))"
+        , "(cls BOXMAP (f)"
+        , "  (bmap %(-> a b) %(f a) %(f b)))"
+        , "(inst BOXMAP %Box"
+        , "  (bmap (lam ((fn %(-> a b)) (box %(Box a)))"
         , "    (case box ((MkBox x) (MkBox (fn x)))))))"
-        , "(case (fmap (lam ((x %INT)) (add x 1)) (MkBox 41))"
+        , "(case (bmap (lam ((x %INT)) (add x 1)) (MkBox 41))"
         , "  ((MkBox y) (print (int-to-str y))))"
         ]) >>= (`shouldBe` "42")
 
-    it "Functor fmap with Maybe" $
+    it "prelude map with Maybe" $
       run (T.unlines
-        [ "(cls FUNCTOR (f)"
-        , "  (fmap %(-> a b) %(f a) %(f b)))"
-        , "(inst FUNCTOR %Maybe"
-        , "  (fmap (lam ((fn %(-> a b)) (mx %(Maybe a)))"
-        , "    (case mx"
-        , "      ((Nothing) Nothing)"
-        , "      ((Just x) (Just (fn x)))))))"
-        , "(case (fmap (lam ((x %INT)) (add x 10)) (Just 32))"
+        [ "(case (map (lam ((x %INT)) (add x 10)) (Just 32))"
         , "  ((Just y) (print (int-to-str y)))"
         , "  (_ (print \"nothing\")))"
         ]) >>= (`shouldBe` "42")
 
-    it "Functor fmap composed twice" $
+    it "map composed twice" $
       run (T.unlines
-        [ "(cls FUNCTOR (f)"
-        , "  (fmap %(-> a b) %(f a) %(f b)))"
-        , "(type Box (a) (MkBox a))"
+        [ "(type Box (a) (MkBox a))"
         , "(inst FUNCTOR %Box"
-        , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
+        , "  (map (lam ((fn %(-> a b)) (box %(Box a)))"
         , "    (case box ((MkBox x) (MkBox (fn x)))))))"
         , "(let ((double (lam ((x %INT)) (mul x 2)))"
         , "      (inc    (lam ((x %INT)) (add x 1))))"
-        , "  (case (fmap inc (fmap double (MkBox 20)))"
+        , "  (case (map inc (map double (MkBox 20)))"
         , "    ((MkBox y) (print (int-to-str y)))))"
         ]) >>= (`shouldBe` "41")
 
@@ -865,6 +856,50 @@ spec = do
 
     it "prelude constructors available qualified as PRELUDE.X" $ do
       run "(case PRELUDE.Nil ((PRELUDE.Nil) (print \"ok\")))" >>= (`shouldBe` "ok")
+
+    it "prelude pure wraps value in Maybe" $ do
+      run (T.unlines
+        [ "(case (pure 42)"
+        , "  ((Just x) (print (int-to-str x)))"
+        , "  (_ (print \"nothing\")))"
+        ]) >>= (`shouldBe` "42")
+
+    it "prelude ap applies wrapped function" $ do
+      run (T.unlines
+        [ "(let ((mf (Just (lam ((x %INT)) (add x 1)))))"
+        , "  (case (ap mf (Just 41))"
+        , "    ((Just y) (print (int-to-str y)))"
+        , "    (_ (print \"nothing\"))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "prelude ap with Nothing function" $ do
+      run (T.unlines
+        [ "(case (ap Nothing (Just 41))"
+        , "  ((Just y) (print (int-to-str y)))"
+        , "  (_ (print \"nothing\")))"
+        ]) >>= (`shouldBe` "nothing")
+
+    it "prelude ap with Nothing value" $ do
+      run (T.unlines
+        [ "(let ((mf (Just (lam ((x %INT)) (add x 1)))))"
+        , "  (case (ap mf Nothing)"
+        , "    ((Just y) (print (int-to-str y)))"
+        , "    (_ (print \"nothing\"))))"
+        ]) >>= (`shouldBe` "nothing")
+
+    it "prelude map with Maybe Just" $ do
+      run (T.unlines
+        [ "(case (map (lam ((x %INT)) (add x 1)) (Just 41))"
+        , "  ((Just y) (print (int-to-str y)))"
+        , "  (_ (print \"nothing\")))"
+        ]) >>= (`shouldBe` "42")
+
+    it "prelude map with Maybe Nothing" $ do
+      run (T.unlines
+        [ "(case (map (lam ((x %INT)) (add x 1)) Nothing)"
+        , "  ((Just y) (print (int-to-str y)))"
+        , "  (_ (print \"nothing\")))"
+        ]) >>= (`shouldBe` "nothing")
 
     it "qualified constructor with arguments in pattern" $ do
       run (T.unlines
