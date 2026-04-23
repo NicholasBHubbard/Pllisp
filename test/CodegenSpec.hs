@@ -117,10 +117,10 @@ spec = do
     it "Functor fmap with Box" $
       run (T.unlines
         [ "(cls FUNCTOR (f)"
-        , "  (fmap %(a -> b) %(f a) %(f b)))"
+        , "  (fmap %(-> a b) %(f a) %(f b)))"
         , "(type Box (a) (MkBox a))"
         , "(inst FUNCTOR %Box"
-        , "  (fmap (lam ((fn %(a -> b)) (box %(Box a)))"
+        , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
         , "    (case box ((MkBox x) (MkBox (fn x)))))))"
         , "(case (fmap (lam ((x %INT)) (add x 1)) (MkBox 41))"
         , "  ((MkBox y) (print (int-to-str y))))"
@@ -129,9 +129,9 @@ spec = do
     it "Functor fmap with Maybe" $
       run (T.unlines
         [ "(cls FUNCTOR (f)"
-        , "  (fmap %(a -> b) %(f a) %(f b)))"
+        , "  (fmap %(-> a b) %(f a) %(f b)))"
         , "(inst FUNCTOR %Maybe"
-        , "  (fmap (lam ((fn %(a -> b)) (mx %(Maybe a)))"
+        , "  (fmap (lam ((fn %(-> a b)) (mx %(Maybe a)))"
         , "    (case mx"
         , "      ((Nothing) Nothing)"
         , "      ((Just x) (Just (fn x)))))))"
@@ -143,10 +143,10 @@ spec = do
     it "Functor fmap composed twice" $
       run (T.unlines
         [ "(cls FUNCTOR (f)"
-        , "  (fmap %(a -> b) %(f a) %(f b)))"
+        , "  (fmap %(-> a b) %(f a) %(f b)))"
         , "(type Box (a) (MkBox a))"
         , "(inst FUNCTOR %Box"
-        , "  (fmap (lam ((fn %(a -> b)) (box %(Box a)))"
+        , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
         , "    (case box ((MkBox x) (MkBox (fn x)))))))"
         , "(let ((double (lam ((x %INT)) (mul x 2)))"
         , "      (inc    (lam ((x %INT)) (add x 1))))"
@@ -157,9 +157,9 @@ spec = do
     it "Monad-like bind with Maybe" $
       run (T.unlines
         [ "(cls MONAD (m)"
-        , "  (bind %(m a) %(a -> (m b)) %(m b)))"
+        , "  (bind %(m a) %(-> a (m b)) %(m b)))"
         , "(inst MONAD %Maybe"
-        , "  (bind (lam ((mx %(Maybe a)) (fn %(a -> (Maybe b))))"
+        , "  (bind (lam ((mx %(Maybe a)) (fn %(-> a (Maybe b))))"
         , "    (case mx"
         , "      ((Nothing) Nothing)"
         , "      ((Just x) (fn x))))))"
@@ -174,9 +174,9 @@ spec = do
     it "Monad bind short-circuits on Nothing" $
       run (T.unlines
         [ "(cls MONAD (m)"
-        , "  (bind %(m a) %(a -> (m b)) %(m b)))"
+        , "  (bind %(m a) %(-> a (m b)) %(m b)))"
         , "(inst MONAD %Maybe"
-        , "  (bind (lam ((mx %(Maybe a)) (fn %(a -> (Maybe b))))"
+        , "  (bind (lam ((mx %(Maybe a)) (fn %(-> a (Maybe b))))"
         , "    (case mx"
         , "      ((Nothing) Nothing)"
         , "      ((Just x) (fn x))))))"
@@ -190,7 +190,7 @@ spec = do
   describe "function type annotations" $ do
     it "annotated higher-order function works" $
       run (T.unlines
-        [ "(let ((apply (lam ((f %(INT -> INT)) (x %INT)) (f x)))"
+        [ "(let ((apply (lam ((f %(-> INT INT)) (x %INT)) (f x)))"
         , "      (inc (lam ((n %INT)) (add n 1))))"
         , "  (print (int-to-str (apply inc 41))))"
         ]) >>= (`shouldBe` "42")

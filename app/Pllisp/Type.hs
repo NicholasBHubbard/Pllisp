@@ -326,7 +326,7 @@ renderType t = case t of
   TyBool     -> "%BOOL"
   TyUnit     -> "%UNIT"
   TyRx    -> "%RX"
-  TyFun as r -> "%(" <> T.intercalate " " (map renderType as) <> " -> " <> renderType r <> ")"
+  TyFun as r -> "%(-> " <> T.intercalate " " (map renderType (as ++ [r])) <> ")"
   TyCon s [] -> "%" <> s
   TyCon s ts -> "%(" <> s <> " " <> T.intercalate " " (map renderType ts) <> ")"
   TyApp f a  -> "%(" <> renderType f <> " " <> renderType a <> ")"

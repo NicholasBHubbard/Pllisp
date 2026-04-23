@@ -461,15 +461,12 @@ toType (Loc.Located _ (SAtom name)) = case name of
   "UNIT" -> Right Ty.TyUnit
   "RX"   -> Right Ty.TyRx
   other  -> Right (Ty.TyCon other [])
-toType (Loc.Located _ (SList elems))
-  | any isArrow elems = do
-      tys <- mapM toType (filter (not . isArrow) elems)
-      case tys of
-        []  -> Right Ty.TyUnit
-        [t] -> Right t
-        _   -> Right (Ty.TyFun (init tys) (last tys))
-  where isArrow (Loc.Located _ (SAtom "->")) = True
-        isArrow _ = False
+toType (Loc.Located _ (SList (Loc.Located _ (SAtom "->") : rest))) = do
+  tys <- mapM toType rest
+  case tys of
+    []  -> Right Ty.TyUnit
+    [t] -> Right t
+    _   -> Right (Ty.TyFun (init tys) (last tys))
 toType (Loc.Located _ (SList (Loc.Located _ (SAtom name) : args))) = do
   args' <- mapM toTypeArg args
   Right (Ty.TyCon name args')

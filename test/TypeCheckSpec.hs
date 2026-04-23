@@ -352,10 +352,10 @@ spec = do
     it "HKT class resolves type params correctly" $ do
       let src = T.unlines
             [ "(cls FUNCTOR (f)"
-            , "  (fmap %(a -> b) %(f a) %(f b)))"
+            , "  (fmap %(-> a b) %(f a) %(f b)))"
             , "(type Box (a) (MkBox a))"
             , "(inst FUNCTOR %Box"
-            , "  (fmap (lam ((fn %(a -> b)) (box %(Box a)))"
+            , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
             , "    (case box ((MkBox x) (MkBox (fn x)))))))"
             , "(case (fmap (lam ((x %INT)) (add x 1)) (MkBox 41))"
             , "  ((MkBox y) y))"
@@ -368,9 +368,9 @@ spec = do
       let src = T.unlines
             [ "(type Opt (a) (Some a) (None))"
             , "(cls MONAD (m)"
-            , "  (bind %(m a) %(a -> (m b)) %(m b)))"
+            , "  (bind %(m a) %(-> a (m b)) %(m b)))"
             , "(inst MONAD %Opt"
-            , "  (bind (lam ((mx %(Opt a)) (fn %(a -> (Opt b))))"
+            , "  (bind (lam ((mx %(Opt a)) (fn %(-> a (Opt b))))"
             , "    (case mx"
             , "      ((None) None)"
             , "      ((Some x) (fn x))))))"
@@ -384,9 +384,9 @@ spec = do
     it "rejects ground type as HKT class instance" $ do
       let src = T.unlines
             [ "(cls FUNCTOR (f)"
-            , "  (fmap %(a -> b) %(f a) %(f b)))"
+            , "  (fmap %(-> a b) %(f a) %(f b)))"
             , "(inst FUNCTOR %INT"
-            , "  (fmap (lam ((fn %(a -> b)) (x %INT)) x)))"
+            , "  (fmap (lam ((fn %(-> a b)) (x %INT)) x)))"
             ]
       case parseAndTypecheck src of
         Left _  -> pure ()
@@ -395,10 +395,10 @@ spec = do
     it "accepts type constructor as HKT class instance" $ do
       let src = T.unlines
             [ "(cls FUNCTOR (f)"
-            , "  (fmap %(a -> b) %(f a) %(f b)))"
+            , "  (fmap %(-> a b) %(f a) %(f b)))"
             , "(type Box (a) (MkBox a))"
             , "(inst FUNCTOR %Box"
-            , "  (fmap (lam ((fn %(a -> b)) (box %(Box a)))"
+            , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
             , "    (case box ((MkBox x) (MkBox (fn x)))))))"
             ]
       case parseAndTypecheck src of
@@ -408,9 +408,9 @@ spec = do
     it "rejects ground type for multi-param HKT" $ do
       let src = T.unlines
             [ "(cls MAPPABLE (f)"
-            , "  (mmap %(a -> b) %(f a) %(f b)))"
+            , "  (mmap %(-> a b) %(f a) %(f b)))"
             , "(inst MAPPABLE %BOOL"
-            , "  (mmap (lam ((fn %(a -> b)) (x %BOOL)) x)))"
+            , "  (mmap (lam ((fn %(-> a b)) (x %BOOL)) x)))"
             ]
       case parseAndTypecheck src of
         Left _  -> pure ()

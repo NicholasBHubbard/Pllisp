@@ -25,10 +25,10 @@ spec = do
       Ty.renderType Ty.TyUnit `shouldBe` "%UNIT"
 
     it "TyFun 1 arg" $
-      Ty.renderType (Ty.TyFun [Ty.TyInt] Ty.TyBool) `shouldBe` "%(%INT -> %BOOL)"
+      Ty.renderType (Ty.TyFun [Ty.TyInt] Ty.TyBool) `shouldBe` "%(-> %INT %BOOL)"
 
     it "TyFun 2 args" $
-      Ty.renderType (Ty.TyFun [Ty.TyInt, Ty.TyStr] Ty.TyBool) `shouldBe` "%(%INT %STR -> %BOOL)"
+      Ty.renderType (Ty.TyFun [Ty.TyInt, Ty.TyStr] Ty.TyBool) `shouldBe` "%(-> %INT %STR %BOOL)"
 
     it "TyCon no args" $
       Ty.renderType (Ty.TyCon "MAYBE" []) `shouldBe` "%MAYBE"
@@ -41,4 +41,4 @@ spec = do
 
     it "nested TyFun containing TyCon" $
       Ty.renderType (Ty.TyFun [Ty.TyCon "MAYBE" [Ty.TyVar 0]] Ty.TyInt)
-        `shouldBe` "%(%(MAYBE %t0) -> %INT)"
+        `shouldBe` "%(-> %(MAYBE %t0) %INT)"

@@ -207,14 +207,18 @@ typeParserInCtor = MP.choice
   , Ty.TyCon <$> symbolParser <*> pure []  -- bare type variable: a, b, etc.
   ]
 
--- | Parse a type atom: a single type without arrow. Used inside parenthesized types.
-typeAtom :: Parser Ty.Type
-typeAtom = MP.choice
-  [ MP.C.char '%' *> typeParserBody
-  , parens $ do
-      name <- ident
-      args <- MP.many typeParserInCtor
-      pure $ Ty.TyCon name args
+typeParserBody :: Parser Ty.Type
+typeParserBody = MP.choice
+  [ parens $ do
+      mArrow <- MP.optional (MP.try (lexeme (MP.C.string "->") *> pure ()))
+      case mArrow of
+        Just _ -> do
+          tys <- MP.some typeElem
+          pure $ Ty.TyFun (init tys) (last tys)
+        Nothing -> do
+          name <- ident
+          args <- MP.many typeParserInCtor
+          pure $ Ty.TyCon name args
   , ident >>= \t -> case t of
       "INT"  -> pure Ty.TyInt
       "FLT"  -> pure Ty.TyFlt
@@ -225,25 +229,20 @@ typeAtom = MP.choice
       other   -> pure (Ty.TyCon other [])
   ]
 
-arrowSep :: Parser ()
-arrowSep = () <$ lexeme (MP.C.string "->")
-
-typeParserBody :: Parser Ty.Type
-typeParserBody = MP.choice
-  [ parens $ do
-      first <- typeAtom
-      mArrow <- MP.optional arrowSep
+-- | A type element inside an arrow type: handles bare names, parens, and % prefix.
+typeElem :: Parser Ty.Type
+typeElem = MP.choice
+  [ MP.C.char '%' *> typeParserBody
+  , parens $ do
+      mArrow <- MP.optional (MP.try (lexeme (MP.C.string "->") *> pure ()))
       case mArrow of
         Just _ -> do
-          rest <- MP.sepBy1 typeAtom arrowSep
-          let allTys = first : rest
-          pure $ Ty.TyFun (init allTys) (last allTys)
+          tys <- MP.some typeElem
+          pure $ Ty.TyFun (init tys) (last tys)
         Nothing -> do
+          name <- ident
           args <- MP.many typeParserInCtor
-          case (first, args) of
-            (Ty.TyCon name [], _) -> pure $ Ty.TyCon name args
-            (_, [])               -> pure first
-            _                     -> fail "cannot apply arguments to non-constructor type"
+          pure $ Ty.TyCon name args
   , ident >>= \t -> case t of
       "INT"  -> pure Ty.TyInt
       "FLT"  -> pure Ty.TyFlt
