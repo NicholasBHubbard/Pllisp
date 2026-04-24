@@ -39,7 +39,7 @@ data RExprF
   | RCase RExpr [(RPattern, RExpr)]
   | RFieldAccess CST.Symbol RExpr
   | RKeyArg CST.Symbol RExpr
-  | RCls CST.Symbol [CST.Symbol] [CST.ClassMethod]
+  | RCls CST.Symbol [CST.Symbol] [CST.Symbol] [CST.ClassMethod]
   | RInst CST.Symbol Ty.Type [(CST.Symbol, RExpr)]
   | RFFI CST.Symbol [Ty.CType] Ty.CType
   | RFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
@@ -100,7 +100,7 @@ extractCtorNames = concatMap go
 extractClassMethodNames :: CST.CST -> [CST.Symbol]
 extractClassMethodNames = concatMap go
   where
-    go (Loc.Located _ (CST.ExprCls _ _ methods)) = map CST.cmName methods
+    go (Loc.Located _ (CST.ExprCls _ _ _ methods)) = map CST.cmName methods
     go _ = []
 
 extractFFINames :: CST.CST -> [CST.Symbol]
@@ -153,8 +153,8 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     dupCheck "duplicate type parameter" params sp
     dupCheck "duplicate data constructor" (map CST.dcName ctors) sp
     pure (RType name params ctors)
-  CST.ExprCls name tvars methods -> do
-    pure $ RCls name tvars methods
+  CST.ExprCls name tvars supers methods -> do
+    pure $ RCls name tvars supers methods
   CST.ExprInst className ty methods -> do
     rmethods <- traverse (\(mname, body) -> do
       rbody <- resolveExpr body

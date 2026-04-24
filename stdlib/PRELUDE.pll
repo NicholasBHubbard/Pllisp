@@ -52,7 +52,7 @@
       ((Nothing) Nothing)
       ((Just x) (Just (fn x)))))))
 
-(cls APPLICATIVE (f)
+(cls APPLICATIVE (f) REQUIRES (FUNCTOR)
   (pure %a %(f a))
   (ap %(f %(-> a b)) %(f a) %(f b)))
 

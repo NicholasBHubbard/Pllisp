@@ -40,7 +40,7 @@ data ExprF
   | ExprCase Expr [(Pattern, Expr)]     -- (CASE scrutinee (pat body)...)
   | ExprFieldAccess Symbol Expr         -- (.field expr)
   | ExprKeyArg Symbol Expr              -- &key name value (only in app args)
-  | ExprCls Symbol [Symbol] [ClassMethod]  -- (CLS Name (tyvars...) methods...)
+  | ExprCls Symbol [Symbol] [Symbol] [ClassMethod]  -- (CLS Name (tyvars...) [REQUIRES (supers...)] methods...)
   | ExprInst Symbol Ty.Type [(Symbol, Expr)]  -- (INST ClassName %Type methods...)
   | ExprFFI Symbol [Ty.CType] Ty.CType  -- (FFI name (c-param-types...) c-return-type)
   | ExprFFIStruct Symbol [(Symbol, Ty.CType)]  -- (FFI-STRUCT Name (field %CType)...)

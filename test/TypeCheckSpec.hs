@@ -4,6 +4,7 @@ module TypeCheckSpec (spec) where
 
 import Test.Hspec
 
+import Data.List (isInfixOf)
 import qualified Data.Map.Strict as M
 import qualified Data.Set        as S
 import qualified Data.Text       as T
@@ -415,6 +416,52 @@ spec = do
       case parseAndTypecheck src of
         Left _  -> pure ()
         Right _ -> expectationFailure "expected kind error for BOOL as MAPPABLE instance"
+
+  describe "superclass constraints" $ do
+    it "rejects instance when superclass instance is missing" $ do
+      let src = T.unlines
+            [ "(cls FUNCTOR (f) (fmap %(-> a b) %(f a) %(f b)))"
+            , "(cls APPLICATIVE (f) REQUIRES (FUNCTOR)"
+            , "  (pure %a %(f a))"
+            , "  (ap %(f %(-> a b)) %(f a) %(f b)))"
+            , "(type Box (a) (MkBox a))"
+            , "(inst APPLICATIVE %Box"
+            , "  (pure (lam ((x %a)) (MkBox x)))"
+            , "  (ap (lam ((mf %(Box %(-> a b))) (mx %(Box a)))"
+            , "    (case mf ((MkBox fn) (case mx ((MkBox x) (MkBox (fn x)))))))))"
+            ]
+      case parseAndTypecheck src of
+        Right _ -> expectationFailure "expected superclass error"
+        Left errs -> any (\e -> "FUNCTOR" `isInfixOf` TC.teMsg e) errs `shouldBe` True
+
+    it "accepts instance when superclass instance exists" $ do
+      let src = T.unlines
+            [ "(cls FUNCTOR (f) (fmap %(-> a b) %(f a) %(f b)))"
+            , "(cls APPLICATIVE (f) REQUIRES (FUNCTOR)"
+            , "  (pure %a %(f a))"
+            , "  (ap %(f %(-> a b)) %(f a) %(f b)))"
+            , "(type Box (a) (MkBox a))"
+            , "(inst FUNCTOR %Box"
+            , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
+            , "    (case box ((MkBox x) (MkBox (fn x)))))))"
+            , "(inst APPLICATIVE %Box"
+            , "  (pure (lam ((x %a)) (MkBox x)))"
+            , "  (ap (lam ((mf %(Box %(-> a b))) (mx %(Box a)))"
+            , "    (case mf ((MkBox fn) (case mx ((MkBox x) (MkBox (fn x)))))))))"
+            ]
+      case parseAndTypecheck src of
+        Left errs -> expectationFailure (unlines (map TC.teMsg errs))
+        Right _ -> pure ()
+
+    it "class with no REQUIRES works as before" $ do
+      let src = T.unlines
+            [ "(cls SHOW (a) (show %a %STR))"
+            , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
+            , "(print (show 42))"
+            ]
+      case parseAndTypecheck src of
+        Left errs -> expectationFailure (unlines (map TC.teMsg errs))
+        Right _ -> pure ()
 
   describe "mutable refs" $ do
     it "ref infers Ref a" $

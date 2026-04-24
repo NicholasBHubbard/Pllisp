@@ -168,8 +168,9 @@ exprClsParser = MP.label "cls" $ MP.try $ parens $ do
   _ <- ident' "CLS"
   name <- symbolParser
   tvars <- parens (MP.many symbolParser)
+  supers <- MP.option [] (ident' "REQUIRES" *> parens (MP.many symbolParser))
   methods <- MP.many classMethodParser
-  pure $ CST.ExprCls name tvars methods
+  pure $ CST.ExprCls name tvars supers methods
   where
     classMethodParser = parens $ do
       mname <- symbolParser

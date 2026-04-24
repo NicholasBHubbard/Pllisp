@@ -39,7 +39,7 @@ methodSchemes envs =
   where
     mkScheme _name mi =
       let className = miClass mi
-          tvars = M.findWithDefault [] className (tceClassEnv envs)
+          tvars = maybe [] ciTyVars (M.lookup className (tceClassEnv envs))
           paramMap = M.fromList (zip tvars [0..])
           paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
           resolvedArgs = map (resolveTP paramMap) (miArgTys mi)
@@ -97,15 +97,17 @@ typecheckWith importedEnvs importedCtx exprs =
       knownTypeNames = S.unions [localTypeNames, importedTypeNames, ffiStructNames]
       (localInstanceEnv, instErrs) = buildInstanceEnv classEnv methodEnv initialCtx fieldMap knownTypeNames instDecls
       instanceEnv = M.unionWith (++) localInstanceEnv (tceInstanceEnv importedEnvs)
+      superErrs = validateSuperclasses classEnv instanceEnv
       structFieldsMap = M.fromList ffiStructDecls
       env = InferEnv initialCtx fieldMap M.empty methodEnv instanceEnv variadicNames structFieldsMap
       (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) env 0
       localEnvs = TCEnvs localClassEnv localMethodEnv localInstanceEnv
       fullEnvs = mergeTCEnvs localEnvs importedEnvs
   in case solveAll constraints of
-    Left solveErrs -> Left (instErrs ++ inferErrs ++ solveErrs)
+    Left solveErrs -> Left (instErrs ++ superErrs ++ inferErrs ++ solveErrs)
     Right subst
       | not (null instErrs) -> Left instErrs
+      | not (null superErrs) -> Left superErrs
       | not (null inferErrs) -> Left inferErrs
       | otherwise ->
           let resolved = apply subst typed
@@ -163,7 +165,12 @@ data InstanceInfo = InstanceInfo
   , iiMethods :: M.Map CST.Symbol TRExpr
   } deriving (Show)
 
-type ClassEnv = M.Map CST.Symbol [CST.Symbol]     -- class name -> type var names
+data ClassInfo = ClassInfo
+  { ciTyVars :: [CST.Symbol]
+  , ciSupers :: [CST.Symbol]
+  } deriving (Show)
+
+type ClassEnv = M.Map CST.Symbol ClassInfo
 type InstanceEnv = M.Map CST.Symbol [InstanceInfo] -- class name -> instances
 
 -- | Full struct field info: all fields including arrays
@@ -452,10 +459,10 @@ buildFieldMap = M.fromList . concatMap go
 
 -- TYPECLASS CONTEXT BUILDING
 
-extractClassDecls :: [Res.RExpr] -> [(CST.Symbol, [CST.Symbol], [CST.ClassMethod])]
+extractClassDecls :: [Res.RExpr] -> [(CST.Symbol, [CST.Symbol], [CST.Symbol], [CST.ClassMethod])]
 extractClassDecls = foldr go []
   where
-    go (Loc.Located _ (Res.RCls name tvars methods)) acc = (name, tvars, methods) : acc
+    go (Loc.Located _ (Res.RCls name tvars supers methods)) acc = (name, tvars, supers, methods) : acc
     go _ acc = acc
 
 extractInstDecls :: [Res.RExpr] -> [(CST.Symbol, Ty.Type, [(CST.Symbol, Res.RExpr)])]
@@ -466,16 +473,16 @@ extractInstDecls = foldr go []
 
 -- | Build class environment (class -> type vars), method environment (method -> info),
 -- and method context (method -> polymorphic scheme).
-buildClassContext :: [(CST.Symbol, [CST.Symbol], [CST.ClassMethod])]
+buildClassContext :: [(CST.Symbol, [CST.Symbol], [CST.Symbol], [CST.ClassMethod])]
                   -> (ClassEnv, MethodEnv, Context)
 buildClassContext decls =
-  let classEnv = M.fromList [(name, tvars) | (name, tvars, _) <- decls]
+  let classEnv = M.fromList [(name, ClassInfo tvars supers) | (name, tvars, supers, _) <- decls]
       methodPairs = concatMap buildMethods decls
       methodEnv = M.fromList [(name, info) | (name, info, _) <- methodPairs]
       methodCtx = M.fromList [(name, scheme) | (name, _, scheme) <- methodPairs]
   in (classEnv, methodEnv, methodCtx)
   where
-    buildMethods (className, tvars, methods) =
+    buildMethods (className, tvars, _supers, methods) =
       let paramMap = M.fromList (zip tvars [0..])
           paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
       in map (buildMethod className tvars paramMap paramSet) methods
@@ -559,7 +566,7 @@ extractInstTyVars knownTypes = go
 -- the instance type must be a type constructor, not a ground type.
 checkInstanceKind :: ClassEnv -> MethodEnv -> CST.Symbol -> Ty.Type -> [TypeError]
 checkInstanceKind classEnv methodEnv className instTy =
-  let tvars = M.findWithDefault [] className classEnv
+  let tvars = maybe [] ciTyVars (M.lookup className classEnv)
       methods = [mi | (_, mi) <- classMethodOrder className methodEnv]
   in concatMap (checkParam methods instTy) tvars
   where
@@ -584,6 +591,28 @@ checkInstanceKind classEnv methodEnv className instTy =
     isGroundType Ty.TyUnit = True
     isGroundType Ty.TyRx   = True
     isGroundType _         = False
+
+-- | Validate that all superclass constraints are satisfied for each instance.
+validateSuperclasses :: ClassEnv -> InstanceEnv -> [TypeError]
+validateSuperclasses classEnv instanceEnv =
+  concatMap checkClass (M.toList instanceEnv)
+  where
+    checkClass (className, instances) =
+      let supers = maybe [] ciSupers (M.lookup className classEnv)
+      in concatMap (checkInst className supers) instances
+    checkInst className supers inst =
+      concatMap (checkSuper className (iiType inst)) supers
+    checkSuper className instTy superName =
+      case M.lookup superName instanceEnv of
+        Nothing -> [mkErr className instTy superName]
+        Just superInsts ->
+          if any (\si -> matchInstanceType (iiTyVars si) (iiType si) instTy) superInsts
+          then []
+          else [mkErr className instTy superName]
+    mkErr className instTy superName =
+      TypeError dictSp ("no " ++ T.unpack superName ++ " instance for "
+        ++ T.unpack (Ty.renderType instTy)
+        ++ ", required by " ++ T.unpack className ++ " superclass constraint")
 
 -- DICTIONARY PASSING
 
@@ -663,7 +692,7 @@ classMethodOrder className me =
 -- Generate dictionary type declarations (one per class)
 genDictTypes :: ClassEnv -> MethodEnv -> [TRExpr]
 genDictTypes classEnv me =
-  [mkDictType cn tvs me | (cn, tvs) <- M.toList classEnv]
+  [mkDictType cn (ciTyVars ci) me | (cn, ci) <- M.toList classEnv]
 
 mkDictType :: CST.Symbol -> [CST.Symbol] -> MethodEnv -> TRExpr
 mkDictType className tvars me =
@@ -696,7 +725,7 @@ mkDictBind className ce me ie inst =
       cName = "__Dict" <> className
       iName = "__inst_" <> className <> "_" <> typeToName iTy
       dTy = Ty.TyCon dName [iTy]
-      tvars = M.findWithDefault [] className ce
+      tvars = maybe [] ciTyVars (M.lookup className ce)
       pm = M.fromList (zip tvars [0..])
       methods = classMethodOrder className me
       rawImpls = [case M.lookup mn (iiMethods inst) of
@@ -871,7 +900,7 @@ mkMethodExtract sp dictName className methodName tyVar ce me =
   let dtn = "__DICT_" <> className
       ctn = "__Dict" <> className
       dTy = Ty.TyCon dtn [tyVar]
-      tvars = M.findWithDefault [] className ce
+      tvars = maybe [] ciTyVars (M.lookup className ce)
       pm = M.fromList (zip tvars [0..])
       methods = classMethodOrder className me
       mIdx = findIdx methodName (map fst methods)
@@ -1139,7 +1168,7 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
       localCtx (const bodyCtx) (infer body)
     let typedBinds = zip3 names (map typeOf rhsExprs) rhsExprs
     pure $ Ty.Typed (typeOf bodyExpr) (TRLet typedBinds bodyExpr)
-  Res.RCls name _tvars _methods ->
+  Res.RCls name _tvars _supers _methods ->
     -- Class info is extracted in pre-pass, just pass through
     pure $ Ty.Typed Ty.TyUnit TRUnit
   Res.RInst _className _ty _methods ->
