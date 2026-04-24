@@ -357,21 +357,21 @@ spec = do
 
   describe "typeclasses" $ do
     it "cls with one method" $ do
-      r <- either fail pure $ parseOne "(cls SHOW (a) (show %a %STR))"
+      r <- either fail pure $ parseOne "(cls SHOW () (a) (show %a %STR))"
       case r of
         CST.ExprCls "SHOW" ["A"] []
           [CST.ClassMethod "SHOW" [Ty.TyCon "A" []] Ty.TyStr] -> pure ()
         _ -> expectationFailure (show r)
 
     it "cls with multi-arg method" $ do
-      r <- either fail pure $ parseOne "(cls EQUAL (a) (equal %a %a %BOOL))"
+      r <- either fail pure $ parseOne "(cls EQUAL () (a) (equal %a %a %BOOL))"
       case r of
         CST.ExprCls "EQUAL" ["A"] []
           [CST.ClassMethod "EQUAL" [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool] -> pure ()
         _ -> expectationFailure (show r)
 
-    it "cls with REQUIRES" $ do
-      r <- either fail pure $ parseOne "(cls APPLICATIVE (f) REQUIRES (FUNCTOR) (pure %a %(f a)))"
+    it "cls with superclasses" $ do
+      r <- either fail pure $ parseOne "(cls APPLICATIVE (FUNCTOR) (f) (pure %a %(f a)))"
       case r of
         CST.ExprCls "APPLICATIVE" ["F"] ["FUNCTOR"]
           [CST.ClassMethod "PURE" [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "A" []])] -> pure ()

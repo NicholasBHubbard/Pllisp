@@ -515,21 +515,21 @@ spec = do
   describe "typeclasses" $ do
     -- cls
     it "cls with one method" $ do
-      prog <- viaSExpr "(cls SHOW (a) (show %a %STR))"
+      prog <- viaSExpr "(cls SHOW () (a) (show %a %STR))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "SHOW" ["A"] []
           [CST.ClassMethod "SHOW" [Ty.TyCon "A" []] Ty.TyStr])] -> pure ()
         other -> expectationFailure (show other)
 
     it "cls with multi-arg method" $ do
-      prog <- viaSExpr "(cls EQUAL (a) (equal %a %a %BOOL))"
+      prog <- viaSExpr "(cls EQUAL () (a) (equal %a %a %BOOL))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "EQUAL" ["A"] []
           [CST.ClassMethod "EQUAL" [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool])] -> pure ()
         other -> expectationFailure (show other)
 
     it "cls with multiple methods" $ do
-      prog <- viaSExpr "(cls NUM (a) (add %a %a %a) (neg %a %a))"
+      prog <- viaSExpr "(cls NUM () (a) (add %a %a %a) (neg %a %a))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "NUM" ["A"] []
           [CST.ClassMethod "ADD" [Ty.TyCon "A" [], Ty.TyCon "A" []] (Ty.TyCon "A" []),
@@ -537,14 +537,14 @@ spec = do
         other -> expectationFailure (show other)
 
     it "cls with multiple type vars" $ do
-      prog <- viaSExpr "(cls CONVERT (a b) (convert %a %b))"
+      prog <- viaSExpr "(cls CONVERT () (a b) (convert %a %b))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "CONVERT" ["A", "B"] []
           [CST.ClassMethod "CONVERT" [Ty.TyCon "A" []] (Ty.TyCon "B" [])])] -> pure ()
         other -> expectationFailure (show other)
 
-    it "cls with REQUIRES" $ do
-      prog <- viaSExpr "(cls APPLICATIVE (f) REQUIRES (FUNCTOR) (pure %a %(f a)))"
+    it "cls with superclasses" $ do
+      prog <- viaSExpr "(cls APPLICATIVE (FUNCTOR) (f) (pure %a %(f a)))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "APPLICATIVE" ["F"] ["FUNCTOR"]
           [CST.ClassMethod "PURE" [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "A" []])])] -> pure ()

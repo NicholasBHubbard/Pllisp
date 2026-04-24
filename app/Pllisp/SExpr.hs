@@ -300,21 +300,15 @@ toArm (Loc.Located sp _) = Left $ ConvertError sp "invalid case arm"
 -- TYPECLASSES
 
 toCls :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
-toCls sp (Loc.Located _ (SAtom name) : Loc.Located _ (SList tvars) : rest)
+toCls sp (Loc.Located _ (SAtom name) : Loc.Located _ (SList superExprs) : Loc.Located _ (SList tvars) : methods)
   | null tvars = Left $ ConvertError sp "cls requires at least one type variable"
+  | null methods = Left $ ConvertError sp "cls requires at least one method"
   | otherwise = do
+      supers <- mapM toAtomName superExprs
       tvars' <- mapM toAtomName tvars
-      (supers, methodExprs) <- case rest of
-        (Loc.Located _ (SAtom "REQUIRES") : Loc.Located _ (SList superExprs) : ms) -> do
-          supers' <- mapM toAtomName superExprs
-          pure (supers', ms)
-        ms -> pure ([], ms)
-      if null methodExprs
-        then Left $ ConvertError sp "cls requires at least one method"
-        else pure ()
-      methods' <- mapM (toClassMethod sp) methodExprs
+      methods' <- mapM (toClassMethod sp) methods
       Right $ CST.ExprCls name tvars' supers methods'
-toCls sp _ = Left $ ConvertError sp "invalid cls: expected (cls Name (tyvars...) methods...)"
+toCls sp _ = Left $ ConvertError sp "invalid cls: expected (cls Name (supers...) (tyvars...) methods...)"
 
 toClassMethod :: Loc.Span -> SExpr -> Either ConvertError CST.ClassMethod
 toClassMethod sp (Loc.Located _ (SList (Loc.Located _ (SAtom name) : tys)))

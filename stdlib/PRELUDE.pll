@@ -44,7 +44,7 @@
   `(let ((,name ,expr))
      (unless (truthy? ,name) ,body)))
 
-(cls FUNCTOR (f) (map %(-> a b) %(f a) %(f b)))
+(cls FUNCTOR () (f) (map %(-> a b) %(f a) %(f b)))
 
 (inst FUNCTOR %Maybe
   (map (lam ((fn %(-> a b)) (mx %(Maybe a)))
@@ -52,7 +52,7 @@
       ((Nothing) Nothing)
       ((Just x) (Just (fn x)))))))
 
-(cls APPLICATIVE (f) REQUIRES (FUNCTOR)
+(cls APPLICATIVE (FUNCTOR) (f)
   (pure %a %(f a))
   (ap %(f %(-> a b)) %(f a) %(f b)))
 
@@ -63,7 +63,7 @@
       ((Nothing) Nothing)
       ((Just fn) (map fn mx))))))
 
-(cls TRUTHY (a) (truthy? %a %BOOL))
+(cls TRUTHY () (a) (truthy? %a %BOOL))
 
 (inst TRUTHY %INT
   (truthy? (lam ((x %INT)) (not (eq x 0)))))

@@ -167,8 +167,8 @@ exprClsParser :: Parser CST.ExprF
 exprClsParser = MP.label "cls" $ MP.try $ parens $ do
   _ <- ident' "CLS"
   name <- symbolParser
+  supers <- parens (MP.many symbolParser)
   tvars <- parens (MP.many symbolParser)
-  supers <- MP.option [] (ident' "REQUIRES" *> parens (MP.many symbolParser))
   methods <- MP.many classMethodParser
   pure $ CST.ExprCls name tvars supers methods
   where
