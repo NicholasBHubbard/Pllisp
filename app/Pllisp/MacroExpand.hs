@@ -7,8 +7,11 @@ module Pllisp.MacroExpand (expand, extractMacroDefs) where
 import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 
-import qualified Pllisp.SExpr  as SExpr
-import qualified Pllisp.SrcLoc as Loc
+import qualified Control.Monad.State.Strict as State
+
+import qualified Pllisp.MacroInterp as MI
+import qualified Pllisp.SExpr       as SExpr
+import qualified Pllisp.SrcLoc      as Loc
 
 -- CORE TYPES
 
@@ -26,15 +29,22 @@ data MacroParam
 type MacroTable = M.Map T.Text [MacroClause]
 type Bindings   = M.Map T.Text SExpr.SExpr
 
+-- ExpandM is the same monad as InterpM (StateT Int over Either String),
+-- so MI.eval can be called directly and shares the gensym counter.
+type ExpandM = State.StateT Int (Either String)
+
+throwExpandError :: String -> ExpandM a
+throwExpandError = State.StateT . const . Left
+
 maxDepth :: Int
 maxDepth = 256
 
 -- ENTRY POINT
 
 expand :: [SExpr.SExpr] -> Either String [SExpr.SExpr]
-expand sexprs = do
+expand sexprs =
   let (macros, rest) = collectMacros M.empty sexprs
-  mapM (expandExpr macros 0) rest
+  in State.evalStateT (mapM (expandExpr macros 0) rest) 0
 
 -- COLLECT MACRO DEFINITIONS
 
@@ -76,27 +86,33 @@ parseParams _ = Left "invalid macro parameter"
 
 -- EXPANSION
 
-expandExpr :: MacroTable -> Int -> SExpr.SExpr -> Either String SExpr.SExpr
+expandExpr :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
 expandExpr macros depth sx
-  | depth > maxDepth = Left "macro expansion depth limit exceeded"
+  | depth > maxDepth = throwExpandError "macro expansion depth limit exceeded"
   | otherwise = case Loc.locVal sx of
       SExpr.SList (Loc.Located _ (SExpr.SAtom name) : args)
         | Just clauses <- M.lookup name macros -> do
-            expanded <- applyMacro (Loc.locSpan sx) clauses args name
+            expanded <- applyMacro clauses args name
             expandExpr macros (depth + 1) expanded
       SExpr.SList elems -> do
         elems' <- mapM (expandExpr macros depth) elems
         pure (Loc.Located (Loc.locSpan sx) (SExpr.SList elems'))
       _ -> pure sx
 
-applyMacro :: Loc.Span -> [MacroClause] -> [SExpr.SExpr] -> T.Text -> Either String SExpr.SExpr
-applyMacro _ [] args name =
-  Left ("no matching clause for macro " ++ T.unpack name
+applyMacro :: [MacroClause] -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
+applyMacro [] args name =
+  throwExpandError ("no matching clause for macro " ++ T.unpack name
     ++ " with " ++ show (length args) ++ " argument(s)")
-applyMacro sp (clause : rest) args name =
+applyMacro (clause : rest) args name =
   case matchClause clause args of
-    Just bindings -> instantiate sp bindings (mcTemplate clause)
-    Nothing       -> applyMacro sp rest args name
+    Just bindings -> do
+      let mvalBinds = M.map MI.sexprToVal bindings
+          env = M.union mvalBinds MI.defaultEnv
+      result <- MI.eval env (mcTemplate clause)
+      case MI.valToSExpr result of
+        Left err -> throwExpandError err
+        Right sexpr -> pure sexpr
+    Nothing -> applyMacro rest args name
 
 -- CLAUSE MATCHING
 
@@ -116,58 +132,6 @@ matchClause clause args = go (mcParams clause) args M.empty
           Nothing     -> Nothing
         _ -> Nothing
     go _ _ _ = Nothing
-
--- TEMPLATE INSTANTIATION
-
-instantiate :: Loc.Span -> Bindings -> SExpr.SExpr -> Either String SExpr.SExpr
-instantiate callSpan binds sx = case Loc.locVal sx of
-  -- Quasiquote: enter template mode
-  SExpr.SQuasi inner -> evalQuasi callSpan binds inner
-  -- Bare param reference (outside quasiquote): substitute
-  SExpr.SAtom name
-    | Just val <- M.lookup name binds -> Right val
-  -- Everything else: return as-is
-  _ -> Right sx
-
-evalQuasi :: Loc.Span -> Bindings -> SExpr.SExpr -> Either String SExpr.SExpr
-evalQuasi callSpan binds sx = case Loc.locVal sx of
-  -- ,x — unquote: substitute binding
-  SExpr.SUnquote inner -> case Loc.locVal inner of
-    SExpr.SAtom name
-      | Just val <- M.lookup name binds -> Right val
-      | otherwise -> Right inner
-    _ -> Right inner
-
-  -- List with possible ,@ splicing
-  SExpr.SList elems -> do
-    elems' <- evalQuasiList callSpan binds elems
-    Right (Loc.Located callSpan (SExpr.SList elems'))
-
-  -- Nested quasiquote — pass through (no nested quasiquote support)
-  SExpr.SQuasi _ -> Right sx
-
-  -- Everything else is literal in quasiquote context
-  _ -> Right sx
-
--- Process list elements, handling ,@ splicing
-evalQuasiList :: Loc.Span -> Bindings -> [SExpr.SExpr] -> Either String [SExpr.SExpr]
-evalQuasiList _ _ [] = Right []
-evalQuasiList callSpan binds (sx : rest) = case Loc.locVal sx of
-  -- ,@x — splice: insert list elements inline
-  SExpr.SSplice inner -> case Loc.locVal inner of
-    SExpr.SAtom name
-      | Just val <- M.lookup name binds -> case Loc.locVal val of
-          SExpr.SList spliced -> do
-            rest' <- evalQuasiList callSpan binds rest
-            Right (spliced ++ rest')
-          _ -> Left (",@ on non-list value for " ++ T.unpack name)
-      | otherwise -> Left ("unbound splice variable: " ++ T.unpack name)
-    _ -> Left ",@ requires a variable"
-  -- Regular element: recurse into it
-  _ -> do
-    sx'   <- evalQuasi callSpan binds sx
-    rest' <- evalQuasiList callSpan binds rest
-    Right (sx' : rest')
 
 -- MACRO EXTRACTION
 

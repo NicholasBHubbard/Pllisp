@@ -149,3 +149,132 @@ spec = do
       case expandSrc "(mac loop () `(loop)) (loop)" of
         Left _ -> pure ()
         Right _ -> expectationFailure "expected depth limit error"
+
+  -- ---------------------------------------------------------------
+  -- PROCEDURAL MACROS (compile-time evaluation)
+  -- ---------------------------------------------------------------
+  describe "procedural macros" $ do
+    it "macro with compile-time computation" $ do
+      -- Macro body uses car to extract first arg and builds code
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac first-of (&rest args)"
+                   , "  (car args))"
+                   , "(first-of 42 99)"
+                   ])
+      r `shouldBe` [SExpr.SInt 42]
+
+    it "macro uses list operations" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac swap (a b)"
+                   , "  `(let ((tmp ,a)) (let ((,a ,b)) (let ((,b tmp)) unit))))"
+                   , "(swap x y)"
+                   ])
+      case r of
+        [SExpr.SList (Loc.Located _ (SExpr.SAtom "LET") : _)] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "macro with conditional code generation" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac maybe-wrap (flag expr)"
+                   , "  (if (eq flag (quote YES))"
+                   , "    `(just ,expr)"
+                   , "    expr))"
+                   , "(maybe-wrap yes 42)"
+                   ])
+      r `shouldBe` [SExpr.SList [l (SExpr.SAtom "JUST"), l (SExpr.SInt 42)]]
+
+    it "macro uses filter to select from args" $ do
+      -- Filter even numbers at compile time
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac count-args (&rest args)"
+                   , "  (length args))"
+                   , "(count-args a b c d)"
+                   ])
+      r `shouldBe` [SExpr.SInt 4]
+
+    it "macro with map to transform args" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac quote-all (&rest args)"
+                   , "  (cons (quote LIST) args))"
+                   , "(quote-all 1 2 3)"
+                   ])
+      r `shouldBe` [SExpr.SList [l (SExpr.SAtom "LIST"),
+                                  l (SExpr.SInt 1),
+                                  l (SExpr.SInt 2),
+                                  l (SExpr.SInt 3)]]
+
+    it "macro with recursive helper" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac my-list (&rest xs)"
+                   , "  (let ((build (lam (items)"
+                   , "    (if (null? items)"
+                   , "      (quote UNIT)"
+                   , "      `(CONS ,(car items) ,(build (cdr items)))))))"
+                   , "    (build xs)))"
+                   , "(my-list 1 2 3)"
+                   ])
+      -- Should produce (CONS 1 (CONS 2 (CONS 3 UNIT)))
+      case r of
+        [SExpr.SList [Loc.Located _ (SExpr.SAtom "CONS"), Loc.Located _ (SExpr.SInt 1), _]] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "macro with string manipulation" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac make-name (prefix suffix)"
+                   , "  (str-to-sym (concat (sym-to-str prefix) (sym-to-str suffix))))"
+                   , "(make-name FOO BAR)"
+                   ])
+      r `shouldBe` [SExpr.SAtom "FOOBAR"]
+
+    it "macro with gensym for hygiene" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac with-temp (val body)"
+                   , "  (let ((tmp (gensym)))"
+                   , "    `(let ((,tmp ,val)) ,body)))"
+                   , "(with-temp 42 (add 1 2))"
+                   ])
+      -- Should produce (let ((__G0 42)) (add 1 2))
+      case r of
+        [SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"),
+                      Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom gname), _])]),
+                      _]] -> T.isPrefixOf "__G" gname `shouldBe` True
+        _ -> expectationFailure (show r)
+
+    it "macro error propagates" $ do
+      case expandSrc "(mac bad () (error \"intentional\")) (bad)" of
+        Left msg -> msg `shouldContain` "intentional"
+        Right _ -> expectationFailure "expected error"
+
+    it "procedural macro interleaves with template macros" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac when (cond body) `(if ,cond ,body unit))"
+                   , "(mac double (x) `(add ,x ,x))"
+                   , "(when true (double 5))"
+                   ])
+      -- when expands to (if true (double 5) unit)
+      -- then double expands to (add 5 5)
+      case r of
+        [SExpr.SList [Loc.Located _ (SExpr.SAtom "IF"),
+                      Loc.Located _ (SExpr.SAtom "TRUE"),
+                      Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom "ADD"), _, _]),
+                      Loc.Located _ (SExpr.SAtom "UNIT")]] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "destructuring still works with interpreter" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac cond ((test body)) `(if ,test ,body unit))"
+                   , "(cond (true 42))"
+                   ])
+      case r of
+        [SExpr.SList (Loc.Located _ (SExpr.SAtom "IF") : _)] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "multi-clause with &rest still works" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac do (expr) expr)"
+                   , "(mac do (first &rest rest) `(let ((_ ,first)) (do ,@rest)))"
+                   , "(do 1 2 3)"
+                   ])
+      case r of
+        [SExpr.SList (Loc.Located _ (SExpr.SAtom "LET") : _)] -> pure ()
+        _ -> expectationFailure (show r)
