@@ -1,0 +1,10 @@
+# Integer and floating-point arithmetic
+(progn
+  (print (int-to-str (add 2 3)))
+  (print (int-to-str (sub 10 3)))
+  (print (int-to-str (mul 4 5)))
+  (print (int-to-str (div 20 4)))
+  (print (int-to-str (mod 17 5)))
+  (print (int-to-str (neg 42)))
+  (print (flt-to-str (addf 1.5 2.5)))
+  (print (flt-to-str (mulf 3.0 2.0))))

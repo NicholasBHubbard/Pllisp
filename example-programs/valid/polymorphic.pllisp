@@ -1,4 +1,4 @@
 # Polymorphic identity and composition
 (let ((id    (lam (x) x))
       (const (lam (x y) x)))
-  (add (id 1) (const 2 99)))
+  (print (int-to-str (add (id 1) (const 2 99)))))

@@ -1,0 +1,13 @@
+# Classic FizzBuzz
+
+(fun fizzbuzz ((i %INT) (n %INT))
+  (when (le i n)
+    (progn
+      (cond
+        ((eqi (mod i 15) 0) (print "FizzBuzz"))
+        ((eqi (mod i 3) 0)  (print "Fizz"))
+        ((eqi (mod i 5) 0)  (print "Buzz"))
+        (true                (print (int-to-str i))))
+      (fizzbuzz (add i 1) n))))
+
+(fizzbuzz 1 20)

@@ -1,0 +1,17 @@
+# Defining and using typeclasses
+
+(cls AREA () (a) (area %a %INT))
+
+(type Shape ()
+  (Circle %INT)
+  (Rect %INT %INT))
+
+(inst AREA %Shape
+  (area (lam ((s %Shape))
+    (case s
+      ((Circle r) (mul (mul r r) 3))
+      ((Rect w h) (mul w h))))))
+
+(progn
+  (print (int-to-str (area (Circle 5))))
+  (print (int-to-str (area (Rect 3 4)))))

@@ -1,14 +1,25 @@
-(type Maybe (a)
-  (Nothing)
-  (Just a))
+# Pattern matching with case expressions
 
-# Basic constructor pattern matching
-(case (Just 42)
-  ((Nothing) 0)
-  ((Just x) x))
+(type Result ()
+  (Ok %INT)
+  (Err %STR))
 
-# Deep / nested pattern matching
-(case (Just (Just 1))
-  ((Nothing) 0)
-  ((Just (Nothing)) 0)
-  ((Just (Just x)) x))
+(fun show-result ((r %Result))
+  (case r
+    ((Ok n) (concat "ok: " (int-to-str n)))
+    ((Err s) (concat "error: " s))))
+
+# Nested patterns
+(type Tree ()
+  (Leaf %INT)
+  (Branch %Tree %Tree))
+
+(fun sum-tree ((t %Tree))
+  (case t
+    ((Leaf n) n)
+    ((Branch l r) (add (sum-tree l) (sum-tree r)))))
+
+(progn
+  (print (show-result (Ok 42)))
+  (print (show-result (Err "not found")))
+  (print (int-to-str (sum-tree (Branch (Leaf 1) (Branch (Leaf 2) (Leaf 3)))))))

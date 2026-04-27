@@ -1,0 +1,27 @@
+# Macros provided by the PRELUDE
+
+# fun - named functions
+(fun square ((x %INT)) (mul x x))
+(print (int-to-str (square 5)))
+
+# progn - sequence expressions
+(progn
+  (print "a")
+  (print "b")
+  (print "c"))
+
+# when / unless - one-armed conditionals
+(when (gt 5 3) (print "5 > 3"))
+(unless (gt 3 5) (print "3 not > 5"))
+
+# cond - multi-way conditional
+(let ((x 2))
+  (cond
+    ((eqi x 1) (print "one"))
+    ((eqi x 2) (print "two"))
+    (true      (print "other"))))
+
+# if-let - bind and test
+(if-let (s "hello")
+  (print (concat "got: " s))
+  (print "empty"))

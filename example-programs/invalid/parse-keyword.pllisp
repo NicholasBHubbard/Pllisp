@@ -1,2 +1,0 @@
-# Keyword used as binding name
-(let ((let 1)) let)

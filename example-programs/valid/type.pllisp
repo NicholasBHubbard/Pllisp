@@ -1,3 +1,14 @@
-(type Maybe (a)
-  (Nothing)
-  (Just a))
+# Defining and using algebraic data types
+(type Color ()
+  (Red) (Green) (Blue))
+
+(fun color-name ((c %Color))
+  (case c
+    ((Red) "red")
+    ((Green) "green")
+    ((Blue) "blue")))
+
+(progn
+  (print (color-name Red))
+  (print (color-name Green))
+  (print (color-name Blue)))

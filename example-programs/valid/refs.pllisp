@@ -1,0 +1,9 @@
+# Mutable references
+(let ((counter (ref 0)))
+  (progn
+    (set! counter 1)
+    (print (int-to-str (deref counter)))
+    (set! counter (add (deref counter) 1))
+    (print (int-to-str (deref counter)))
+    (set! counter (add (deref counter) 1))
+    (print (int-to-str (deref counter)))))

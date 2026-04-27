@@ -1,0 +1,14 @@
+# Working with Maybe values
+
+(fun safe-div ((a %INT) (b %INT))
+  (if (eqi b 0) Nothing (Just (div a b))))
+
+(fun show-result ((m %(Maybe %INT)))
+  (case m
+    ((Nothing) "error: division by zero")
+    ((Just x) (concat "result: " (int-to-str x)))))
+
+(progn
+  (print (show-result (safe-div 10 3)))
+  (print (show-result (safe-div 10 0)))
+  (print (show-result (safe-div 42 7))))

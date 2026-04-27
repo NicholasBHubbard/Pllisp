@@ -1,0 +1,6 @@
+# String operations
+(progn
+  (print (concat "Hello" ", World!"))
+  (print (int-to-str (strlen "pllisp")))
+  (print (substr "Hello, World!" 0 5))
+  (print (if (str-contains "Hello, World!" "World") "found" "not found")))

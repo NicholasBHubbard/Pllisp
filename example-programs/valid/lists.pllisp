@@ -1,0 +1,20 @@
+# Working with the List type
+
+(fun range ((lo %INT) (hi %INT))
+  (if (gt lo hi) Empty
+    (Cons lo (range (add lo 1) hi))))
+
+(fun sum-list ((xs %(List %INT)))
+  (case xs
+    ((Empty) 0)
+    ((Cons h t) (add h (sum-list t)))))
+
+(fun print-list ((xs %(List %INT)))
+  (case xs
+    ((Empty) unit)
+    ((Cons h t) (progn (print (int-to-str h)) (print-list t)))))
+
+(let ((nums (range 1 5)))
+  (progn
+    (print-list nums)
+    (print (concat "sum: " (int-to-str (sum-list nums))))))

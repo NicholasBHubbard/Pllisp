@@ -12,6 +12,7 @@ import qualified TypeCheckSpec
 import qualified TypeSpec
 import qualified ClosureConvertSpec
 import qualified CodegenSpec
+import qualified ExampleSpec
 import qualified LambdaLiftSpec
 import qualified MacroExpandSpec
 import qualified MacroInterpSpec
@@ -34,6 +35,7 @@ main = hspec $ do
   describe "LambdaLift"    LambdaLiftSpec.spec
   describe "Module"         ModuleSpec.spec
   describe "Codegen"        CodegenSpec.spec
+  describe "Examples"       ExampleSpec.spec
   describe "MacroExpand"    MacroExpandSpec.spec
   describe "MacroInterp"   MacroInterpSpec.spec
   describe "Repl"           ReplSpec.spec

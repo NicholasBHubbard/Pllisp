@@ -1,0 +1,13 @@
+# Fibonacci sequence using recursion
+
+(fun fib ((n %INT))
+  (if (le n 1) n
+    (add (fib (sub n 1)) (fib (sub n 2)))))
+
+(fun print-fibs ((i %INT) (n %INT))
+  (when (lt i n)
+    (progn
+      (print (int-to-str (fib i)))
+      (print-fibs (add i 1) n))))
+
+(print-fibs 0 10)

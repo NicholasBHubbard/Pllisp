@@ -1,0 +1,10 @@
+# Higher-order functions
+
+(let ((apply (lam (f x) (f x)))
+      (compose (lam (f g x) (f (g x))))
+      (double (lam (x) (mul 2 x)))
+      (inc (lam (x) (add 1 x))))
+  (progn
+    (print (int-to-str (apply double 21)))
+    (print (int-to-str (compose double inc 5)))
+    (print (int-to-str (compose inc double 5)))))

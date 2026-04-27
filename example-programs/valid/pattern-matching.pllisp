@@ -1,0 +1,18 @@
+# Algebraic data types and pattern matching
+
+(type Shape ()
+  (Circle %INT)
+  (Rect %INT %INT)
+  (Point))
+
+(fun describe ((s %Shape))
+  (case s
+    ((Circle r) (concat "circle r=" (int-to-str r)))
+    ((Rect w h) (concat (concat "rect " (int-to-str w))
+                        (concat "x" (int-to-str h))))
+    ((Point) "point")))
+
+(progn
+  (print (describe (Circle 5)))
+  (print (describe (Rect 3 4)))
+  (print (describe Point)))

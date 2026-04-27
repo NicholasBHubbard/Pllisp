@@ -1,3 +1,4 @@
+# Minimal program: let bindings and arithmetic
 (let ((x 12)
       (y 13))
-  (add x y))
+  (print (int-to-str (add x y))))

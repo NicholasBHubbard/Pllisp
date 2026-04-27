@@ -118,6 +118,7 @@ test-suite pllisp-test
                       ClosureConvertSpec,
                       CodegenSpec,
                       ErrorSpec,
+                      ExampleSpec,
                       ExhaustCheckSpec,
                       LambdaLiftSpec,
                       MacroExpandSpec,
@@ -151,6 +152,7 @@ test-suite pllisp-test
     autogen-modules:  Paths_pllisp
     build-depends:    base       ^>=4.21.0.0,
                       containers ^>=0.7,
+                      directory,
                       megaparsec ^>=9.7.0,
                       mtl        ^>=2.3.2,
                       filepath,

@@ -1,0 +1,6 @@
+# Regular expressions
+(let ((digits /[0-9]+/))
+  (progn
+    (print (if (rx-match digits "abc123") "match" "no match"))
+    (print (if (rx-match digits "abcdef") "match" "no match"))
+    (print (rx-find digits "abc123def456"))))

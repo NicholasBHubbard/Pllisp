@@ -1,0 +1,6 @@
+# Type conversions
+(progn
+  (print (int-to-str 42))
+  (print (flt-to-str 3.14))
+  (print (flt-to-str (int-to-flt 5)))
+  (print (int-to-str (flt-to-int 3.14))))

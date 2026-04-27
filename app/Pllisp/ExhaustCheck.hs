@@ -60,6 +60,13 @@ checkExpr env (Loc.Located sp (Ty.Typed _ expr)) = case expr of
         scrErrs  = checkExpr env scr
         armErrs  = concatMap (\(_, body) -> checkExpr env body) arms
     in caseErrs ++ scrErrs ++ armErrs
+  TC.TRLoop _ body -> checkExpr env body
+  TC.TRRecur args  -> concatMap (checkExpr env) args
+  TC.TRFFI {}         -> []
+  TC.TRFFIStruct {}   -> []
+  TC.TRFFIVar {}      -> []
+  TC.TRFFIEnum {}     -> []
+  TC.TRFFICallback {} -> []
 
 -- EXHAUSTIVENESS
 

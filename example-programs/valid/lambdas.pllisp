@@ -1,4 +1,4 @@
 # First-class functions and higher-order patterns
 (let ((double (lam ((x %INT)) (mul 2 x)))
       (apply  (lam (f x) (f x))))
-  (apply double 21))
+  (print (int-to-str (apply double 21))))

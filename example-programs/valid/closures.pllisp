@@ -1,0 +1,10 @@
+# Closures capture their environment
+
+(fun make-adder ((n %INT))
+  (lam (x) (add n x)))
+
+(let ((add5 (make-adder 5))
+      (add10 (make-adder 10)))
+  (progn
+    (print (int-to-str (add5 3)))
+    (print (int-to-str (add10 3)))))

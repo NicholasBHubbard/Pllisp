@@ -1,0 +1,9 @@
+# Custom macros
+
+# times: repeat a body expression n times
+(mac times (n body)
+  (if (eq n 0)
+    `unit
+    `(progn ,body (times ,(sub n 1) ,body))))
+
+(times 3 (print "hello"))
