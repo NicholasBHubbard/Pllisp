@@ -54,9 +54,13 @@
     st)
   "Syntax table for pllisp-mode.")
 
+(defun pllisp--indent-function (_indent-point state)
+  "Pllisp indent: always 2 from the containing open paren."
+  (goto-char (elt state 1))
+  (+ 2 (current-column)))
+
 (defun pllisp-indent-line (&optional _whole-exp)
-  "Indent current line as pllisp code.
-Unlike `lisp-indent-line', does not apply multi-level comment indentation."
+  "Indent current line as pllisp code."
   (interactive "P")
   (let ((indent (calculate-lisp-indent)) shift-amt
         (pos (- (point-max) (point)))
@@ -82,16 +86,7 @@ Unlike `lisp-indent-line', does not apply multi-level comment indentation."
   (setq-local comment-start-skip "#+ *")
   (setq-local lisp-body-indent 2)
   (setq-local indent-line-function #'pllisp-indent-line)
-  (setq-local lisp-indent-function #'lisp-indent-function))
-
-;; Indent rules: number = distinguished args before body
-(dolist (sym '(lam let if case cls
-               module import ffi ffi-struct
-               ffi-var ffi-enum ffi-callback))
-  (put sym 'lisp-indent-function 1))
-(dolist (sym '(mac fun type))
-  (put sym 'lisp-indent-function 2))
-(put 'inst 'lisp-indent-function 0)
+  (setq-local lisp-indent-function #'pllisp--indent-function))
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.pll\\'" . pllisp-mode))
