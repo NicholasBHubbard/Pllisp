@@ -981,11 +981,12 @@ spec = do
           mainSrc = "(print (int-to-str (apply-helper 5)))"
       runWithModule "MOD" modSrc ["HELPER"] mainSrc >>= (`shouldBe` "25")
 
-    it "imported multi-clause macro" $ do
+    it "imported procedural macro" $ do
       let modSrc = T.unlines
-            [ "(mac my-do (expr) expr)"
-            , "(mac my-do (first &rest rest)"
-            , "  `(let ((_ ,first)) (my-do ,@rest)))"
+            [ "(mac my-do (&rest args)"
+            , "  (if (eq (length args) 1)"
+            , "    (car args)"
+            , "    `(let ((_ ,(car args))) (my-do ,@(cdr args)))))"
             ]
           mainSrc = "(my-do (print \"a\") (print \"b\") (print \"c\"))"
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "a\nb\nc")
@@ -1069,15 +1070,21 @@ spec = do
 
     it "do macro sequences expressions" $ do
       run (T.unlines
-        [ "(mac do (expr) expr)"
-        , "(mac do (first &rest rest) `(let ((_ ,first)) (do ,@rest)))"
+        [ "(mac do (&rest args)"
+        , "  (if (eq (length args) 1)"
+        , "    (car args)"
+        , "    `(let ((_ ,(car args))) (do ,@(cdr args)))))"
         , "(do (print \"a\") (print \"b\") (print \"c\"))"
         ]) >>= (`shouldBe` "a\nb\nc")
 
     it "cond macro" $ do
       run (T.unlines
-        [ "(mac cond ((test body)) `(if ,test ,body unit))"
-        , "(mac cond ((test body) &rest rest) `(if ,test ,body (cond ,@rest)))"
+        [ "(mac cond (&rest clauses)"
+        , "  (if (eq (length clauses) 1)"
+        , "    (let ((clause (car clauses)))"
+        , "      `(if ,(car clause) ,(car (cdr clause)) unit))"
+        , "    (let ((clause (car clauses)))"
+        , "      `(if ,(car clause) ,(car (cdr clause)) (cond ,@(cdr clauses))))))"
         , "(let ((x 2))"
         , "  (cond ((eq x 1) (print \"one\"))"
         , "        ((eq x 2) (print \"two\"))"

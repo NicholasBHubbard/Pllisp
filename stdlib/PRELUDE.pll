@@ -16,15 +16,20 @@
   (Left a)
   (Right b))
 
-(mac do (expr) expr)
-(mac do (first &rest rest)
-  `(let ((_ ,first)) (do ,@rest)))
+(mac do (&rest args)
+  (if (eq (length args) 1)
+    (car args)
+    `(let ((_ ,(car args))) (do ,@(cdr args)))))
 
 (mac if_ (cond then else)
   `(if (truthy? ,cond) ,then ,else))
 
-(mac cond ((test body)) `(when ,test ,body))
-(mac cond ((test body) &rest rest) `(if ,test ,body (cond ,@rest)))
+(mac cond (&rest clauses)
+  (if (eq (length clauses) 1)
+    (let ((clause (car clauses)))
+      `(when ,(car clause) ,(car (cdr clause))))
+    (let ((clause (car clauses)))
+      `(if ,(car clause) ,(car (cdr clause)) (cond ,@(cdr clauses))))))
 
 (mac when (cond body)
   `(if_ ,cond ,body unit))

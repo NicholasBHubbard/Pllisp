@@ -73,21 +73,15 @@ spec = do
         [SExpr.SList [_, _, _, Loc.Located _ (SExpr.SAtom "UNIT")]] -> pure ()
         _ -> expectationFailure (show r)
 
-  describe "multi-clause macros" $ do
-    it "matches first clause" $ do
-      r <- either fail pure $ expandSrc "(mac do (expr) expr) (do 42)"
-      r `shouldBe` [SExpr.SInt 42]
-
-    it "matches second clause with &rest" $ do
-      r <- either fail pure $ expandSrc
-        (T.unlines [ "(mac do (expr) expr)"
-                   , "(mac do (first &rest rest) `(let ((_ ,first)) (do ,@rest)))"
-                   , "(do 1 2 3)"
-                   ])
-      -- Should expand to nested lets: (let ((_ 1)) (let ((_ 2)) 3))
-      case r of
-        [SExpr.SList (Loc.Located _ (SExpr.SAtom "LET") : _)] -> pure ()
-        _ -> expectationFailure (show r)
+  describe "macro redefinition" $ do
+    it "second definition replaces first" $ do
+      -- Second (mac foo) replaces the first, so calling with 2 args fails
+      case expandSrc (T.unlines [ "(mac foo (a b) `(add ,a ,b))"
+                                , "(mac foo (x) `,x)"
+                                , "(foo 1 2)"
+                                ]) of
+        Left _ -> pure ()
+        Right _ -> expectationFailure "expected error: second definition should replace first"
 
   describe "recursive expansion" $ do
     it "re-expands macro calls in expansion output" $ do
@@ -269,12 +263,12 @@ spec = do
         [SExpr.SList (Loc.Located _ (SExpr.SAtom "IF") : _)] -> pure ()
         _ -> expectationFailure (show r)
 
-    it "multi-clause with &rest still works" $ do
-      r <- either fail pure $ expandSrc
-        (T.unlines [ "(mac do (expr) expr)"
-                   , "(mac do (first &rest rest) `(let ((_ ,first)) (do ,@rest)))"
-                   , "(do 1 2 3)"
-                   ])
-      case r of
-        [SExpr.SList (Loc.Located _ (SExpr.SAtom "LET") : _)] -> pure ()
-        _ -> expectationFailure (show r)
+    it "multi-clause macros are not supported" $ do
+      -- Defining the same macro twice just replaces it
+      case expandSrc (T.unlines [ "(mac do (expr) expr)"
+                                , "(mac do (first &rest rest) `(let ((_ ,first)) (do ,@rest)))"
+                                , "(do 42)"
+                                ]) of
+        Left _ -> pure ()  -- second def has (first &rest rest), "do 42" matches but recurses on (do) which has 0 args
+        Right [SExpr.SInt 42] -> expectationFailure "multi-clause should not work: second def should replace first"
+        Right _ -> pure ()  -- any other result is fine as long as it's not the multi-clause behavior

@@ -26,7 +26,7 @@ data MacroParam
   | ParamDestructure [MacroParam]
   deriving (Show)
 
-type MacroTable = M.Map T.Text [MacroClause]
+type MacroTable = M.Map T.Text MacroClause
 type Bindings   = M.Map T.Text SExpr.SExpr
 
 -- ExpandM is the same monad as InterpM (StateT Int over Either String),
@@ -56,9 +56,7 @@ collectMacros table (sx : rest) = case Loc.locVal sx of
   SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : macRest) ->
     case parseMacDef macRest of
       Right (name, clause) ->
-        let existing = M.findWithDefault [] name table
-            table'   = M.insert name (existing ++ [clause]) table
-        in collectMacros table' rest
+        collectMacros (M.insert name clause table) rest
       Left _ -> collectMacros table rest
   _ -> let (table', rest') = collectMacros table rest
        in (table', sx : rest')
@@ -91,19 +89,16 @@ expandExpr macros depth sx
   | depth > maxDepth = throwExpandError "macro expansion depth limit exceeded"
   | otherwise = case Loc.locVal sx of
       SExpr.SList (Loc.Located _ (SExpr.SAtom name) : args)
-        | Just clauses <- M.lookup name macros -> do
-            expanded <- applyMacro clauses args name
+        | Just clause <- M.lookup name macros -> do
+            expanded <- applyMacro clause args name
             expandExpr macros (depth + 1) expanded
       SExpr.SList elems -> do
         elems' <- mapM (expandExpr macros depth) elems
         pure (Loc.Located (Loc.locSpan sx) (SExpr.SList elems'))
       _ -> pure sx
 
-applyMacro :: [MacroClause] -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
-applyMacro [] args name =
-  throwExpandError ("no matching clause for macro " ++ T.unpack name
-    ++ " with " ++ show (length args) ++ " argument(s)")
-applyMacro (clause : rest) args name =
+applyMacro :: MacroClause -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
+applyMacro clause args name =
   case matchClause clause args of
     Just bindings -> do
       let mvalBinds = M.map MI.sexprToVal bindings
@@ -112,7 +107,9 @@ applyMacro (clause : rest) args name =
       case MI.valToSExpr result of
         Left err -> throwExpandError err
         Right sexpr -> pure sexpr
-    Nothing -> applyMacro rest args name
+    Nothing ->
+      throwExpandError ("macro " ++ T.unpack name
+        ++ " does not accept " ++ show (length args) ++ " argument(s)")
 
 -- CLAUSE MATCHING
 
