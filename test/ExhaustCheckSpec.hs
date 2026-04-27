@@ -130,6 +130,26 @@ spec = do
                  , TC.TRPatCon "JUST" (Ty.TyCon "MAYBE" []) [TC.TRPatWild Ty.TyInt] ]
       Exhaust.missingPatterns env (Ty.TyCon "MAYBE" []) pats `shouldBe` []
 
+  describe "patternType" $ do
+    it "LitUSym → TyUSym" $
+      Exhaust.patternType (TC.TRPatLit (CST.LitUSym "FOO")) `shouldBe` Ty.TyUSym
+
+  describe "missingPatterns" $ do
+    it "TyUSym with literal patterns → [] (open-ended)" $
+      Exhaust.missingPatterns M.empty Ty.TyUSym [TC.TRPatLit (CST.LitUSym "FOO")]
+        `shouldBe` []
+
+    it "TyUSym with wildcard → []" $
+      Exhaust.missingPatterns M.empty Ty.TyUSym [TC.TRPatWild Ty.TyUSym]
+        `shouldBe` []
+
+  describe "full pipeline usym" $ do
+    it "usym case with wildcard is exhaustive" $ do
+      parseCheckExhaust "(let ((x :foo)) (case x (:foo 1) (_ 0)))" `shouldBe` []
+
+    it "usym case without wildcard is still exhaustive (open-ended type)" $ do
+      parseCheckExhaust "(let ((x :foo)) (case x (:foo 1)))" `shouldBe` []
+
   describe "full pipeline" $ do
     it "exhaustive case on Maybe → no errors" $ do
       let src = "(type M (a) (N) (J a)) (let ((x (J 1))) (case x ((N) 0) ((J _) 1)))"

@@ -4,6 +4,7 @@ module SExprSpec (spec) where
 
 import Test.Hspec
 
+import Data.Either (isLeft)
 import qualified Data.Text as T
 
 import qualified Pllisp.CST    as CST
@@ -656,6 +657,12 @@ spec = do
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprLam (CST.LamList [CST.TSymbol "X" (Just Ty.TyUSym)] CST.NoExtra) Nothing _)] -> pure ()
         other -> expectationFailure (show other)
+
+    it "colon alone does not parse as usym" $ do
+      parseOne ":" `shouldSatisfy` isLeft
+
+    it "colon followed by digit does not parse as usym" $ do
+      parseOne ":123" `shouldSatisfy` isLeft
 
   describe "toProgram with interleaved forms" $ do
     it "finds imports after type definitions" $ do

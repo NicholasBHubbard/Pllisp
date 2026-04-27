@@ -2110,6 +2110,54 @@ spec = do
         , "    (_ (print \"neither\"))))"
         ]) >>= (`shouldBe` "both")
 
+    it "usym returned from function" $
+      run (T.unlines
+        [ "(let ((get-mode (lam () %USYM :verbose)))"
+        , "  (case (get-mode)"
+        , "    (:verbose (print \"v\"))"
+        , "    (_ (print \"other\"))))"
+        ]) >>= (`shouldBe` "v")
+
+    it "usym in ADT field" $
+      run (T.unlines
+        [ "(type Tagged () (Tagged %USYM %INT))"
+        , "(let ((t (Tagged :foo 42)))"
+        , "  (case t ((Tagged sym n)"
+        , "    (case sym"
+        , "      (:foo (print (int-to-str n)))"
+        , "      (_ (print \"other\"))))))"
+        ]) >>= (`shouldBe` "42")
+
+    it "usym in &rest args" $
+      run (T.unlines
+        [ "(let ((first-sym (lam (&rest xs) (case xs"
+        , "  ((Cons h _) (case h"
+        , "    (:foo (print \"got foo\"))"
+        , "    (_ (print \"other\"))))"
+        , "  ((Empty) (print \"none\"))))))"
+        , "  (first-sym :foo :bar))"
+        ]) >>= (`shouldBe` "got foo")
+
+    it "usym type error: cannot use where INT expected" $
+      shouldFailToCompile
+        "(let ((x :foo)) (add x 1))"
+        "cannot unify"
+
+    it "usym type error: cannot pass INT as USYM" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(let ((f (lam ((s %USYM)) s)))"
+          , "  (f 42))"
+          ])
+        "cannot unify"
+
+    it "usym case without wildcard compiles" $
+      run (T.unlines
+        [ "(let ((x :foo))"
+        , "  (case x"
+        , "    (:foo (print \"yes\"))))"
+        ]) >>= (`shouldBe` "yes")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

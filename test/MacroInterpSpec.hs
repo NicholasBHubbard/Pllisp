@@ -702,6 +702,16 @@ spec = do
       evalWith [("X", MI.MAtom "FOO")] "(eq :foo x)"
         `shouldBe` Right (MI.MBool False)
 
+    it "usym in list operations" $
+      "(car (list :foo :bar))" `shouldEvalTo` MI.MUSym "FOO"
+
+    it "usym in cdr" $
+      "(cdr (list :foo :bar))" `shouldEvalTo` MI.MList [MI.MUSym "BAR"]
+
+    it "usym in splice" $
+      "(let ((xs (list :foo :bar))) `(a ,@xs b))"
+        `shouldEvalTo` MI.MList [MI.MAtom "A", MI.MUSym "FOO", MI.MUSym "BAR", MI.MAtom "B"]
+
   describe "usym sexprToVal" $ do
     it "converts SUSym to MUSym" $
       MI.sexprToVal (parseSExpr ":foo") `shouldBe` MI.MUSym "FOO"

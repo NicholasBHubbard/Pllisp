@@ -144,6 +144,21 @@ spec = do
         "(mac mode () `:verbose) (mode)"
       r `shouldBe` [SExpr.SUSym "VERBOSE"]
 
+    it "usym spliced from &rest" $ do
+      r <- either fail pure $ expandSrc
+        "(mac wrap (&rest xs) `(list ,@xs)) (wrap :foo :bar)"
+      r `shouldBe` [SExpr.SList [l (SExpr.SAtom "LIST"),
+                                  l (SExpr.SUSym "FOO"),
+                                  l (SExpr.SUSym "BAR")]]
+
+    it "usym in procedural macro" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac first-sym (&rest args)"
+                   , "  (car args))"
+                   , "(first-sym :hello :world)"
+                   ])
+      r `shouldBe` [SExpr.SUSym "HELLO"]
+
   describe "error cases" $ do
     it "wrong number of args" $ do
       case expandSrc "(mac foo (a b) `(add ,a ,b)) (foo 1)" of
