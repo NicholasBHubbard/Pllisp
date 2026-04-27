@@ -28,7 +28,7 @@
     `(let ((_ ,(car args))) (progn ,@(cdr args)))))
 
 (mac if_ (cond then else)
-  `(if (truthy? ,cond) ,then ,else))
+  `(if (truthy ,cond) ,then ,else))
 
 (mac when (cond body)
   `(if_ ,cond ,body unit))
@@ -45,35 +45,35 @@
 
 (mac if-let ((name expr) then else)
   `(let ((,name ,expr))
-     (if (truthy? ,name) ,then ,else)))
+     (if (truthy ,name) ,then ,else)))
 
 (mac when-let ((name expr) body)
   `(let ((,name ,expr))
-     (when (truthy? ,name) ,body)))
+     (when (truthy ,name) ,body)))
 
 (mac unless-let ((name expr) body)
   `(let ((,name ,expr))
-     (unless (truthy? ,name) ,body)))
+     (unless (truthy ,name) ,body)))
 
-(cls TRUTHY () (a) (truthy? %a %BOOL))
+(cls TRUTHY () (a) (truthy %a %BOOL))
 
 (inst TRUTHY %BOOL
-  (truthy? (lam ((x %BOOL)) x)))
+  (truthy (lam ((x %BOOL)) x)))
 
 (inst TRUTHY %FLT
-  (truthy? (lam ((x %FLT)) (not (eqf x 0.0)))))
+  (truthy (lam ((x %FLT)) (not (eqf x 0.0)))))
 
 (inst TRUTHY %STR
-  (truthy? (lam ((x %STR)) (not (eqs x "")))))
+  (truthy (lam ((x %STR)) (not (eqs x "")))))
 
 (inst TRUTHY %INT
-  (truthy? (lam ((x %INT)) (not (eq x 0)))))
+  (truthy (lam ((x %INT)) (not (eq x 0)))))
 
 (inst TRUTHY %(Maybe a)
-  (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))
+  (truthy (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))
 
 (inst TRUTHY %(List a)
-  (truthy? (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))
+  (truthy (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))
 
 (inst TRUTHY %(Either a b)
-  (truthy? (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))
+  (truthy (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))
