@@ -712,6 +712,12 @@ spec = do
       "(let ((xs (list :foo :bar))) `(a ,@xs b))"
         `shouldEvalTo` MI.MList [MI.MAtom "A", MI.MUSym "FOO", MI.MUSym "BAR", MI.MAtom "B"]
 
+    it "usym-to-str at macro time" $
+      "(usym-to-str :foo)" `shouldEvalTo` MI.MStr "FOO"
+
+    it "str-to-usym at macro time" $
+      "(str-to-usym \"BAR\")" `shouldEvalTo` MI.MUSym "BAR"
+
   describe "usym sexprToVal" $ do
     it "converts SUSym to MUSym" $
       MI.sexprToVal (parseSExpr ":foo") `shouldBe` MI.MUSym "FOO"

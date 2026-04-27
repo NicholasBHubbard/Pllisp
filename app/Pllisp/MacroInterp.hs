@@ -296,6 +296,8 @@ defaultEnv = M.fromList
   , ("CONCAT",          MBuiltin "CONCAT" bConcat)
   , ("SYM-TO-STR",      MBuiltin "SYM-TO-STR" bSymToStr)
   , ("STR-TO-SYM",      MBuiltin "STR-TO-SYM" bStrToSym)
+  , ("USYM-TO-STR",     MBuiltin "USYM-TO-STR" bUSymToStr)
+  , ("STR-TO-USYM",     MBuiltin "STR-TO-USYM" bStrToUSym)
   , ("GENSYM",          MBuiltin "GENSYM" bGensym)
   , ("ERROR",           MBuiltin "ERROR" bError)
   , ("ADD",             MBuiltin "ADD" bAdd)
@@ -446,6 +448,16 @@ bStrToSym :: [MVal] -> InterpM MVal
 bStrToSym [MStr t] = pure $ MAtom t
 bStrToSym [_]       = throwError "string->symbol: not a string"
 bStrToSym args      = throwError $ "string->symbol: expected 1 argument, got " ++ show (length args)
+
+bUSymToStr :: [MVal] -> InterpM MVal
+bUSymToStr [MUSym t] = pure $ MStr t
+bUSymToStr [_]       = throwError "usym-to-str: not an uninterned symbol"
+bUSymToStr args      = throwError $ "usym-to-str: expected 1 argument, got " ++ show (length args)
+
+bStrToUSym :: [MVal] -> InterpM MVal
+bStrToUSym [MStr t] = pure $ MUSym t
+bStrToUSym [_]      = throwError "str-to-usym: not a string"
+bStrToUSym args     = throwError $ "str-to-usym: expected 1 argument, got " ++ show (length args)
 
 -- BUILTINS: ARITHMETIC
 

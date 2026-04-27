@@ -78,8 +78,10 @@ builtInTypes = M.fromList
   -- Conversion
   , ("INT-TO-FLT", Ty.TyFun [Ty.TyInt] Ty.TyFlt)
   , ("FLT-TO-INT", Ty.TyFun [Ty.TyFlt] Ty.TyInt)
-  , ("INT-TO-STR", Ty.TyFun [Ty.TyInt] Ty.TyStr)
-  , ("FLT-TO-STR", Ty.TyFun [Ty.TyFlt] Ty.TyStr)
+  , ("INT-TO-STR",  Ty.TyFun [Ty.TyInt] Ty.TyStr)
+  , ("FLT-TO-STR",  Ty.TyFun [Ty.TyFlt] Ty.TyStr)
+  , ("USYM-TO-STR", Ty.TyFun [Ty.TyUSym] Ty.TyStr)
+  , ("STR-TO-USYM", Ty.TyFun [Ty.TyStr] Ty.TyUSym)
   -- Rx
   , ("RX-MATCH",    Ty.TyFun [Ty.TyRx, Ty.TyStr] Ty.TyBool)
   , ("RX-FIND",     Ty.TyFun [Ty.TyRx, Ty.TyStr] Ty.TyStr)

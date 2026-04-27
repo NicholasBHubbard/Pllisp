@@ -2158,6 +2158,25 @@ spec = do
         , "    (:foo (print \"yes\"))))"
         ]) >>= (`shouldBe` "yes")
 
+    it "usym-to-str converts usym to string" $
+      run "(print (usym-to-str :hello))" >>= (`shouldBe` "HELLO")
+
+    it "str-to-usym converts string to usym" $
+      run (T.unlines
+        [ "(let ((s (str-to-usym \"FOO\")))"
+        , "  (case s"
+        , "    (:FOO (print \"matched\"))"
+        , "    (_ (print \"nope\"))))"
+        ]) >>= (`shouldBe` "matched")
+
+    it "usym-to-str roundtrips with str-to-usym" $
+      run (T.unlines
+        [ "(let ((s (usym-to-str :test)))"
+        , "  (case (str-to-usym s)"
+        , "    (:TEST (print \"ok\"))"
+        , "    (_ (print \"fail\"))))"
+        ]) >>= (`shouldBe` "ok")
+
 -- HELPERS
 
 pipeline :: T.Text -> IO T.Text

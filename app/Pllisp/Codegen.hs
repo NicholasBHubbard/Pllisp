@@ -1417,6 +1417,14 @@ genBuiltIn name args _resTy = case name of
       <> ", i64 32, ptr @fmt.flt, double " <> op <> ")")
     pure buf
 
+  "USYM-TO-STR" -> do
+    let [(_, op)] = args
+    pure op
+
+  "STR-TO-USYM" -> do
+    let [(_, op)] = args
+    pure op
+
   -- Rx
   "RX-MATCH" -> do
     let [(_, pat), (_, subj)] = args
