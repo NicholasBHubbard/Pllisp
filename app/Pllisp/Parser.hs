@@ -65,6 +65,7 @@ exprParser = MP.label "expression" $ located $ MP.choice
   , exprUnitParser
   , exprBoolParser
   , exprLitParser
+  , exprUSymParser
   , exprSymParser
   ]
 
@@ -192,6 +193,7 @@ patternParser = MP.label "pattern" $ MP.choice
   [ MP.try $ parens $ CST.PatCon <$> symbolParser <*> MP.many patternParser
   , CST.PatBool <$> boolParser
   , CST.PatLit  <$> litParser
+  , CST.PatLit . CST.LitUSym <$> (lexeme $ MP.C.char ':' *> rawIdent)
   , fmap (\s -> if s == "_" then CST.PatWild else CST.PatVar s) symbolParser
   ]
 
@@ -227,6 +229,7 @@ typeParserBody = MP.choice
       "BOOL" -> pure Ty.TyBool
       "UNIT"  -> pure Ty.TyUnit
       "RX"    -> pure Ty.TyRx
+      "USYM"  -> pure Ty.TyUSym
       other   -> pure (Ty.TyCon other [])
   ]
 
@@ -251,6 +254,7 @@ typeElem = MP.choice
       "BOOL" -> pure Ty.TyBool
       "UNIT"  -> pure Ty.TyUnit
       "RX"    -> pure Ty.TyRx
+      "USYM"  -> pure Ty.TyUSym
       other   -> pure (Ty.TyCon other [])
   ]
 
@@ -269,6 +273,10 @@ exprUnitParser = MP.label "unit" $ do
 
 exprLitParser :: Parser CST.ExprF
 exprLitParser = MP.label "literal" $ CST.ExprLit <$> litParser
+
+exprUSymParser :: Parser CST.ExprF
+exprUSymParser = MP.label "uninterned symbol" $
+  CST.ExprLit . CST.LitUSym <$> (lexeme $ MP.C.char ':' *> rawIdent)
 
 tsymbolParser :: Parser CST.TSymbol
 tsymbolParser = MP.label "typed symbol" $ MP.choice
@@ -379,6 +387,7 @@ sexprParser = located $ MP.choice
       , CST.LitStr . T.pack <$> (MP.C.char '"' *> MP.manyTill MP.C.L.charLiteral (MP.C.char '"'))
       , rxLitParser
       ])
+  , SExpr.SUSym <$> sexprUSymParser
   , SExpr.SAtom <$> sexprAtomParser
   ]
 
@@ -417,8 +426,12 @@ sexprTypeParser' = do
   _ <- MP.C.char '%'
   SExpr.SType <$> sexprParser
 
+sexprUSymParser :: Parser T.Text
+sexprUSymParser = MP.label "uninterned symbol" $ lexeme $ MP.C.char ':' *> rawIdent
+
 litToSExpr :: CST.Literal -> SExpr.SExprF
 litToSExpr (CST.LitInt n)    = SExpr.SInt n
 litToSExpr (CST.LitFlt d)    = SExpr.SFlt d
 litToSExpr (CST.LitStr s)    = SExpr.SStr s
 litToSExpr (CST.LitRx p f)   = SExpr.SRx p f
+litToSExpr (CST.LitUSym t)   = SExpr.SUSym t

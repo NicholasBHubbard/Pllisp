@@ -16,6 +16,7 @@ data Literal =
   | LitFlt Double
   | LitStr T.Text
   | LitRx T.Text T.Text  -- pattern, flags
+  | LitUSym T.Text
   deriving (Eq, Show)
 
 data TSymbol = TSymbol {

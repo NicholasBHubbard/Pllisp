@@ -327,6 +327,7 @@ collectCtors = foldl' go M.empty
 isConcretePtr :: S.Set CST.Symbol -> Ty.Type -> Bool
 isConcretePtr _      Ty.TyStr       = True
 isConcretePtr _      Ty.TyRx        = True
+isConcretePtr _      Ty.TyUSym      = True
 isConcretePtr _      (Ty.TyFun _ _) = True
 isConcretePtr params (Ty.TyCon n _) = not (S.member n params)
 isConcretePtr _      (Ty.TyApp _ _)  = True
@@ -378,6 +379,7 @@ llvmType Ty.TyStr       = "ptr"
 llvmType Ty.TyBool      = "i1"
 llvmType Ty.TyUnit      = "i8"
 llvmType Ty.TyRx     = "ptr"
+llvmType Ty.TyUSym   = "ptr"
 llvmType (Ty.TyFun _ _) = "ptr"
 llvmType (Ty.TyCon _ _) = "ptr"
 llvmType (Ty.TyApp _ _) = "ptr"
@@ -558,6 +560,7 @@ genLit :: CST.Literal -> CgM T.Text
 genLit (CST.LitInt n) = pure (tshow n)
 genLit (CST.LitFlt f) = pure (T.pack (showFlt f))
 genLit (CST.LitStr s) = addStrLit s
+genLit (CST.LitUSym t) = addStrLit t
 genLit (CST.LitRx pat flags) = do
   patPtr <- addStrLit pat
   let compileOpts = flagsToCompileOpts flags
@@ -1027,6 +1030,14 @@ genPatTest scrOp pat matchLbl nextLbl = case pat of
     emit (cmp <> " = icmp eq i32 " <> cmpR <> ", 0")
     emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
 
+  LL.LLPatLit (CST.LitUSym s) -> do
+    strPtr <- addStrLit s
+    cmpR   <- fresh
+    emit (cmpR <> " = call i32 @strcmp(ptr " <> scrOp <> ", ptr " <> strPtr <> ")")
+    cmp <- fresh
+    emit (cmp <> " = icmp eq i32 " <> cmpR <> ", 0")
+    emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
+
   LL.LLPatCon ctorName _ _ -> do
     structs <- gets csStructs
     if M.member ctorName structs
@@ -1118,6 +1129,7 @@ patType :: LL.LLPattern -> Ty.Type
 patType (LL.LLPatLit (CST.LitInt _)) = Ty.TyInt
 patType (LL.LLPatLit (CST.LitFlt _)) = Ty.TyFlt
 patType (LL.LLPatLit (CST.LitStr _)) = Ty.TyStr
+patType (LL.LLPatLit (CST.LitUSym _)) = Ty.TyUSym
 patType (LL.LLPatBool _)             = Ty.TyBool
 patType (LL.LLPatVar _ ty)           = ty
 patType (LL.LLPatWild ty)            = ty

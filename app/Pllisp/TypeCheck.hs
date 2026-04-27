@@ -590,6 +590,7 @@ checkInstanceKind classEnv methodEnv className instTy =
     isGroundType Ty.TyBool = True
     isGroundType Ty.TyUnit = True
     isGroundType Ty.TyRx   = True
+    isGroundType Ty.TyUSym = True
     isGroundType _         = False
 
 -- | Validate that all superclass constraints are satisfied for each instance.
@@ -680,6 +681,7 @@ typeToName Ty.TyStr = "STR"
 typeToName Ty.TyBool = "BOOL"
 typeToName Ty.TyUnit = "UNIT"
 typeToName Ty.TyRx = "RX"
+typeToName Ty.TyUSym = "USYM"
 typeToName (Ty.TyCon n []) = n
 typeToName (Ty.TyCon n ts) = n <> "_" <> T.intercalate "_" (map typeToName ts)
 typeToName (Ty.TyApp f a) = typeToName f <> "_" <> typeToName a
@@ -1008,6 +1010,8 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     pure $ Ty.Typed Ty.TyStr (TRLit l)
   Res.RLit l@(CST.LitRx _ _) ->
     pure $ Ty.Typed Ty.TyRx (TRLit l)
+  Res.RLit l@(CST.LitUSym _) ->
+    pure $ Ty.Typed Ty.TyUSym (TRLit l)
   Res.RBool b ->
     pure $ Ty.Typed Ty.TyBool (TRBool b)
   Res.RUnit ->
@@ -1340,7 +1344,7 @@ partitionArgs = go [] []
 buildListExpr :: Loc.Span -> Ty.Type -> [TRExpr] -> Infer TRExpr
 buildListExpr sp elemTy [] = do
   let listTy = Ty.TyCon "LIST" [elemTy]
-  pure $ Loc.Located sp (Ty.Typed listTy (TRVar (Res.VarBinding 0 "NIL")))
+  pure $ Loc.Located sp (Ty.Typed listTy (TRVar (Res.VarBinding 0 "EMPTY")))
 buildListExpr sp elemTy (x:xs) = do
   rest <- buildListExpr sp elemTy xs
   let listTy = Ty.TyCon "LIST" [elemTy]
@@ -1357,6 +1361,7 @@ inferPattern ty pat sp = case pat of
           CST.LitFlt _     -> Ty.TyFlt
           CST.LitStr _     -> Ty.TyStr
           CST.LitRx _ _ -> Ty.TyRx
+          CST.LitUSym _ -> Ty.TyUSym
     constrain sp ty litTy
     pure (TRPatLit l, [])
   Res.RPatBool b -> do
@@ -1409,6 +1414,7 @@ unify _ Ty.TyStr Ty.TyStr = Right M.empty
 unify _ Ty.TyBool Ty.TyBool = Right M.empty
 unify _ Ty.TyUnit Ty.TyUnit = Right M.empty
 unify _ Ty.TyRx Ty.TyRx = Right M.empty
+unify _ Ty.TyUSym Ty.TyUSym = Right M.empty
 unify sp t1 t2 = Left [TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)]
 
 -- | Unify multiple type pairs, collecting all errors

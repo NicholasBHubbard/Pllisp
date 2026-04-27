@@ -677,6 +677,41 @@ spec = do
       MI.sexprToVal (parseSExpr "3.14") `shouldBe` MI.MFlt 3.14
 
   -- ---------------------------------------------------------------
+  -- UNINTERNED SYMBOLS
+  -- ---------------------------------------------------------------
+  describe "uninterned symbols" $ do
+    it "usym is self-evaluating" $
+      ":foo" `shouldEvalTo` MI.MUSym "FOO"
+
+    it "usym in quasiquote" $
+      "`:foo" `shouldEvalTo` MI.MUSym "FOO"
+
+    it "usym in quasiquote list" $
+      "`(:foo :bar)" `shouldEvalTo` MI.MList [MI.MUSym "FOO", MI.MUSym "BAR"]
+
+    it "usym equality" $
+      "(eq :foo :foo)" `shouldEvalTo` MI.MBool True
+
+    it "usym inequality" $
+      "(eq :foo :bar)" `shouldEvalTo` MI.MBool False
+
+    it "usym not equal to string" $
+      "(eq :foo \"FOO\")" `shouldEvalTo` MI.MBool False
+
+    it "usym not equal to atom" $
+      evalWith [("X", MI.MAtom "FOO")] "(eq :foo x)"
+        `shouldBe` Right (MI.MBool False)
+
+  describe "usym sexprToVal" $ do
+    it "converts SUSym to MUSym" $
+      MI.sexprToVal (parseSExpr ":foo") `shouldBe` MI.MUSym "FOO"
+
+  describe "usym valToSExpr" $ do
+    it "converts MUSym to SUSym" $
+      MI.valToSExpr (MI.MUSym "FOO") `shouldBe`
+        Right (Loc.Located dummySp (SExpr.SUSym "FOO"))
+
+  -- ---------------------------------------------------------------
   -- COMPOUND EXPRESSIONS
   -- ---------------------------------------------------------------
   describe "compound" $ do

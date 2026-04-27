@@ -21,6 +21,7 @@ data Type
   | TyBool
   | TyUnit
   | TyRx
+  | TyUSym
   | TyFun [Type] Type
   | TyCon Symbol [Type]  -- user-defined: TyCon "Maybe" [TyInt]
   | TyApp Type Type      -- HKT application: TyApp (TyVar 0) TyInt
@@ -326,6 +327,7 @@ renderType t = case t of
   TyBool     -> "%BOOL"
   TyUnit     -> "%UNIT"
   TyRx    -> "%RX"
+  TyUSym  -> "%USYM"
   TyFun as r -> "%(-> " <> T.intercalate " " (map renderType (as ++ [r])) <> ")"
   TyCon s [] -> "%" <> s
   TyCon s ts -> "%(" <> s <> " " <> T.intercalate " " (map renderType ts) <> ")"

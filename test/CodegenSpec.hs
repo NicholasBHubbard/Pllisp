@@ -126,16 +126,23 @@ spec = do
         , "  ((MkBox y) (print (int-to-str y))))"
         ]) >>= (`shouldBe` "42")
 
-    it "prelude map with Maybe" $
+    it "map with Maybe via FUNCTOR" $
       run (T.unlines
-        [ "(case (map (lam ((x %INT)) (add x 10)) (Just 32))"
+        [ "(cls FUNCTOR () (f)"
+        , "  (map %(-> a b) %(f a) %(f b)))"
+        , "(inst FUNCTOR %Maybe"
+        , "  (map (lam ((fn %(-> a b)) (mx %(Maybe a)))"
+        , "    (case mx ((Just x) (Just (fn x))) (_ Nothing)))))"
+        , "(case (map (lam ((x %INT)) (add x 10)) (Just 32))"
         , "  ((Just y) (print (int-to-str y)))"
         , "  (_ (print \"nothing\")))"
         ]) >>= (`shouldBe` "42")
 
     it "map composed twice" $
       run (T.unlines
-        [ "(type Box (a) (MkBox a))"
+        [ "(cls FUNCTOR () (f)"
+        , "  (map %(-> a b) %(f a) %(f b)))"
+        , "(type Box (a) (MkBox a))"
         , "(inst FUNCTOR %Box"
         , "  (map (lam ((fn %(-> a b)) (box %(Box a)))"
         , "    (case box ((MkBox x) (MkBox (fn x)))))))"
@@ -225,9 +232,9 @@ spec = do
     it "partial apply used multiple times" $
       run (T.unlines
         [ "(let ((inc (add 1)))"
-        , "  (do (print (int-to-str (inc 10)))"
-        , "      (print (int-to-str (inc 20)))"
-        , "      (print (int-to-str (inc 30)))))"
+        , "  (progn (print (int-to-str (inc 10)))"
+        , "         (print (int-to-str (inc 20)))"
+        , "         (print (int-to-str (inc 30)))))"
         ]) >>= (`shouldBe` "11\n21\n31")
 
     it "supply 2 of 3 args" $
@@ -749,12 +756,12 @@ spec = do
         >>= (`shouldBe` "1")
 
   describe "built-in List type" $ do
-    it "constructs Nil" $
-      run "(case Nil ((Nil) (print \"empty\")))" >>= (`shouldBe` "empty")
+    it "constructs Empty" $
+      run "(case Empty ((Empty) (print \"empty\")))" >>= (`shouldBe` "empty")
 
     it "constructs Cons and pattern matches" $
       run (T.unlines
-        [ "(let ((xs (Cons 1 (Cons 2 (Cons 3 Nil)))))"
+        [ "(let ((xs (Cons 1 (Cons 2 (Cons 3 Empty)))))"
         , "  (case xs"
         , "    ((Cons h _) (print (int-to-str h)))))"
         ]) >>= (`shouldBe` "1")
@@ -762,9 +769,9 @@ spec = do
     it "recursive list traversal" $
       run (T.unlines
         [ "(let ((sum (lam ((xs %(List %INT))) (case xs"
-        , "    ((Nil) 0)"
+        , "    ((Empty) 0)"
         , "    ((Cons h t) (add h (sum t)))))))"
-        , "  (print (int-to-str (sum (Cons 10 (Cons 20 (Cons 30 Nil)))))))"
+        , "  (print (int-to-str (sum (Cons 10 (Cons 20 (Cons 30 Empty)))))))"
         ]) >>= (`shouldBe` "60")
 
   describe "rx" $ do
@@ -806,7 +813,7 @@ spec = do
     it "rx-split prints all parts" $ do
       run (T.unlines
         [ "(let ((print-list (lam ((xs %(List %STR))) (case xs"
-        , "    ((Nil) unit)"
+        , "    ((Empty) unit)"
         , "    ((Cons h t) (let ((_ (print h))) (print-list t)))))))"
         , "  (print-list (rx-split /,/ \"x,y,z\")))"
         ]) >>= (`shouldBe` "x\ny\nz")
@@ -819,10 +826,10 @@ spec = do
         , "      ((Cons host _) (print (concat user (concat \"@\" host))))))))"
         ]) >>= (`shouldBe` "user@host")
 
-    it "rx-captures no match returns Nil" $ do
+    it "rx-captures no match returns Empty" $ do
       run (T.unlines
         [ "(case (rx-captures /(\\d+)/ \"abc\")"
-        , "  ((Nil) (print \"none\"))"
+        , "  ((Empty) (print \"none\"))"
         , "  ((Cons _ _) (print \"found\")))"
         ]) >>= (`shouldBe` "none")
 
@@ -852,68 +859,24 @@ spec = do
 
   describe "prelude special import" $ do
     it "prelude constructors available unqualified" $ do
-      run "(case Nil ((Nil) (print \"ok\")))" >>= (`shouldBe` "ok")
+      run "(case Empty ((Empty) (print \"ok\")))" >>= (`shouldBe` "ok")
 
     it "prelude constructors available qualified as PRELUDE.X" $ do
-      run "(case PRELUDE.Nil ((PRELUDE.Nil) (print \"ok\")))" >>= (`shouldBe` "ok")
-
-    it "prelude pure wraps value in Maybe" $ do
-      run (T.unlines
-        [ "(case (pure 42)"
-        , "  ((Just x) (print (int-to-str x)))"
-        , "  (_ (print \"nothing\")))"
-        ]) >>= (`shouldBe` "42")
-
-    it "prelude ap applies wrapped function" $ do
-      run (T.unlines
-        [ "(let ((mf (Just (lam ((x %INT)) (add x 1)))))"
-        , "  (case (ap mf (Just 41))"
-        , "    ((Just y) (print (int-to-str y)))"
-        , "    (_ (print \"nothing\"))))"
-        ]) >>= (`shouldBe` "42")
-
-    it "prelude ap with Nothing function" $ do
-      run (T.unlines
-        [ "(case (ap Nothing (Just 41))"
-        , "  ((Just y) (print (int-to-str y)))"
-        , "  (_ (print \"nothing\")))"
-        ]) >>= (`shouldBe` "nothing")
-
-    it "prelude ap with Nothing value" $ do
-      run (T.unlines
-        [ "(let ((mf (Just (lam ((x %INT)) (add x 1)))))"
-        , "  (case (ap mf Nothing)"
-        , "    ((Just y) (print (int-to-str y)))"
-        , "    (_ (print \"nothing\"))))"
-        ]) >>= (`shouldBe` "nothing")
-
-    it "prelude map with Maybe Just" $ do
-      run (T.unlines
-        [ "(case (map (lam ((x %INT)) (add x 1)) (Just 41))"
-        , "  ((Just y) (print (int-to-str y)))"
-        , "  (_ (print \"nothing\")))"
-        ]) >>= (`shouldBe` "42")
-
-    it "prelude map with Maybe Nothing" $ do
-      run (T.unlines
-        [ "(case (map (lam ((x %INT)) (add x 1)) Nothing)"
-        , "  ((Just y) (print (int-to-str y)))"
-        , "  (_ (print \"nothing\")))"
-        ]) >>= (`shouldBe` "nothing")
+      run "(case PRELUDE.Empty ((PRELUDE.Empty) (print \"ok\")))" >>= (`shouldBe` "ok")
 
     it "qualified constructor with arguments in pattern" $ do
       run (T.unlines
-        [ "(let ((xs (PRELUDE.Cons 1 PRELUDE.Nil)))"
+        [ "(let ((xs (PRELUDE.Cons 1 PRELUDE.Empty)))"
         , "  (case xs ((PRELUDE.Cons h _) (print (int-to-str h)))))"
         ]) >>= (`shouldBe` "1")
 
     it "user module with same constructor name does not collide (qualified only)" $ do
-      let modSrc = "(type Box () (Nil))"
+      let modSrc = "(type Box () (Empty))"
           mainSrc = T.unlines
-            [ "# prelude Nil and Mod.Nil coexist"
-            , "(do"
-            , "  (case Nil ((Nil) (print \"prelude\")))"
-            , "  (case Mod.Nil ((Mod.Nil) (print \"mod\"))))"
+            [ "# prelude Empty and Mod.Empty coexist"
+            , "(progn"
+            , "  (case Empty ((Empty) (print \"prelude\")))"
+            , "  (case Mod.Empty ((Mod.Empty) (print \"mod\"))))"
             ]
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "prelude\nmod")
 
@@ -961,7 +924,7 @@ spec = do
     it "imported macro" $ do
       let modSrc = T.unlines
             [ "(mac double-print (x)"
-            , "  `(do (print ,x) (print ,x)))"
+            , "  `(progn (print ,x) (print ,x)))"
             ]
           mainSrc = "(double-print \"hi\")"
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "hi\nhi")
@@ -1037,7 +1000,7 @@ spec = do
       runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "42")
 
     it "transitive macro" $ do
-      let modBase = "(mac twice (x) `(do ,x ,x))"
+      let modBase = "(mac twice (x) `(progn ,x ,x))"
           modLib = T.unlines
             [ "(import BASE)"
             , "(mac quad (x) `(twice (twice ,x)))"
@@ -1139,13 +1102,13 @@ spec = do
 
     it "when-let on truthy" $ do
       run (T.unlines
-        [ "(let ((x (Cons 1 Nil)))"
+        [ "(let ((x (Cons 1 Empty)))"
         , "  (when-let (y x) (print \"yes\")))"
         ]) >>= (`shouldBe` "yes")
 
     it "when-let on falsy" $ do
       run (T.unlines
-        [ "(let ((x Nil))"
+        [ "(let ((x Empty))"
         , "  (when-let (y x) (print \"found\")))"
         , "(print \"done\")"
         ]) >>= (`shouldBe` "done")
@@ -1204,14 +1167,14 @@ spec = do
       run (T.unlines
         [ "(let ((f (lam (a &rest xs) (case xs"
         , "  ((Cons h _) (print (int-to-str (add a h))))"
-        , "  ((Nil) (print (int-to-str a)))))))"
+        , "  ((Empty) (print (int-to-str a)))))))"
         , "  (f 10 20))"
         ]) >>= (`shouldBe` "30")
 
-    it "no extra args gives Nil" $
+    it "no extra args gives Empty" $
       run (T.unlines
         [ "(let ((f (lam (a &rest xs) (case xs"
-        , "  ((Nil) (print \"empty\"))"
+        , "  ((Empty) (print \"empty\"))"
         , "  ((Cons _ _) (print \"notempty\"))))))"
         , "  (f 1))"
         ]) >>= (`shouldBe` "empty")
@@ -1219,7 +1182,7 @@ spec = do
     it "captures multiple extra args" $
       run (T.unlines
         [ "(let ((go (lam ((xs %(List %INT))) (case xs"
-        , "  ((Nil) 0)"
+        , "  ((Empty) 0)"
         , "  ((Cons h t) (add h (go t)))))))"
         , "  (let ((sum-all (lam (&rest xs) (go xs))))"
         , "    (print (int-to-str (sum-all 1 2 3 4)))))"
@@ -1228,7 +1191,7 @@ spec = do
     it "rest with no required params" $
       run (T.unlines
         [ "(let ((f (lam (&rest xs) (case xs"
-        , "  ((Nil) (print \"none\"))"
+        , "  ((Empty) (print \"none\"))"
         , "  ((Cons h _) (print (int-to-str h)))))))"
         , "  (f 42))"
         ]) >>= (`shouldBe` "42")
@@ -1489,7 +1452,7 @@ spec = do
         [ "(cls TRUTHY () (a) (truthy? %a %BOOL))"
         , "(inst TRUTHY %(List a)"
         , "  (truthy? (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))"
-        , "(print (if (truthy? (Cons 1 Nil)) \"yes\" \"no\"))"
+        , "(print (if (truthy? (Cons 1 Empty)) \"yes\" \"no\"))"
         ]) >>= (`shouldBe` "yes")
 
     it "parametric and concrete instances coexist" $
@@ -1498,7 +1461,7 @@ spec = do
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(inst SHOW %(Maybe a)"
         , "  (show (lam ((x %(Maybe a))) (case x ((Just _) \"Just\") (_ \"Nothing\")))))"
-        , "(do"
+        , "(progn"
         , "  (print (show 42))"
         , "  (print (show (Just 1))))"
         ]) >>= (`shouldBe` "42\nJust")
@@ -1508,7 +1471,7 @@ spec = do
         [ "(cls TRUTHY () (a) (truthy? %a %BOOL))"
         , "(inst TRUTHY %(Either a b)"
         , "  (truthy? (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))"
-        , "(do"
+        , "(progn"
         , "  (print (if (truthy? (Right 1)) \"yes\" \"no\"))"
         , "  (print (if (truthy? (Left 1)) \"yes\" \"no\")))"
         ]) >>= (`shouldBe` "yes\nno")
@@ -1524,10 +1487,7 @@ spec = do
 
     it "error on truthy? call with no matching instance" $
       shouldFailToCompile
-        (T.unlines
-          [ "(type Pair (a b) (Pair a b))"
-          , "(truthy? (Pair 1 2))"
-          ])
+        "(truthy? (Pair 1 2))"
         "no instance"
 
   describe "BOOL TRUTHY instance" $ do
@@ -1742,8 +1702,8 @@ spec = do
 
     it "struct passed to ffi function" $
       run (T.unlines
-        [ "(ffi-struct Pair (a %I32) (b %I32))"
-        , "(let ((p (Pair 100 200)))"
+        [ "(ffi-struct FPair (a %I32) (b %I32))"
+        , "(let ((p (FPair 100 200)))"
         , "  (print (int-to-str (add (.a p) (.b p)))))"
         ]) >>= (`shouldBe` "300")
 
@@ -1825,8 +1785,8 @@ spec = do
 
     it "struct with int array and scalar field" $
       run (T.unlines
-        [ "(ffi-struct Pair (data (%ARR 4 %I8)) (tag %I32))"
-        , "(let ((p (Pair 42)))"
+        [ "(ffi-struct TaggedArr (data (%ARR 4 %I8)) (tag %I32))"
+        , "(let ((p (TaggedArr 42)))"
         , "  (print (int-to-str (.tag p))))"
         ]) >>= (`shouldBe` "42")
 
@@ -2084,6 +2044,71 @@ spec = do
         , "(let ((f (MkFlag true)))"
         , "  (CASE f ((MkFlag b) (if b (print \"yes\") (print \"no\")))))"
         ]) >>= (`shouldBe` "yes")
+
+  describe "uninterned symbols" $ do
+    it "usym pattern matching" $
+      run (T.unlines
+        [ "(let ((x :foo))"
+        , "  (case x"
+        , "    (:foo (print \"matched foo\"))"
+        , "    (:bar (print \"matched bar\"))"
+        , "    (_ (print \"other\"))))"
+        ]) >>= (`shouldBe` "matched foo")
+
+    it "usym pattern matching second arm" $
+      run (T.unlines
+        [ "(let ((x :bar))"
+        , "  (case x"
+        , "    (:foo (print \"matched foo\"))"
+        , "    (:bar (print \"matched bar\"))"
+        , "    (_ (print \"other\"))))"
+        ]) >>= (`shouldBe` "matched bar")
+
+    it "usym pattern matching wildcard" $
+      run (T.unlines
+        [ "(let ((x :baz))"
+        , "  (case x"
+        , "    (:foo (print \"foo\"))"
+        , "    (_ (print \"other\"))))"
+        ]) >>= (`shouldBe` "other")
+
+    it "usym in let binding and case" $
+      run (T.unlines
+        [ "(let ((mode :verbose))"
+        , "  (case mode"
+        , "    (:verbose (print \"v\"))"
+        , "    (:quiet (print \"q\"))"
+        , "    (_ (print \"?\")))"
+        , ")"
+        ]) >>= (`shouldBe` "v")
+
+    it "usym passed as function argument" $
+      run (T.unlines
+        [ "(let ((check (lam ((s %USYM)) %STR"
+        , "  (case s"
+        , "    (:verbose \"yes\")"
+        , "    (_ \"no\")))))"
+        , "  (print (check :verbose)))"
+        ]) >>= (`shouldBe` "yes")
+
+    it "usym function returns different results" $
+      run (T.unlines
+        [ "(let ((check (lam ((s %USYM)) %STR"
+        , "  (case s"
+        , "    (:verbose \"yes\")"
+        , "    (_ \"no\")))))"
+        , "  (print (check :quiet)))"
+        ]) >>= (`shouldBe` "no")
+
+    it "multiple usym let bindings" $
+      run (T.unlines
+        [ "(let ((a :foo) (b :bar))"
+        , "  (case a"
+        , "    (:foo (case b"
+        , "      (:bar (print \"both\"))"
+        , "      (_ (print \"a only\"))))"
+        , "    (_ (print \"neither\"))))"
+        ]) >>= (`shouldBe` "both")
 
 -- HELPERS
 

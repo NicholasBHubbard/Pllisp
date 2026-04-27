@@ -25,6 +25,7 @@ data SExprF
   | SQuasi SExpr
   | SUnquote SExpr
   | SSplice SExpr
+  | SUSym T.Text
   deriving (Eq, Show)
 
 -- PRE-SCAN
@@ -138,6 +139,8 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
         args' <- mapM toExpr args
         Right $ Loc.Located sp (CST.ExprApp fun' args')
   SList [] -> Right $ Loc.Located sp CST.ExprUnit
+
+  SUSym t     -> Right $ Loc.Located sp (CST.ExprLit (CST.LitUSym t))
 
   SType _     -> Left $ ConvertError sp "unexpected type annotation in expression position"
   SQuasi _    -> Left $ ConvertError sp "quasiquote outside macro body"
@@ -436,6 +439,7 @@ toPattern (Loc.Located _ sexpr) = case sexpr of
   SFlt d        -> Right (CST.PatLit (CST.LitFlt d))
   SStr s        -> Right (CST.PatLit (CST.LitStr s))
   SRx p f       -> Right (CST.PatLit (CST.LitRx p f))
+  SUSym t       -> Right (CST.PatLit (CST.LitUSym t))
   SList (Loc.Located _ (SAtom name) : args) -> do
     args' <- mapM toPattern args
     Right (CST.PatCon name args')
@@ -461,6 +465,7 @@ toType (Loc.Located _ (SAtom name)) = case name of
   "BOOL" -> Right Ty.TyBool
   "UNIT" -> Right Ty.TyUnit
   "RX"   -> Right Ty.TyRx
+  "USYM" -> Right Ty.TyUSym
   other  -> Right (Ty.TyCon other [])
 toType (Loc.Located _ (SList (Loc.Located _ (SAtom "->") : rest))) = do
   tys <- mapM toType rest

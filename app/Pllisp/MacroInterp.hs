@@ -31,6 +31,7 @@ data MVal
   | MList [MVal]
   | MBool Bool
   | MRx T.Text T.Text
+  | MUSym T.Text
   | MType MVal
   | MClosure Env [T.Text] SExpr.SExpr
   | MBuiltin T.Text ([MVal] -> InterpM MVal)
@@ -43,6 +44,7 @@ instance Show MVal where
   show (MList xs)  = "MList " ++ show xs
   show (MBool b)   = "MBool " ++ show b
   show (MRx p f)   = "MRx " ++ show p ++ " " ++ show f
+  show (MUSym t)   = "MUSym " ++ show t
   show (MType v)   = "MType " ++ show v
   show (MClosure _ ps _) = "MClosure <" ++ show ps ++ ">"
   show (MBuiltin n _)    = "MBuiltin " ++ show n
@@ -55,6 +57,7 @@ instance Eq MVal where
   MList a   == MList b   = a == b
   MBool a   == MBool b   = a == b
   MRx a b   == MRx c d   = a == c && b == d
+  MUSym a   == MUSym b   = a == b
   MType a   == MType b   = a == b
   _         == _         = False
 
@@ -79,6 +82,7 @@ sexprToVal (Loc.Located _ sf) = case sf of
   SExpr.SInt n        -> MInt n
   SExpr.SFlt f        -> MFlt f
   SExpr.SRx p f       -> MRx p f
+  SExpr.SUSym t       -> MUSym t
   SExpr.SList xs      -> MList (map sexprToVal xs)
   SExpr.SType inner   -> MType (sexprToVal inner)
   SExpr.SQuasi inner  -> MList [MAtom "%QUASI", sexprToVal inner]
@@ -92,6 +96,7 @@ valToSExpr val = case val of
   MInt n   -> Right $ loc $ SExpr.SInt n
   MFlt f   -> Right $ loc $ SExpr.SFlt f
   MRx p f  -> Right $ loc $ SExpr.SRx p f
+  MUSym t  -> Right $ loc $ SExpr.SUSym t
   MBool True  -> Right $ loc $ SExpr.SAtom "TRUE"
   MBool False -> Right $ loc $ SExpr.SAtom "FALSE"
   MList xs -> do
@@ -114,6 +119,7 @@ eval env (Loc.Located _ sf) = case sf of
   SExpr.SFlt f  -> pure $ MFlt f
   SExpr.SStr t  -> pure $ MStr t
   SExpr.SRx p f -> pure $ MRx p f
+  SExpr.SUSym t -> pure $ MUSym t
 
   -- Atoms: special values or variable lookup
   SExpr.SAtom "TRUE"  -> pure $ MBool True
@@ -221,6 +227,7 @@ evalQuasi env (Loc.Located _ sf) = case sf of
   SExpr.SFlt f         -> pure $ MFlt f
   SExpr.SStr t         -> pure $ MStr t
   SExpr.SRx p f        -> pure $ MRx p f
+  SExpr.SUSym t        -> pure $ MUSym t
   SExpr.SType inner    -> pure $ MType (sexprToVal inner)
   SExpr.SQuasi _       -> pure $ sexprToVal (Loc.Located dummySpan sf)
   SExpr.SSplice _      -> throwError "splice outside list in quasiquote"
@@ -385,6 +392,7 @@ valEq (MStr a)   (MStr b)   = a == b
 valEq (MInt a)   (MInt b)   = a == b
 valEq (MFlt a)   (MFlt b)   = a == b
 valEq (MBool a)  (MBool b)  = a == b
+valEq (MUSym a)  (MUSym b)  = a == b
 valEq (MList a)  (MList b)  = length a == length b && all (uncurry valEq) (zip a b)
 valEq (MType a)  (MType b)  = valEq a b
 valEq _          _          = False
@@ -492,6 +500,7 @@ showBrief (MFlt f)     = show f
 showBrief (MList _)    = "<list>"
 showBrief (MBool b)    = show b
 showBrief (MRx _ _)    = "<regex>"
+showBrief (MUSym t)    = ":" ++ T.unpack t
 showBrief (MType _)    = "<type>"
 showBrief (MClosure {}) = "<closure>"
 showBrief (MBuiltin n _) = "<builtin:" ++ T.unpack n ++ ">"

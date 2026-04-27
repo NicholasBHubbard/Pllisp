@@ -34,6 +34,7 @@ strip (Loc.Located _ f) = case f of
   SExpr.SQuasi inner   -> SExpr.SQuasi (stripL inner)
   SExpr.SUnquote inner -> SExpr.SUnquote (stripL inner)
   SExpr.SSplice inner  -> SExpr.SSplice (stripL inner)
+  SExpr.SUSym _  -> f
   other -> other
 
 stripL :: SExpr.SExpr -> SExpr.SExpr
@@ -132,6 +133,16 @@ spec = do
       r <- either fail pure $ MacroExpand.expand (macDefs ++ callSexprs)
       map strip r `shouldBe`
         [SExpr.SList [l (SExpr.SAtom "ADD"), l (SExpr.SInt 3), l (SExpr.SInt 3)]]
+
+  describe "uninterned symbols" $ do
+    it "usym passes through expansion" $ do
+      r <- either fail pure $ expandSrc ":foo"
+      r `shouldBe` [SExpr.SUSym "FOO"]
+
+    it "usym in macro output" $ do
+      r <- either fail pure $ expandSrc
+        "(mac mode () `:verbose) (mode)"
+      r `shouldBe` [SExpr.SUSym "VERBOSE"]
 
   describe "error cases" $ do
     it "wrong number of args" $ do

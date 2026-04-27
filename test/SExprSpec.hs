@@ -20,6 +20,7 @@ strip (Loc.Located _ f) = case f of
   SExpr.SQuasi inner -> SExpr.SQuasi (stripL inner)
   SExpr.SUnquote inner -> SExpr.SUnquote (stripL inner)
   SExpr.SSplice inner  -> SExpr.SSplice (stripL inner)
+  SExpr.SUSym _  -> f
   other -> other
 
 -- Strip but keep the Located wrapper (with dummy span)
@@ -617,6 +618,44 @@ spec = do
       let imps = SExpr.preScanImports sexprs
       length imps `shouldBe` 1
       CST.impModule (head imps) `shouldBe` "BAR"
+
+  describe "uninterned symbols" $ do
+    it "parses :foo as SUSym" $ do
+      parseOne ":foo" `shouldBe` Right (SExpr.SUSym "FOO")
+
+    it "parses :verbose as SUSym" $ do
+      parseOne ":verbose" `shouldBe` Right (SExpr.SUSym "VERBOSE")
+
+    it "case insensitive" $ do
+      parseOne ":FOO" `shouldBe` Right (SExpr.SUSym "FOO")
+      parseOne ":Foo" `shouldBe` Right (SExpr.SUSym "FOO")
+
+    it "usym inside list" $ do
+      r <- either fail pure $ parseOne "(:foo 42)"
+      case r of
+        SExpr.SList [Loc.Located _ (SExpr.SUSym "FOO"),
+                     Loc.Located _ (SExpr.SInt 42)] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "usym converts to CST literal" $ do
+      prog <- viaSExpr ":foo"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLit (CST.LitUSym "FOO"))] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "usym as pattern" $ do
+      prog <- viaSExpr "(case x (:foo 1) (_ 2))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprCase _
+          [(CST.PatLit (CST.LitUSym "FOO"), _),
+           (CST.PatWild, _)])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "%USYM type annotation" $ do
+      prog <- viaSExpr "(lam ((x %USYM)) x)"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprLam (CST.LamList [CST.TSymbol "X" (Just Ty.TyUSym)] CST.NoExtra) Nothing _)] -> pure ()
+        other -> expectationFailure (show other)
 
   describe "toProgram with interleaved forms" $ do
     it "finds imports after type definitions" $ do
