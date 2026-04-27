@@ -1,9 +1,5 @@
 (module PRELUDE)
 
-(mac fun (name params body)
-  `(let ((,name (lam ,params ,body)))
-     ,name))
-
 (type List (a)
   (Nil)
   (Cons a %(List a)))
@@ -16,13 +12,29 @@
   (Left a)
   (Right b))
 
-(mac do (&rest args)
+(type Pair (a b)
+  (Pair a b))
+
+(type Unit ()
+  (Unit))
+
+(mac fun (name params body)
+  `(let ((,name (lam ,params ,body)))
+    ,name))
+
+(mac progn (&rest args)
   (if (eq (length args) 1)
     (car args)
-    `(let ((_ ,(car args))) (do ,@(cdr args)))))
+    `(let ((_ ,(car args))) (progn ,@(cdr args)))))
 
 (mac if_ (cond then else)
   `(if (truthy? ,cond) ,then ,else))
+
+(mac when (cond body)
+  `(if_ ,cond ,body unit))
+
+(mac unless (cond body)
+  `(if_ ,cond unit ,body))
 
 (mac cond (&rest clauses)
   (if (eq (length clauses) 1)
@@ -30,12 +42,6 @@
       `(when ,(car clause) ,(car (cdr clause))))
     (let ((clause (car clauses)))
       `(if ,(car clause) ,(car (cdr clause)) (cond ,@(cdr clauses))))))
-
-(mac when (cond body)
-  `(if_ ,cond ,body unit))
-
-(mac unless (cond body)
-  `(if_ ,cond unit ,body))
 
 (mac if-let ((name expr) then else)
   `(let ((,name ,expr))
@@ -49,29 +55,7 @@
   `(let ((,name ,expr))
      (unless (truthy? ,name) ,body)))
 
-(cls FUNCTOR () (f) (map %(-> a b) %(f a) %(f b)))
-
-(inst FUNCTOR %Maybe
-  (map (lam ((fn %(-> a b)) (mx %(Maybe a)))
-    (case mx
-      ((Nothing) Nothing)
-      ((Just x) (Just (fn x)))))))
-
-(cls APPLICATIVE (FUNCTOR) (f)
-  (pure %a %(f a))
-  (ap %(f %(-> a b)) %(f a) %(f b)))
-
-(inst APPLICATIVE %Maybe
-  (pure (lam ((x %a)) (Just x)))
-  (ap (lam ((mf %(Maybe %(-> a b))) (mx %(Maybe a)))
-    (case mf
-      ((Nothing) Nothing)
-      ((Just fn) (map fn mx))))))
-
 (cls TRUTHY () (a) (truthy? %a %BOOL))
-
-(inst TRUTHY %INT
-  (truthy? (lam ((x %INT)) (not (eq x 0)))))
 
 (inst TRUTHY %BOOL
   (truthy? (lam ((x %BOOL)) x)))
@@ -81,6 +65,9 @@
 
 (inst TRUTHY %STR
   (truthy? (lam ((x %STR)) (not (eqs x "")))))
+
+(inst TRUTHY %INT
+  (truthy? (lam ((x %INT)) (not (eq x 0)))))
 
 (inst TRUTHY %(Maybe a)
   (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))
