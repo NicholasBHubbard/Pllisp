@@ -1,7 +1,7 @@
 (module PRELUDE)
 
 (type List (a)
-  (Nil)
+  (Empty)
   (Cons a %(List a)))
 
 (type Maybe (a)
