@@ -9,8 +9,25 @@
 (defconst pllisp-special-forms
   '("lam" "let" "if" "case" "type" "cls" "inst"
     "module" "import" "mac" "fun" "ffi" "ffi-struct"
-    "ffi-var" "ffi-enum" "ffi-callback")
+    "ffi-var" "ffi-enum" "ffi-callback" "progn")
   "Special forms and declaration keywords.")
+
+(defconst pllisp-builtins
+  '("add" "sub" "mul" "div" "mod" "neg"
+    "addf" "subf" "mulf" "divf" "negf"
+    "eqi" "lt" "gt" "le" "ge"
+    "eqf" "ltf" "gtf" "lef" "gef"
+    "eqs" "and" "or" "not"
+    "concat" "strlen" "substr" "str-contains"
+    "print" "read-line" "is-eof"
+    "argc" "argv"
+    "int-to-flt" "flt-to-int" "int-to-str" "flt-to-str"
+    "usym-to-str" "str-to-usym"
+    "rx-match" "rx-find" "rx-sub" "rx-gsub"
+    "rx-split" "rx-captures" "rx-compile"
+    "ref" "deref" "set!"
+    "gc-collect" "gc-heap-size")
+  "Built-in functions.")
 
 (defconst pllisp-constants
   '("true" "false" "unit")
@@ -18,16 +35,25 @@
 
 (defconst pllisp-font-lock-keywords
   (let ((special-re (concat "(" (regexp-opt pllisp-special-forms t) "\\_>"))
+        (builtin-re (concat "(" (regexp-opt pllisp-builtins t) "\\_>"))
         (constant-re (regexp-opt pllisp-constants 'words)))
-    `(;; Special forms: highlight keyword after open paren
+    `(;; Special forms: keyword after open paren
       (,special-re 1 font-lock-keyword-face)
-      ;; Constants
+      ;; Builtin functions: after open paren
+      (,builtin-re 1 font-lock-builtin-face)
+      ;; Constants: true, false, unit
       (,constant-re . font-lock-constant-face)
-      ;; Type annotations: %Str, %Int, %(List %Int), etc.
+      ;; Uninterned symbols: :foo
+      ("\\<:\\([A-Za-z][A-Za-z0-9_-]*\\)" . font-lock-constant-face)
+      ;; Regex literals: /pattern/flags
+      ("\\(/[^/\n]*/[imsx]*\\)" 1 font-lock-string-face)
+      ;; Type annotations: %INT, %(List INT), etc.
       ("%\\(?:(\\([^)]*\\))\\|\\([A-Za-z][A-Za-z0-9_-]*\\)\\)"
        . font-lock-type-face)
-      ;; Constructor names: capitalized identifiers
-      ("\\<\\([A-Z][A-Za-z0-9_-]*\\)\\>" 1 font-lock-type-face)
+      ;; ALL CAPS: typeclasses, modules, primitive types (2+ uppercase chars, no lowercase)
+      ("\\<\\([A-Z][A-Z0-9_-]+\\)\\>" 1 font-lock-type-face)
+      ;; TitleCase: constructors and type names (uppercase start, has lowercase)
+      ("\\<\\([A-Z][a-z][A-Za-z0-9_-]*\\)\\>" 1 font-lock-function-name-face)
       ;; &rest, &key, %opt parameter markers
       ("\\(?:^\\|[[:space:](]\\)\\([&%][A-Za-z][A-Za-z0-9_-]*\\)" 1 font-lock-preprocessor-face)
       ;; .field access
