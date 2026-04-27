@@ -1221,7 +1221,7 @@ genBuiltIn name args _resTy = case name of
     pure r
 
   -- Int comparison
-  "EQ" -> intCmp "eq" args
+  "EQI" -> intCmp "eq" args
   "LT" -> intCmp "slt" args
   "GT" -> intCmp "sgt" args
   "LE" -> intCmp "sle" args

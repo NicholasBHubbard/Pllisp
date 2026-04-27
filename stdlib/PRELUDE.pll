@@ -55,19 +55,21 @@
   `(let ((,name ,expr))
      (unless (truthy ,name) ,body)))
 
+### TRUTHY
+
 (cls TRUTHY () (a) (truthy %a %BOOL))
 
 (inst TRUTHY %BOOL
   (truthy (lam ((x %BOOL)) x)))
+
+(inst TRUTHY %INT
+  (truthy (lam ((x %INT)) (not (eqi x 0)))))
 
 (inst TRUTHY %FLT
   (truthy (lam ((x %FLT)) (not (eqf x 0.0)))))
 
 (inst TRUTHY %STR
   (truthy (lam ((x %STR)) (not (eqs x "")))))
-
-(inst TRUTHY %INT
-  (truthy (lam ((x %INT)) (not (eq x 0)))))
 
 (inst TRUTHY %(Maybe a)
   (truthy (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))
@@ -77,3 +79,22 @@
 
 (inst TRUTHY %(Either a b)
   (truthy (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))
+
+### STRINGY
+
+(cls STRINGY () (a) (str %a %STR))
+
+(inst STRINGY %BOOL
+  (str (lam ((x %BOOL)) (if x "true" "false"))))
+
+(inst STRINGY %INT
+  (str (lam ((x %INT)) (int-to-str x))))
+
+(inst STRINGY %FLT
+  (str (lam ((x %FLT)) (flt-to-str x))))
+
+(inst STRINGY %STR
+  (str (lam ((x %STR)) x)))
+
+(inst STRINGY %USYM
+  (str (lam ((x %USYM)) (usym-to-str x))))

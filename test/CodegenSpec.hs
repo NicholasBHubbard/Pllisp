@@ -43,8 +43,8 @@ spec = do
     it "negation"       $ run "(print (flt-to-str (negf 3.14)))"    >>= (`shouldBe` "-3.14")
 
   describe "integer comparisons" $ do
-    it "eq true"  $ run "(print (int-to-str (if (eq 1 1) 1 0)))" >>= (`shouldBe` "1")
-    it "eq false" $ run "(print (int-to-str (if (eq 1 2) 1 0)))" >>= (`shouldBe` "0")
+    it "eqi true"  $ run "(print (int-to-str (if (eqi 1 1) 1 0)))" >>= (`shouldBe` "1")
+    it "eqi false" $ run "(print (int-to-str (if (eqi 1 2) 1 0)))" >>= (`shouldBe` "0")
     it "lt"       $ run "(print (int-to-str (if (lt 1 2) 1 0)))" >>= (`shouldBe` "1")
     it "gt"       $ run "(print (int-to-str (if (gt 2 1) 1 0)))" >>= (`shouldBe` "1")
     it "le"       $ run "(print (int-to-str (if (le 1 1) 1 0)))" >>= (`shouldBe` "1")
@@ -179,7 +179,7 @@ spec = do
         , "      ((Nothing) Nothing)"
         , "      ((Just x) (fn x))))))"
         , "(let ((safe-div (lam ((a %INT) (b %INT))"
-        , "  (if (eq b 0) Nothing (Just (div a b))))))"
+        , "  (if (eqi b 0) Nothing (Just (div a b))))))"
         , "  (case (bind (Just 10) (lam ((x %INT)) (safe-div x 0)))"
         , "    ((Just z) (print (int-to-str z)))"
         , "    (_ (print \"nothing\"))))"
@@ -369,7 +369,7 @@ spec = do
 
   describe "comparison edge cases" $ do
     it "eq with zero" $
-      run "(print (int-to-str (if (eq 0 0) 1 0)))" >>= (`shouldBe` "1")
+      run "(print (int-to-str (if (eqi 0 0) 1 0)))" >>= (`shouldBe` "1")
     it "lt same value" $
       run "(print (int-to-str (if (lt 5 5) 1 0)))" >>= (`shouldBe` "0")
     it "le same value" $
@@ -400,7 +400,7 @@ spec = do
       run "(print (int-to-str (if (or (and true false) (and true true)) 1 0)))"
         >>= (`shouldBe` "1")
     it "boolean in let binding" $
-      run "(let ((b (eq 1 1))) (print (int-to-str (if b 42 0))))" >>= (`shouldBe` "42")
+      run "(let ((b (eqi 1 1))) (print (int-to-str (if b 42 0))))" >>= (`shouldBe` "42")
 
   describe "string edge cases" $ do
     it "empty string" $
@@ -495,7 +495,7 @@ spec = do
       run "(print (int-to-str (if true (case 1 (1 42) (_ 0)) 0)))"
         >>= (`shouldBe` "42")
     it "if inside case" $
-      run "(case true (true (print (int-to-str (if (eq 1 1) 42 0)))) (false (print \"no\")))"
+      run "(case true (true (print (int-to-str (if (eqi 1 1) 42 0)))) (false (print \"no\")))"
         >>= (`shouldBe` "42")
     it "case result in arithmetic" $
       run "(print (int-to-str (add (case 1 (1 10) (_ 0)) (case 2 (2 32) (_ 0)))))"
@@ -521,7 +521,7 @@ spec = do
   describe "closure edge cases" $ do
     it "lambda returning bool" $
       run (T.unlines
-        [ "(let ((is-zero (lam ((x %INT)) (eq x 0))))"
+        [ "(let ((is-zero (lam ((x %INT)) (eqi x 0))))"
         , "  (print (int-to-str (if (is-zero 0) 1 0))))"
         ]) >>= (`shouldBe` "1")
     it "lambda returning string" $
@@ -565,13 +565,13 @@ spec = do
     it "recursive sum" $
       run (T.unlines
         [ "(let ((sum (lam ((n %INT))"
-        , "  (if (eq n 0) 0 (add n (sum (sub n 1)))))))"
+        , "  (if (eqi n 0) 0 (add n (sum (sub n 1)))))))"
         , "  (print (int-to-str (sum 5))))"
         ]) >>= (`shouldBe` "15")
     it "recursive countdown" $
       run (T.unlines
         [ "(let ((countdown (lam ((n %INT))"
-        , "  (if (eq n 0)"
+        , "  (if (eqi n 0)"
         , "    (print \"done\")"
         , "    (let ((_ (print (int-to-str n))))"
         , "      (countdown (sub n 1)))))))"
@@ -581,20 +581,20 @@ spec = do
       run (T.unlines
         [ "(let ((base 10))"
         , "  (let ((f (lam ((n %INT))"
-        , "    (if (eq n 0) base (f (sub n 1))))))"
+        , "    (if (eqi n 0) base (f (sub n 1))))))"
         , "    (print (int-to-str (f 5)))))"
         ]) >>= (`shouldBe` "10")
     it "recursive factorial" $
       run (T.unlines
         [ "(let ((fact (lam ((n %INT))"
-        , "  (if (eq n 0) 1 (mul n (fact (sub n 1)))))))"
+        , "  (if (eqi n 0) 1 (mul n (fact (sub n 1)))))))"
         , "  (print (int-to-str (fact 6))))"
         ]) >>= (`shouldBe` "720")
     it "recursive with dummy arg (loop pattern)" $
       run (T.unlines
         [ "(let ((n 3))"
         , "  (let ((loop (lam ((dummy %INT))"
-        , "    (if (eq n 0) unit"
+        , "    (if (eqi n 0) unit"
         , "      (let ((_ (print (int-to-str n))))"
         , "        unit)))))"
         , "    (loop 0)))"
@@ -692,7 +692,7 @@ spec = do
       run "(print \"a\") (print \"b\") (print \"c\")" >>= (`shouldBe` "a\nb\nc")
     it "let and if and case combined" $
       run (T.unlines
-        [ "(let ((x (if (eq 1 1) 5 0)))"
+        [ "(let ((x (if (eqi 1 1) 5 0)))"
         , "  (case x"
         , "    (5 (print \"five\"))"
         , "    (_ (print \"other\"))))"
@@ -1049,9 +1049,9 @@ spec = do
         , "    (let ((clause (car clauses)))"
         , "      `(if ,(car clause) ,(car (cdr clause)) (cond ,@(cdr clauses))))))"
         , "(let ((x 2))"
-        , "  (cond ((eq x 1) (print \"one\"))"
-        , "        ((eq x 2) (print \"two\"))"
-        , "        ((eq x 3) (print \"three\"))))"
+        , "  (cond ((eqi x 1) (print \"one\"))"
+        , "        ((eqi x 2) (print \"two\"))"
+        , "        ((eqi x 3) (print \"three\"))))"
         ]) >>= (`shouldBe` "two")
 
     it "macro using another macro" $ do
@@ -1281,7 +1281,7 @@ spec = do
     it "class method with multiple args" $
       run (T.unlines
         [ "(cls EQUAL () (a) (equal %a %a %BOOL))"
-        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eq x y))))"
+        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eqi x y))))"
         , "(print (int-to-str (if (equal 1 1) 1 0)))"
         ]) >>= (`shouldBe` "1")
 
@@ -1307,8 +1307,8 @@ spec = do
         , "  (equal %a %a %BOOL)"
         , "  (nequal %a %a %BOOL))"
         , "(inst EQUAL %INT"
-        , "  (equal (lam ((x %INT) (y %INT)) (eq x y)))"
-        , "  (nequal (lam ((x %INT) (y %INT)) (not (eq x y)))))"
+        , "  (equal (lam ((x %INT) (y %INT)) (eqi x y)))"
+        , "  (nequal (lam ((x %INT) (y %INT)) (not (eqi x y)))))"
         , "(print (int-to-str (if (nequal 1 2) 1 0)))"
         ]) >>= (`shouldBe` "1")
 
@@ -1366,7 +1366,7 @@ spec = do
         [ "(cls SHOW () (a) (show %a %STR))"
         , "(cls EQUAL () (a) (equal %a %a %BOOL))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
-        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eq x y))))"
+        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eqi x y))))"
         , "(print (concat (show 42) (if (equal 1 1) \" yes\" \" no\")))"
         ]) >>= (`shouldBe` "42 yes")
 
@@ -1403,8 +1403,8 @@ spec = do
         , "  (equal %a %a %BOOL)"
         , "  (nequal %a %a %BOOL))"
         , "(inst EQUAL %INT"
-        , "  (equal (lam ((x %INT) (y %INT)) (eq x y)))"
-        , "  (nequal (lam ((x %INT) (y %INT)) (not (eq x y)))))"
+        , "  (equal (lam ((x %INT) (y %INT)) (eqi x y)))"
+        , "  (nequal (lam ((x %INT) (y %INT)) (not (eqi x y)))))"
         , "(let ((check (lam (x y) (if (equal x y) (print \"eq\") (print \"neq\")))))"
         , "  (check 1 1))"
         ]) >>= (`shouldBe` "eq")
@@ -1414,7 +1414,7 @@ spec = do
         [ "(cls SHOW () (a) (show %a %STR))"
         , "(cls EQUAL () (a) (equal %a %a %BOOL))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
-        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eq x y))))"
+        , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eqi x y))))"
         , "(let ((show-eq (lam (x y)"
         , "  (if (equal x y) (show x) (concat (show x) (concat \" != \" (show y)))))))"
         , "  (print (show-eq 1 1)))"
@@ -1433,26 +1433,26 @@ spec = do
   describe "parametric typeclass instances" $ do
     it "instance for Maybe a matches Maybe Int" $
       run (T.unlines
-        [ "(cls TRUTHY () (a) (truthy? %a %BOOL))"
-        , "(inst TRUTHY %(Maybe a)"
-        , "  (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
-        , "(print (if (truthy? (Just 1)) \"yes\" \"no\"))"
+        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        , "(inst BOOLISH %(Maybe a)"
+        , "  (boolish? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
+        , "(print (if (boolish? (Just 1)) \"yes\" \"no\"))"
         ]) >>= (`shouldBe` "yes")
 
     it "instance for Maybe a matches Nothing" $
       run (T.unlines
-        [ "(cls TRUTHY () (a) (truthy? %a %BOOL))"
-        , "(inst TRUTHY %(Maybe a)"
-        , "  (truthy? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
-        , "(print (if (truthy? Nothing) \"yes\" \"no\"))"
+        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        , "(inst BOOLISH %(Maybe a)"
+        , "  (boolish? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
+        , "(print (if (boolish? Nothing) \"yes\" \"no\"))"
         ]) >>= (`shouldBe` "no")
 
     it "instance for List a" $
       run (T.unlines
-        [ "(cls TRUTHY () (a) (truthy? %a %BOOL))"
-        , "(inst TRUTHY %(List a)"
-        , "  (truthy? (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))"
-        , "(print (if (truthy? (Cons 1 Empty)) \"yes\" \"no\"))"
+        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        , "(inst BOOLISH %(List a)"
+        , "  (boolish? (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))"
+        , "(print (if (boolish? (Cons 1 Empty)) \"yes\" \"no\"))"
         ]) >>= (`shouldBe` "yes")
 
     it "parametric and concrete instances coexist" $
@@ -1468,12 +1468,12 @@ spec = do
 
     it "instance for Either a b (two type params)" $
       run (T.unlines
-        [ "(cls TRUTHY () (a) (truthy? %a %BOOL))"
-        , "(inst TRUTHY %(Either a b)"
-        , "  (truthy? (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))"
+        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        , "(inst BOOLISH %(Either a b)"
+        , "  (boolish? (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))"
         , "(progn"
-        , "  (print (if (truthy? (Right 1)) \"yes\" \"no\"))"
-        , "  (print (if (truthy? (Left 1)) \"yes\" \"no\")))"
+        , "  (print (if (boolish? (Right 1)) \"yes\" \"no\"))"
+        , "  (print (if (boolish? (Left 1)) \"yes\" \"no\")))"
         ]) >>= (`shouldBe` "yes\nno")
 
   describe "typeclass errors" $ do
@@ -1485,9 +1485,9 @@ spec = do
           ])
         "no instance"
 
-    it "error on truthy? call with no matching instance" $
+    it "error on truthy call with no matching instance" $
       shouldFailToCompile
-        "(truthy? (Pair 1 2))"
+        "(truthy (Pair 1 2))"
         "no instance"
 
   describe "BOOL TRUTHY instance" $ do
@@ -1760,15 +1760,15 @@ spec = do
       run (T.unlines
         [ "(ffi-enum Status (OK 0) (ERR 1))"
         , "(let ((s OK))"
-        , "  (print (if (eq s OK) \"success\" \"failure\")))"
+        , "  (print (if (eqi s OK) \"success\" \"failure\")))"
         ]) >>= (`shouldBe` "success")
 
     it "enum passed to function" $
       run (T.unlines
         [ "(ffi-enum Dir (UP 0) (DOWN 1) (WEST 2) (EAST 3))"
         , "(let ((describe (lam (d)"
-        , "        (if (eq d UP) \"up\""
-        , "          (if (eq d EAST) \"east\" \"other\")))))"
+        , "        (if (eqi d UP) \"up\""
+        , "          (if (eqi d EAST) \"east\" \"other\")))))"
         , "  (print (describe EAST)))"
         ]) >>= (`shouldBe` "east")
 

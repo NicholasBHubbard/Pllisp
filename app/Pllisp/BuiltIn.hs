@@ -46,7 +46,7 @@ builtInTypes = M.fromList
   , ("DIVF", Ty.TyFun [Ty.TyFlt, Ty.TyFlt] Ty.TyFlt)
   , ("NEGF", Ty.TyFun [Ty.TyFlt] Ty.TyFlt)
   -- Comparison (Int)
-  , ("EQ",  Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool)
+  , ("EQI", Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool)
   , ("LT",  Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool)
   , ("GT",  Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool)
   , ("LE",  Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyBool)
