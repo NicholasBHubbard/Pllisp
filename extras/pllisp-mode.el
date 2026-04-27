@@ -55,9 +55,11 @@
   "Syntax table for pllisp-mode.")
 
 (defun pllisp--indent-function (_indent-point state)
-  "Pllisp indent: always 2 from the containing open paren."
-  (goto-char (elt state 1))
-  (+ 2 (current-column)))
+  "Pllisp indent: always 2 from the indentation of the containing form's line."
+  (save-excursion
+    (goto-char (elt state 1))
+    (back-to-indentation)
+    (+ 2 (current-column))))
 
 (defun pllisp-indent-line (&optional _whole-exp)
   "Indent current line as pllisp code."
