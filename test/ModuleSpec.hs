@@ -246,6 +246,13 @@ spec = do
         Left err  -> err `shouldContain` "module A does not export Y"
         Right _ -> expectationFailure "expected missing export error"
 
+  describe "validateProgramNames" $ do
+    it "rejects top-level definitions that collide with protected names" $ do
+      let prog = parse "(let ((just (lam ((x %INT)) x))) just)"
+      case Mod.validateProgramNames (S.singleton "JUST") (CST.progExprs prog) of
+        Left err  -> err `shouldContain` "cannot redefine PRELUDE symbol: JUST"
+        Right _ -> expectationFailure "expected PRELUDE collision error"
+
   describe "mergeImportedCode" $ do
     it "prepends imported type decls" $ do
       let importedTyped = typecheckSrc "(type M (a) (N) (J a))"

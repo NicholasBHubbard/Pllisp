@@ -100,6 +100,17 @@ expandExpr macros depth sx
         | Just clause <- M.lookup name macros -> do
             expanded <- applyMacro clause args name
             expandExpr macros (depth + 1) expanded
+      SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "LET")) : rest) ->
+        expandLet macros depth sx kw rest
+      SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "LAM")) : rest) ->
+        expandLam macros depth sx kw rest
+      SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "CASE")) : rest) ->
+        expandCase macros depth sx kw rest
+      SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "INST")) : rest) ->
+        expandInst macros depth sx kw rest
+      SExpr.SList (Loc.Located _ (SExpr.SAtom tag) : _)
+        | tag `elem` nonRecursiveForms ->
+            pure sx
       SExpr.SList elems -> do
         elems' <- mapM (expandExpr macros depth) elems
         pure (Loc.Located (Loc.locSpan sx) (SExpr.SList elems'))
@@ -152,3 +163,99 @@ extractMacroDefs = filter isMacDef
 
 dummySpan :: Loc.Span
 dummySpan = Loc.Span (Loc.Pos "" 0 0) (Loc.Pos "" 0 0)
+
+nonRecursiveForms :: [T.Text]
+nonRecursiveForms =
+  [ "TYPE"
+  , "CLS"
+  , "MODULE"
+  , "IMPORT"
+  , "FFI"
+  , "FFI-STRUCT"
+  , "FFI-VAR"
+  , "FFI-ENUM"
+  , "FFI-CALLBACK"
+  ]
+
+expandLet :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandLet macros depth sx kw [Loc.Located bindSp (SExpr.SList binds), body] = do
+  binds' <- mapM (expandLetBinding macros depth) binds
+  body' <- expandExpr macros depth body
+  pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, Loc.Located bindSp (SExpr.SList binds'), body'])
+expandLet macros depth sx _ elems = expandListElems macros depth sx elems
+
+expandLetBinding :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandLetBinding macros depth (Loc.Located sp (SExpr.SList [name, val])) = do
+  val' <- expandExpr macros depth val
+  pure $ Loc.Located sp (SExpr.SList [name, val'])
+expandLetBinding macros depth (Loc.Located sp (SExpr.SList [name, ty@(Loc.Located _ (SExpr.SType _)), val])) = do
+  val' <- expandExpr macros depth val
+  pure $ Loc.Located sp (SExpr.SList [name, ty, val'])
+expandLetBinding _ _ binding = pure binding
+
+expandLam :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandLam macros depth sx kw [params@(Loc.Located _ (SExpr.SList _)), body] = do
+  params' <- expandLamParams macros depth params
+  body' <- expandExpr macros depth body
+  pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, params', body'])
+expandLam macros depth sx kw [params@(Loc.Located _ (SExpr.SList _)), retTy@(Loc.Located _ (SExpr.SType _)), body] = do
+  params' <- expandLamParams macros depth params
+  body' <- expandExpr macros depth body
+  pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, params', retTy, body'])
+expandLam macros depth sx _ elems = expandListElems macros depth sx elems
+
+expandLamParams :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandLamParams macros depth (Loc.Located sp (SExpr.SList params)) = do
+  params' <- go params
+  pure $ Loc.Located sp (SExpr.SList params')
+  where
+    go [] = pure []
+    go (marker@(Loc.Located _ (SExpr.SType (Loc.Located _ (SExpr.SAtom "OPT")))) : defs) = do
+      defs' <- mapM (expandDefaultParam macros depth) defs
+      pure (marker : defs')
+    go (marker@(Loc.Located _ (SExpr.SAtom "&KEY")) : defs) = do
+      defs' <- mapM (expandDefaultParam macros depth) defs
+      pure (marker : defs')
+    go (param : rest) = do
+      rest' <- go rest
+      pure (param : rest')
+expandLamParams _ _ params = pure params
+
+expandDefaultParam :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandDefaultParam macros depth (Loc.Located sp (SExpr.SList [name, val])) = do
+  val' <- expandExpr macros depth val
+  pure $ Loc.Located sp (SExpr.SList [name, val'])
+expandDefaultParam macros depth (Loc.Located sp (SExpr.SList [name, ty@(Loc.Located _ (SExpr.SType _)), val])) = do
+  val' <- expandExpr macros depth val
+  pure $ Loc.Located sp (SExpr.SList [name, ty, val'])
+expandDefaultParam _ _ param = pure param
+
+expandCase :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandCase macros depth sx kw (scrutinee : arms) = do
+  scrutinee' <- expandExpr macros depth scrutinee
+  arms' <- mapM (expandCaseArm macros depth) arms
+  pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList (kw : scrutinee' : arms'))
+expandCase macros depth sx _ elems = expandListElems macros depth sx elems
+
+expandCaseArm :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandCaseArm macros depth (Loc.Located sp (SExpr.SList [pat, body])) = do
+  body' <- expandExpr macros depth body
+  pure $ Loc.Located sp (SExpr.SList [pat, body'])
+expandCaseArm _ _ arm = pure arm
+
+expandInst :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandInst macros depth sx kw (className : ty : methods) = do
+  methods' <- mapM (expandInstMethod macros depth) methods
+  pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList (kw : className : ty : methods'))
+expandInst macros depth sx _ elems = expandListElems macros depth sx elems
+
+expandInstMethod :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandInstMethod macros depth (Loc.Located sp (SExpr.SList [name, body])) = do
+  body' <- expandExpr macros depth body
+  pure $ Loc.Located sp (SExpr.SList [name, body'])
+expandInstMethod _ _ method = pure method
+
+expandListElems :: MacroTable -> Int -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandListElems macros depth sx elems = do
+  elems' <- mapM (expandExpr macros depth) elems
+  pure (Loc.Located (Loc.locSpan sx) (SExpr.SList elems'))

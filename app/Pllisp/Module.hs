@@ -96,6 +96,79 @@ checkDuplicateDecls = go S.empty
     declInfo (CST.ExprCls name _ _ _) = Just ("typeclass", name)
     declInfo _                        = Nothing
 
+validateProgramNames :: S.Set CST.Symbol -> CST.CST -> Either String ()
+validateProgramNames protected exprs = do
+  mapM_ validateReservedExpr exprs
+  mapM_ validateProtectedTopLevelName (concatMap topLevelDefinedNames exprs)
+  where
+    validateProtectedTopLevelName name
+      | name `S.member` protected = Left ("cannot redefine PRELUDE symbol: " ++ T.unpack name)
+      | otherwise = Right ()
+
+    topLevelDefinedNames (Loc.Located _ expr) = case expr of
+      CST.ExprLet binds _ -> [name | (CST.TSymbol name _, _) <- binds, name /= "_"]
+      CST.ExprType _ _ ctors -> map CST.dcName ctors
+      CST.ExprCls _ _ _ methods -> map CST.cmName methods
+      _ -> []
+
+validateReservedExpr :: CST.Expr -> Either String ()
+validateReservedExpr (Loc.Located _ expr) = case expr of
+  CST.ExprLam lamList _ body -> do
+    validateLamList lamList
+    validateReservedExpr body
+  CST.ExprApp fun args -> do
+    validateReservedExpr fun
+    mapM_ validateReservedExpr args
+  CST.ExprLet binds body -> do
+    mapM_ (validateBindingName . fst) binds
+    mapM_ (validateReservedExpr . snd) binds
+    validateReservedExpr body
+  CST.ExprIf cond then' else' -> do
+    validateReservedExpr cond
+    validateReservedExpr then'
+    validateReservedExpr else'
+  CST.ExprCase scrutinee arms -> do
+    validateReservedExpr scrutinee
+    mapM_ validateArm arms
+  CST.ExprFieldAccess _ arg ->
+    validateReservedExpr arg
+  CST.ExprKeyArg _ arg ->
+    validateReservedExpr arg
+  CST.ExprInst _ _ methods ->
+    mapM_ (validateReservedExpr . snd) methods
+  _ -> Right ()
+  where
+    validateArm (pat, body) = do
+      validatePattern pat
+      validateReservedExpr body
+
+    validateLamList (CST.LamList required extra) = do
+      mapM_ validateBindingName required
+      case extra of
+        CST.NoExtra -> Right ()
+        CST.RestParam param ->
+          validateBindingName param
+        CST.OptParams params -> do
+          mapM_ (validateBindingName . fst) params
+          mapM_ (validateReservedExpr . snd) params
+        CST.KeyParams params -> do
+          mapM_ (validateBindingName . fst) params
+          mapM_ (validateReservedExpr . snd) params
+
+    validatePattern pat = case pat of
+      CST.PatVar name -> validateName "pattern variable" name
+      CST.PatCon _ pats -> mapM_ validatePattern pats
+      _ -> Right ()
+
+    validateBindingName (CST.TSymbol name _) = validateName "binding name" name
+
+    validateName kind name
+      | name `S.member` reservedWords = Left ("reserved word cannot be used as " ++ kind ++ ": " ++ T.unpack name)
+      | otherwise = Right ()
+
+    reservedWords =
+      S.fromList ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE", "MODULE", "IMPORT"]
+
 -- EXPORT COLLECTION
 
 -- | Collect exported symbols from a typechecked program.

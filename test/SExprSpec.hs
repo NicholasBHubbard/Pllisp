@@ -514,6 +514,15 @@ spec = do
     it "rejects &rest param written as default pair" $
       shouldFailSExpr "(lam (&rest (a 0)) 1)"
 
+  describe "reserved names" $ do
+    it "rejects reserved word in let binding" $ do
+      let sexprs = case Parser.parseSExprs "<test>" "(let ((if 1)) if)" of
+            Left _  -> error "parse should succeed"
+            Right s -> s
+      case SExpr.toProgram sexprs of
+        Left err  -> SExpr.ceMsg err `shouldContain` "reserved word cannot be used as binding name: IF"
+        Right _ -> expectationFailure "expected reserved-word binding error"
+
   describe "typeclasses" $ do
     -- cls
     it "cls with one method" $ do

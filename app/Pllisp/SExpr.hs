@@ -4,6 +4,7 @@
 
 module Pllisp.SExpr where
 
+import qualified Data.Set as S
 import qualified Data.Text as T
 
 import qualified Pllisp.CST    as CST
@@ -440,7 +441,9 @@ toPattern (Loc.Located _ sexpr) = case sexpr of
   SAtom "_"     -> Right CST.PatWild
   SAtom "TRUE"  -> Right (CST.PatBool True)
   SAtom "FALSE" -> Right (CST.PatBool False)
-  SAtom name    -> Right (CST.PatVar name)
+  SAtom name    -> do
+    checkReservedName "pattern variable" dummySpan name
+    Right (CST.PatVar name)
   SInt n        -> Right (CST.PatLit (CST.LitInt n))
   SFlt d        -> Right (CST.PatLit (CST.LitFlt d))
   SStr s        -> Right (CST.PatLit (CST.LitStr s))
@@ -454,9 +457,11 @@ toPattern (Loc.Located _ sexpr) = case sexpr of
 -- TYPED SYMBOLS
 
 toTSymbol :: SExpr -> Either ConvertError CST.TSymbol
-toTSymbol (Loc.Located _ (SAtom name)) =
+toTSymbol (Loc.Located sp (SAtom name)) = do
+  checkReservedName "binding name" sp name
   Right $ CST.TSymbol name Nothing
-toTSymbol (Loc.Located _ (SList [Loc.Located _ (SAtom name), Loc.Located _ (SType tyExpr)])) = do
+toTSymbol (Loc.Located sp (SList [Loc.Located _ (SAtom name), Loc.Located _ (SType tyExpr)])) = do
+  checkReservedName "binding name" sp name
   ty <- toType tyExpr
   Right $ CST.TSymbol name (Just ty)
 toTSymbol (Loc.Located sp _) = Left $ ConvertError sp "invalid typed symbol"
@@ -515,3 +520,13 @@ processKeyArgs sp (arg : rest) = do
 
 dummySpan :: Loc.Span
 dummySpan = Loc.Span (Loc.Pos "" 0 0) (Loc.Pos "" 0 0)
+
+reservedWords :: S.Set T.Text
+reservedWords =
+  S.fromList ["LAM", "LET", "IF", "TRUE", "FALSE", "UNIT", "TYPE", "CASE", "MODULE", "IMPORT"]
+
+checkReservedName :: String -> Loc.Span -> T.Text -> Either ConvertError ()
+checkReservedName kind sp name
+  | name `S.member` reservedWords =
+      Left $ ConvertError sp ("reserved word cannot be used as " ++ kind ++ ": " ++ T.unpack name)
+  | otherwise = Right ()

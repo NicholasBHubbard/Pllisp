@@ -46,6 +46,18 @@ spec = do
       withTempSource "bad-macro.pll" "(mac broken)" $ \fp ->
         Driver.runFiles [fp] `shouldReturn` ExitFailure 1
 
+    it "rejects reserved words as binding names" $
+      withTempSource "reserved-binding.pll" "(let ((if 1)) if)" $ \fp ->
+        Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
+    it "rejects top-level redefinitions of PRELUDE symbols" $
+      withTempSource "redefine-prelude.pll" "(fun just ((x %INT)) x)" $ \fp ->
+        Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
+    it "rejects top-level redefinitions of PRELUDE macro names" $
+      withTempSource "redefine-prelude-macro.pll" "(let ((fun 1)) fun)" $ \fp ->
+        Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
 withRepoRoot :: IO a -> IO a
 withRepoRoot action = do
   cwd <- getCurrentDirectory

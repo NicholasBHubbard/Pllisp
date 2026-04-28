@@ -112,6 +112,18 @@ spec = do
       r <- either fail pure $ expandSrc "42 \"hello\" true"
       r `shouldBe` [SExpr.SInt 42, SExpr.SStr "hello", SExpr.SAtom "TRUE"]
 
+    it "does not expand macro names in let binders" $ do
+      r <- either fail pure $ expandSrc "(mac fun () `unit) (let ((fun 1)) fun)"
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "LET")
+            , l (SExpr.SList
+                [ l (SExpr.SList [l (SExpr.SAtom "FUN"), l (SExpr.SInt 1)])
+                ])
+            , l (SExpr.SAtom "FUN")
+            ]
+        ]
+
   describe "extractMacroDefs" $ do
     it "extracts mac forms from mixed sexprs" $ do
       sexprs <- either (fail . show) pure $ parseSexprs

@@ -72,53 +72,62 @@ compileProg fp stdlibDir render prog = do
       explicitImports = CST.progImports prog
       allImports = if isPrelude then explicitImports
                    else CST.Import "PRELUDE" "PRELUDE" [] : explicitImports
+  preludeMacroNamesResult <-
+    if isPrelude
+      then pure (Right S.empty)
+      else loadPreludeMacroNames (takeDirectory fp) stdlibDir
   importResult <- loadImports fp stdlibDir allImports
-  case importResult of
-    Left err -> putStrLn err >> pure (ExitFailure 1)
-    Right (exportMap, importedTypedModules, importedEnvs) -> do
+  case (preludeMacroNamesResult, importResult) of
+    (Left err, _) -> putStrLn err >> pure (ExitFailure 1)
+    (_, Left err) -> putStrLn err >> pure (ExitFailure 1)
+    (Right preludeMacroNames, Right (exportMap, importedTypedModules, importedEnvs)) -> do
       let preludeExports = M.findWithDefault M.empty "PRELUDE" exportMap
+          protectedNames = if isPrelude then S.empty else M.keysSet preludeExports `S.union` preludeMacroNames
           fixedImports = if isPrelude then explicitImports
                          else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : explicitImports
-      case Mod.checkImportCollisions exportMap fixedImports of
+      case Mod.validateProgramNames protectedNames (CST.progExprs prog) of
         Left err -> putStrLn err >> pure (ExitFailure 1)
-        Right () -> do
-          let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap fixedImports
-          case Mod.desugarTopLevel (CST.progExprs prog) of
-            Left err -> putStrLn ("desugar error: " ++ err) >> pure (ExitFailure 1)
-            Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
-              Left errs -> do
-                mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
-                pure (ExitFailure 1)
-              Right resolved ->
-                case TC.typecheckWith importedEnvs tcCtx resolved of
+        Right () ->
+          case Mod.checkImportCollisions exportMap fixedImports of
+            Left err -> putStrLn err >> pure (ExitFailure 1)
+            Right () -> do
+              let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap fixedImports
+              case Mod.desugarTopLevel (CST.progExprs prog) of
+                Left err -> putStrLn ("desugar error: " ++ err) >> pure (ExitFailure 1)
+                Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
                   Left errs -> do
-                    mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
+                    mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
                     pure (ExitFailure 1)
-                  Right (typed, _) -> do
-                    let merged = Mod.mergeImportedCode importedTypedModules typed
-                    case Exhaust.exhaustCheck merged of
-                      errs@(_:_) -> do
-                        mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
+                  Right resolved ->
+                    case TC.typecheckWith importedEnvs tcCtx resolved of
+                      Left errs -> do
+                        mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
                         pure (ExitFailure 1)
-                      [] -> do
-                        let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
-                            base = dropExtension fp
-                            llFile = base ++ ".ll"
-                            bridgeFile = base ++ "_ffi_bridge.c"
-                            exeFile = base
-                        T.IO.writeFile llFile ir
-                        T.IO.writeFile bridgeFile Ty.ffiBridgeC
-                        (ec, _, err') <- readProcessWithExitCode
-                          "clang" [llFile, bridgeFile, "-o", exeFile,
-                                   "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-                        removeFile bridgeFile
-                        case ec of
-                          ExitFailure _ -> do
-                            putStrLn ("clang failed:\n" ++ err')
+                      Right (typed, _) -> do
+                        let merged = Mod.mergeImportedCode importedTypedModules typed
+                        case Exhaust.exhaustCheck merged of
+                          errs@(_:_) -> do
+                            mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
                             pure (ExitFailure 1)
-                          ExitSuccess -> do
-                            putStrLn ("compiled: " ++ exeFile)
-                            pure ExitSuccess
+                          [] -> do
+                            let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+                                base = dropExtension fp
+                                llFile = base ++ ".ll"
+                                bridgeFile = base ++ "_ffi_bridge.c"
+                                exeFile = base
+                            T.IO.writeFile llFile ir
+                            T.IO.writeFile bridgeFile Ty.ffiBridgeC
+                            (ec, _, err') <- readProcessWithExitCode
+                              "clang" [llFile, bridgeFile, "-o", exeFile,
+                                       "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+                            removeFile bridgeFile
+                            case ec of
+                              ExitFailure _ -> do
+                                putStrLn ("clang failed:\n" ++ err')
+                                pure (ExitFailure 1)
+                              ExitSuccess -> do
+                                putStrLn ("compiled: " ++ exeFile)
+                                pure ExitSuccess
 
 data ModuleInfo = ModuleInfo
   { miPath    :: FilePath
@@ -183,11 +192,16 @@ compileModules stdlibDir moduleInfos (modName : rest) accExports accTyped accEnv
           isPrelude = modName == "PRELUDE"
           macroImports = if isPrelude then modImports
                          else CST.Import "PRELUDE" "PRELUDE" [] : modImports
+      preludeMacroNamesResult <-
+        if isPrelude
+          then pure (Right S.empty)
+          else loadPreludeMacroNames (takeDirectory (miPath info)) stdlibDir
       macroResult <- loadImportedMacros (S.singleton modName)
         (takeDirectory (miPath info)) stdlibDir macroImports
-      case macroResult of
-        Left err -> pure (Left err)
-        Right importedMacros ->
+      case (preludeMacroNamesResult, macroResult) of
+        (Left err, _) -> pure (Left err)
+        (_, Left err) -> pure (Left err)
+        (Right preludeMacroNames, Right importedMacros) ->
           case MacroExpand.expandWith importedMacros sexprs of
             Left err -> pure (Left ("macro error in " ++ T.unpack modName ++ ": " ++ err))
             Right expanded -> case SExpr.toProgram expanded of
@@ -196,30 +210,34 @@ compileModules stdlibDir moduleInfos (modName : rest) accExports accTyped accEnv
               Right modProg -> do
                 let cstImports = CST.progImports modProg
                     preludeExports = M.findWithDefault M.empty "PRELUDE" accExports
+                    protectedNames = if isPrelude then S.empty else M.keysSet preludeExports `S.union` preludeMacroNames
                     allImports = if isPrelude then cstImports
                                  else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
-                case Mod.checkImportCollisions accExports allImports of
+                case Mod.validateProgramNames protectedNames (CST.progExprs modProg) of
                   Left err -> pure (Left err)
-                  Right () -> do
-                    let (resolveScope, tcCtx, normMap) =
-                          Mod.buildImportScope accExports allImports
-                    case Mod.desugarTopLevel (CST.progExprs modProg) of
-                      Left err -> pure (Left ("desugar error in " ++ T.unpack modName ++ ": " ++ err))
-                      Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
-                        Left errs -> do
-                          src <- T.IO.readFile (miPath info)
-                          pure (Left (concatMap (\e ->
-                            Error.renderError src "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs))
-                        Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
-                          Left errs -> do
-                            src <- T.IO.readFile (miPath info)
-                            pure (Left (concatMap (\e ->
-                              Error.renderError src "type" (TC.teSpan e) (TC.teMsg e)) errs))
-                          Right (typed, modEnvs) -> do
-                            let exports = Mod.collectExports modEnvs typed
-                                accExports' = M.insert modName exports accExports
-                            compileModules stdlibDir moduleInfos rest
-                              accExports' (accTyped ++ [typed]) modEnvs
+                  Right () ->
+                    case Mod.checkImportCollisions accExports allImports of
+                      Left err -> pure (Left err)
+                      Right () -> do
+                        let (resolveScope, tcCtx, normMap) =
+                              Mod.buildImportScope accExports allImports
+                        case Mod.desugarTopLevel (CST.progExprs modProg) of
+                          Left err -> pure (Left ("desugar error in " ++ T.unpack modName ++ ": " ++ err))
+                          Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
+                            Left errs -> do
+                              src <- T.IO.readFile (miPath info)
+                              pure (Left (concatMap (\e ->
+                                Error.renderError src "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs))
+                            Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
+                              Left errs -> do
+                                src <- T.IO.readFile (miPath info)
+                                pure (Left (concatMap (\e ->
+                                  Error.renderError src "type" (TC.teSpan e) (TC.teMsg e)) errs))
+                              Right (typed, modEnvs) -> do
+                                let exports = Mod.collectExports modEnvs typed
+                                    accExports' = M.insert modName exports accExports
+                                compileModules stdlibDir moduleInfos rest
+                                  accExports' (accTyped ++ [typed]) modEnvs
 
 findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)
 findModuleFile searchDir stdlibDir modName = do
@@ -263,3 +281,16 @@ loadModuleMacros visited searchDir stdlibDir imp
                   let thisMacros = MacroExpand.extractMacroDefs sexprs
                   in pure (Right (subMacros ++ thisMacros))
   where modName = CST.impModule imp
+
+loadPreludeMacroNames :: FilePath -> FilePath -> IO (Either String (S.Set CST.Symbol))
+loadPreludeMacroNames searchDir stdlibDir = do
+  result <- loadModuleMacros S.empty searchDir stdlibDir (CST.Import "PRELUDE" "PRELUDE" [])
+  pure (fmap macroNames result)
+
+macroNames :: [SExpr.SExpr] -> S.Set CST.Symbol
+macroNames = go S.empty
+  where
+    go acc [] = acc
+    go acc (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : Loc.Located _ (SExpr.SAtom name) : _)) : rest) =
+      go (S.insert name acc) rest
+    go acc (_ : rest) = go acc rest
