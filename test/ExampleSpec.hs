@@ -123,7 +123,7 @@ multiModulePipeline modules mainSrc = do
   let (finalExports, finalTyped, finalMacros, finalEnvs) =
         foldl (compileOneMod modMap) (M.empty, [], [], TC.emptyTCEnvs) order
       mainSexprs = parseMod "MAIN" mainSrc
-      mainExpanded = case MacroExpand.expand (finalMacros ++ mainSexprs) of
+      mainExpanded = case MacroExpand.expandWith finalMacros mainSexprs of
         Left e  -> error ("main macro: " ++ e)
         Right s -> s
       mainProg = case SExpr.toProgram mainExpanded of
@@ -133,7 +133,9 @@ multiModulePipeline modules mainSrc = do
       preludeImport = CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports)
       allMainImports = preludeImport : CST.progImports mainProg
       (rScope, tcCtx, nMap) = Mod.buildImportScope finalExports allMainImports
-      mainExprs = Mod.desugarTopLevel (CST.progExprs mainProg)
+  mainExprs <- case Mod.desugarTopLevel (CST.progExprs mainProg) of
+    Left e  -> error ("main desugar: " ++ e)
+    Right e -> pure e
   case Resolve.resolveWith rScope nMap mainExprs of
     Left e  -> error ("main resolve: " ++ show e)
     Right resolved -> case TC.typecheckWith finalEnvs tcCtx resolved of
@@ -152,7 +154,7 @@ multiModulePipeline modules mainSrc = do
       let sexprs = modMap M.! modName
           thisMacros = MacroExpand.extractMacroDefs sexprs
           isPrelude = modName == "PRELUDE"
-          expanded = case MacroExpand.expand (accMacros ++ sexprs) of
+          expanded = case MacroExpand.expandWith accMacros sexprs of
             Left e  -> error ("macro " ++ T.unpack modName ++ ": " ++ e)
             Right s -> s
           modProg = case SExpr.toProgram expanded of
@@ -163,7 +165,9 @@ multiModulePipeline modules mainSrc = do
           allImports = if isPrelude then cstImports
                        else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
           (rScope, tcCtx, nMap) = Mod.buildImportScope accExports allImports
-          exprs = Mod.desugarTopLevel (CST.progExprs modProg)
+          exprs = case Mod.desugarTopLevel (CST.progExprs modProg) of
+            Left e  -> error ("desugar " ++ T.unpack modName ++ ": " ++ e)
+            Right e -> e
           (typed, modEnvs) = case Resolve.resolveWith rScope nMap exprs of
             Left e  -> error ("resolve " ++ T.unpack modName ++ ": " ++ show e)
             Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of

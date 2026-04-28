@@ -7,7 +7,7 @@
   (print (int-to-str (mod 7 3)))
   (print (int-to-str (neg 5)))
   (print (if (eqi 1 1) "eqi: true" "eqi: false"))
-  (print (if (lt 1 2) "lt: true" "lt: false"))
+  (print (if (lti 1 2) "lti: true" "lti: false"))
   (print (if (and true false) "and: true" "and: false"))
   (print (if (or false true) "or: true" "or: false"))
   (print (if (not true) "not: true" "not: false"))

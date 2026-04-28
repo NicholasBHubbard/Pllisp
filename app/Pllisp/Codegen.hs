@@ -177,13 +177,19 @@ genReplEntry exprs priorGlobals newGlobals = do
 -- without restoring vars so bindings persist for global storage.
 replTopExpr :: LL.LLExpr -> CgM ()
 replTopExpr (Ty.Typed _ (LL.LLLet binds body)) = do
+  -- Pass 1: pre-allocate closures so recursive/mutual references work
   forM_ binds $ \(name, _, rhs) -> case Ty.val rhs of
-    LL.LLMkClosure fnName envArgs -> do
+    LL.LLMkClosure _ envArgs -> do
       let totalSize = slotSize * (1 + length envArgs)
       closure <- fresh
       emit (closure <> " = call ptr @GC_malloc(i64 " <> tshow totalSize <> ")")
-      fillClosure closure fnName envArgs
       bindVar name closure
+    _ -> pure ()
+  -- Pass 2: fill closures and generate other bindings
+  forM_ binds $ \(name, _, rhs) -> case Ty.val rhs of
+    LL.LLMkClosure fnName envArgs -> do
+      closure <- lookupVar name
+      fillClosure closure fnName envArgs
     _ -> do
       op <- genExpr rhs
       bindVar name op
@@ -1222,10 +1228,10 @@ genBuiltIn name args _resTy = case name of
 
   -- Int comparison
   "EQI" -> intCmp "eq" args
-  "LT" -> intCmp "slt" args
-  "GT" -> intCmp "sgt" args
-  "LE" -> intCmp "sle" args
-  "GE" -> intCmp "sge" args
+  "LTI" -> intCmp "slt" args
+  "GTI" -> intCmp "sgt" args
+  "LEI" -> intCmp "sle" args
+  "GEI" -> intCmp "sge" args
 
   -- Float comparison
   "EQF" -> fltCmp "oeq" args
@@ -1252,13 +1258,11 @@ genBuiltIn name args _resTy = case name of
     pure r
 
   -- String comparison
-  "EQS" -> do
-    let [(_, s1), (_, s2)] = args
-    cmpR <- fresh
-    emit (cmpR <> " = call i32 @strcmp(ptr " <> s1 <> ", ptr " <> s2 <> ")")
-    r <- fresh
-    emit (r <> " = icmp eq i32 " <> cmpR <> ", 0")
-    pure r
+  "EQS" -> strCmp "eq" args
+  "LTS" -> strCmp "slt" args
+  "GTS" -> strCmp "sgt" args
+  "LES" -> strCmp "sle" args
+  "GES" -> strCmp "sge" args
 
   -- String operations
   "CONCAT" -> do
@@ -1529,6 +1533,15 @@ fltCmp :: T.Text -> [(Ty.Type, T.Text)] -> CgM T.Text
 fltCmp p [(_, a), (_, b)] = do
   r <- fresh; emit (r <> " = fcmp " <> p <> " double " <> a <> ", " <> b); pure r
 fltCmp _ _ = error "fltCmp: expected 2 args"
+
+strCmp :: T.Text -> [(Ty.Type, T.Text)] -> CgM T.Text
+strCmp p [(_, s1), (_, s2)] = do
+  cmpR <- fresh
+  emit (cmpR <> " = call i32 @strcmp(ptr " <> s1 <> ", ptr " <> s2 <> ")")
+  r <- fresh
+  emit (r <> " = icmp " <> p <> " i32 " <> cmpR <> ", 0")
+  pure r
+strCmp _ _ = error "strCmp: expected 2 args"
 
 -- RX HELPER FUNCTIONS (embedded LLVM IR)
 -- These implement the 6 rx built-ins using PCRE2, defined as functions

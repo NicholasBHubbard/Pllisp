@@ -45,10 +45,10 @@ spec = do
   describe "integer comparisons" $ do
     it "eqi true"  $ run "(print (int-to-str (if (eqi 1 1) 1 0)))" >>= (`shouldBe` "1")
     it "eqi false" $ run "(print (int-to-str (if (eqi 1 2) 1 0)))" >>= (`shouldBe` "0")
-    it "lt"       $ run "(print (int-to-str (if (lt 1 2) 1 0)))" >>= (`shouldBe` "1")
-    it "gt"       $ run "(print (int-to-str (if (gt 2 1) 1 0)))" >>= (`shouldBe` "1")
-    it "le"       $ run "(print (int-to-str (if (le 1 1) 1 0)))" >>= (`shouldBe` "1")
-    it "ge"       $ run "(print (int-to-str (if (ge 2 1) 1 0)))" >>= (`shouldBe` "1")
+    it "lti"      $ run "(print (int-to-str (if (lti 1 2) 1 0)))" >>= (`shouldBe` "1")
+    it "gti"      $ run "(print (int-to-str (if (gti 2 1) 1 0)))" >>= (`shouldBe` "1")
+    it "lei"      $ run "(print (int-to-str (if (lei 1 1) 1 0)))" >>= (`shouldBe` "1")
+    it "gei"      $ run "(print (int-to-str (if (gei 2 1) 1 0)))" >>= (`shouldBe` "1")
 
   describe "float comparisons" $ do
     it "eqf" $ run "(print (int-to-str (if (eqf 1.0 1.0) 1 0)))" >>= (`shouldBe` "1")
@@ -67,6 +67,14 @@ spec = do
     it "string length"          $ run "(print (int-to-str (strlen \"hello\")))" >>= (`shouldBe` "5")
     it "string equality true"   $ run "(print (int-to-str (if (eqs \"a\" \"a\") 1 0)))" >>= (`shouldBe` "1")
     it "string equality false"  $ run "(print (int-to-str (if (eqs \"a\" \"b\") 1 0)))" >>= (`shouldBe` "0")
+    it "lts true"  $ run "(print (int-to-str (if (lts \"a\" \"b\") 1 0)))" >>= (`shouldBe` "1")
+    it "lts false" $ run "(print (int-to-str (if (lts \"b\" \"a\") 1 0)))" >>= (`shouldBe` "0")
+    it "gts true"  $ run "(print (int-to-str (if (gts \"b\" \"a\") 1 0)))" >>= (`shouldBe` "1")
+    it "gts false" $ run "(print (int-to-str (if (gts \"a\" \"b\") 1 0)))" >>= (`shouldBe` "0")
+    it "les true"  $ run "(print (int-to-str (if (les \"a\" \"a\") 1 0)))" >>= (`shouldBe` "1")
+    it "les false" $ run "(print (int-to-str (if (les \"b\" \"a\") 1 0)))" >>= (`shouldBe` "0")
+    it "ges true"  $ run "(print (int-to-str (if (ges \"b\" \"a\") 1 0)))" >>= (`shouldBe` "1")
+    it "ges false" $ run "(print (int-to-str (if (ges \"a\" \"b\") 1 0)))" >>= (`shouldBe` "0")
 
   describe "conversions" $ do
     it "int to float"  $ run "(print (flt-to-str (int-to-flt 42)))" >>= (`shouldBe` "42")
@@ -370,14 +378,14 @@ spec = do
   describe "comparison edge cases" $ do
     it "eq with zero" $
       run "(print (int-to-str (if (eqi 0 0) 1 0)))" >>= (`shouldBe` "1")
-    it "lt same value" $
-      run "(print (int-to-str (if (lt 5 5) 1 0)))" >>= (`shouldBe` "0")
-    it "le same value" $
-      run "(print (int-to-str (if (le 5 5) 1 0)))" >>= (`shouldBe` "1")
-    it "gt same value" $
-      run "(print (int-to-str (if (gt 5 5) 1 0)))" >>= (`shouldBe` "0")
-    it "ge same value" $
-      run "(print (int-to-str (if (ge 5 5) 1 0)))" >>= (`shouldBe` "1")
+    it "lti same value" $
+      run "(print (int-to-str (if (lti 5 5) 1 0)))" >>= (`shouldBe` "0")
+    it "lei same value" $
+      run "(print (int-to-str (if (lei 5 5) 1 0)))" >>= (`shouldBe` "1")
+    it "gti same value" $
+      run "(print (int-to-str (if (gti 5 5) 1 0)))" >>= (`shouldBe` "0")
+    it "gei same value" $
+      run "(print (int-to-str (if (gei 5 5) 1 0)))" >>= (`shouldBe` "1")
     it "eqf different" $
       run "(print (int-to-str (if (eqf 1.0 1.1) 1 0)))" >>= (`shouldBe` "0")
     it "gtf" $
@@ -482,7 +490,7 @@ spec = do
     it "if returning float" $
       run "(print (flt-to-str (if true 1.5 2.5)))" >>= (`shouldBe` "1.5")
     it "if with comparison condition" $
-      run "(print (int-to-str (if (gt (add 1 2) 2) 42 0)))" >>= (`shouldBe` "42")
+      run "(print (int-to-str (if (gti (add 1 2) 2) 42 0)))" >>= (`shouldBe` "42")
     it "if branches with side effects" $
       run "(if true (print \"a\") (print \"b\"))" >>= (`shouldBe` "a")
 
@@ -1013,23 +1021,18 @@ spec = do
 
   describe "macros" $ do
     it "when macro" $ do
-      run (T.unlines
-        [ "(mac when (test body) `(if ,test ,body unit))"
-        , "(when true (print \"yes\"))"
-        ]) >>= (`shouldBe` "yes")
+      run "(when true (print \"yes\"))"
+        >>= (`shouldBe` "yes")
 
     it "when macro false branch" $ do
       run (T.unlines
-        [ "(mac when (test body) `(if ,test ,body unit))"
-        , "(when false (print \"no\"))"
+        [ "(when false (print \"no\"))"
         , "(print \"done\")"
         ]) >>= (`shouldBe` "done")
 
     it "unless macro" $ do
-      run (T.unlines
-        [ "(mac unless (test body) `(if ,test unit ,body))"
-        , "(unless false (print \"ran\"))"
-        ]) >>= (`shouldBe` "ran")
+      run "(unless false (print \"ran\"))"
+        >>= (`shouldBe` "ran")
 
     it "do macro sequences expressions" $ do
       run (T.unlines
@@ -1042,13 +1045,7 @@ spec = do
 
     it "cond macro" $ do
       run (T.unlines
-        [ "(mac cond (&rest clauses)"
-        , "  (if (eq (length clauses) 1)"
-        , "    (let ((clause (car clauses)))"
-        , "      `(if ,(car clause) ,(car (cdr clause)) unit))"
-        , "    (let ((clause (car clauses)))"
-        , "      `(if ,(car clause) ,(car (cdr clause)) (cond ,@(cdr clauses))))))"
-        , "(let ((x 2))"
+        [ "(let ((x 2))"
         , "  (cond ((eqi x 1) (print \"one\"))"
         , "        ((eqi x 2) (print \"two\"))"
         , "        ((eqi x 3) (print \"three\"))))"
@@ -1056,9 +1053,9 @@ spec = do
 
     it "macro using another macro" $ do
       run (T.unlines
-        [ "(mac unless (test body) `(if ,test unit ,body))"
-        , "(mac when (test body) `(unless (not ,test) ,body))"
-        , "(when true (print \"ok\"))"
+        [ "(mac my-unless (test body) `(if ,test unit ,body))"
+        , "(mac my-when (test body) `(my-unless (not ,test) ,body))"
+        , "(my-when true (print \"ok\"))"
         ]) >>= (`shouldBe` "ok")
 
     it "macro with type annotations" $ do
@@ -1490,6 +1487,26 @@ spec = do
         "(truthy (Pair 1 2))"
         "no instance"
 
+  describe "EQ typeclass" $ do
+    it "eq int true" $
+      run "(print (if (eq 1 1) \"y\" \"n\"))" >>= (`shouldBe` "y")
+    it "eq int false" $
+      run "(print (if (eq 1 2) \"y\" \"n\"))" >>= (`shouldBe` "n")
+    it "eq flt true" $
+      run "(print (if (eq 1.0 1.0) \"y\" \"n\"))" >>= (`shouldBe` "y")
+    it "eq flt false" $
+      run "(print (if (eq 1.0 2.0) \"y\" \"n\"))" >>= (`shouldBe` "n")
+    it "eq str true" $
+      run "(print (if (eq \"a\" \"a\") \"y\" \"n\"))" >>= (`shouldBe` "y")
+    it "eq str false" $
+      run "(print (if (eq \"a\" \"b\") \"y\" \"n\"))" >>= (`shouldBe` "n")
+    it "eq bool true-true" $
+      run "(print (if (eq true true) \"y\" \"n\"))" >>= (`shouldBe` "y")
+    it "eq bool true-false" $
+      run "(print (if (eq true false) \"y\" \"n\"))" >>= (`shouldBe` "n")
+    it "eq bool false-false" $
+      run "(print (if (eq false false) \"y\" \"n\"))" >>= (`shouldBe` "y")
+
   describe "BOOL TRUTHY instance" $ do
     it "if_ with true" $
       run "(if_ true (print \"yes\") (print \"no\"))" >>= (`shouldBe` "yes")
@@ -1530,17 +1547,17 @@ spec = do
 
     it "gc-heap-size returns positive value" $
       run (T.unlines
-        [ "(print (if (gt (gc-heap-size ()) 0) \"ok\" \"zero\"))"
+        [ "(print (if (gti (gc-heap-size ()) 0) \"ok\" \"zero\"))"
         ]) >>= (`shouldBe` "ok")
 
     it "ADT garbage is collected" $
       run (T.unlines
         [ "(TYPE Box () (MkBox))"
         , "(let ((make-garbage (lam (n)"
-        , "        (if (le n 0) 0"
+        , "        (if (lei n 0) 0"
         , "          (let ((_ MkBox)) (make-garbage (sub n 1))))))"
         , "      (do-rounds (lam (r)"
-        , "        (if (le r 0) 0"
+        , "        (if (lei r 0) 0"
         , "          (let ((_ (make-garbage 2000))) (do-rounds (sub r 1)))))))"
         , "  (let ((_ (do-rounds 50))"
         , "        (_ (gc-collect ()))"
@@ -1548,16 +1565,16 @@ spec = do
         , "        (_ (do-rounds 50))"
         , "        (_ (gc-collect ()))"
         , "        (h2 (gc-heap-size ())))"
-        , "    (print (if (lt h2 (mul h1 3)) \"bounded\" \"leak\"))))"
+        , "    (print (if (lti h2 (mul h1 3)) \"bounded\" \"leak\"))))"
         ]) >>= (`shouldBe` "bounded")
 
     it "closure garbage is collected" $
       run (T.unlines
         [ "(let ((make-closures (lam (n)"
-        , "        (if (le n 0) 0"
+        , "        (if (lei n 0) 0"
         , "          (let ((f (lam (x) (add x n)))) (make-closures (sub n 1))))))"
         , "      (do-rounds (lam (r)"
-        , "        (if (le r 0) 0"
+        , "        (if (lei r 0) 0"
         , "          (let ((_ (make-closures 2000))) (do-rounds (sub r 1)))))))"
         , "  (let ((_ (do-rounds 50))"
         , "        (_ (gc-collect ()))"
@@ -1565,17 +1582,17 @@ spec = do
         , "        (_ (do-rounds 50))"
         , "        (_ (gc-collect ()))"
         , "        (h2 (gc-heap-size ())))"
-        , "    (print (if (lt h2 (mul h1 3)) \"bounded\" \"leak\"))))"
+        , "    (print (if (lti h2 (mul h1 3)) \"bounded\" \"leak\"))))"
         ]) >>= (`shouldBe` "bounded")
 
     it "string garbage is collected" $
       run (T.unlines
         [ "(let ((make-strings (lam (n)"
-        , "        (if (le n 0) \"\""
+        , "        (if (lei n 0) \"\""
         , "          (let ((_ (concat \"hello\" (int-to-str n))))"
         , "            (make-strings (sub n 1))))))"
         , "      (do-rounds (lam (r)"
-        , "        (if (le r 0) 0"
+        , "        (if (lei r 0) 0"
         , "          (let ((_ (make-strings 2000))) (do-rounds (sub r 1)))))))"
         , "  (let ((_ (do-rounds 50))"
         , "        (_ (gc-collect ()))"
@@ -1583,14 +1600,14 @@ spec = do
         , "        (_ (do-rounds 50))"
         , "        (_ (gc-collect ()))"
         , "        (h2 (gc-heap-size ())))"
-        , "    (print (if (lt h2 (mul h1 3)) \"bounded\" \"leak\"))))"
+        , "    (print (if (lti h2 (mul h1 3)) \"bounded\" \"leak\"))))"
         ]) >>= (`shouldBe` "bounded")
 
   describe "tail call optimization" $ do
     it "tail-recursive countdown" $
       run (T.unlines
         [ "(let ((countdown (lam (n)"
-        , "  (if (le n 0) (print \"done\")"
+        , "  (if (lei n 0) (print \"done\")"
         , "    (countdown (sub n 1))))))"
         , "  (countdown 1000000))"
         ]) >>= (`shouldBe` "done")
@@ -1598,7 +1615,7 @@ spec = do
     it "tail-recursive accumulator" $
       run (T.unlines
         [ "(let ((sum-to (lam (n acc)"
-        , "  (if (le n 0) (print (int-to-str acc))"
+        , "  (if (lei n 0) (print (int-to-str acc))"
         , "    (sum-to (sub n 1) (add acc n))))))"
         , "  (sum-to 1000000 0))"
         ]) >>= (`shouldBe` "500000500000")
@@ -1606,7 +1623,7 @@ spec = do
     it "tail recursion with three params" $
       run (T.unlines
         [ "(let ((go (lam (n a b)"
-        , "  (if (le n 0) (print (int-to-str (add a b)))"
+        , "  (if (lei n 0) (print (int-to-str (add a b)))"
         , "    (go (sub n 1) (add a 1) (add b 2))))))"
         , "  (go 1000000 0 0))"
         ]) >>= (`shouldBe` "3000000")
@@ -1614,7 +1631,7 @@ spec = do
     it "tail recursion through let body" $
       run (T.unlines
         [ "(let ((loop (lam (n acc)"
-        , "  (if (le n 0) (print (int-to-str acc))"
+        , "  (if (lei n 0) (print (int-to-str acc))"
         , "    (let ((next (sub n 1))"
         , "          (new-acc (add acc n)))"
         , "      (loop next new-acc))))))"
@@ -2267,7 +2284,7 @@ multiModulePipeline modules mainSrc = do
   let (finalExports, finalTyped, finalMacros, finalEnvs) =
         foldl (compileOneMod modMap) (M.empty, [], [], TC.emptyTCEnvs) order
       mainSexprs = parseMod "MAIN" mainSrc
-      mainExpanded = case MacroExpand.expand (finalMacros ++ mainSexprs) of
+      mainExpanded = case MacroExpand.expandWith finalMacros mainSexprs of
         Left e  -> error ("main macro: " ++ e)
         Right s -> s
       mainProg = case SExpr.toProgram mainExpanded of
@@ -2277,7 +2294,9 @@ multiModulePipeline modules mainSrc = do
       preludeImport = CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports)
       allMainImports = preludeImport : CST.progImports mainProg
       (rScope, tcCtx, nMap) = Mod.buildImportScope finalExports allMainImports
-      mainExprs = Mod.desugarTopLevel (CST.progExprs mainProg)
+  mainExprs <- case Mod.desugarTopLevel (CST.progExprs mainProg) of
+    Left e  -> error ("main desugar: " ++ e)
+    Right e -> pure e
   case Resolve.resolveWith rScope nMap mainExprs of
     Left e  -> error ("main resolve: " ++ show e)
     Right resolved -> case TC.typecheckWith finalEnvs tcCtx resolved of
@@ -2294,7 +2313,7 @@ multiModulePipeline modules mainSrc = do
       let sexprs = modMap M.! modName
           thisMacros = MacroExpand.extractMacroDefs sexprs
           isPrelude = modName == "PRELUDE"
-          expanded = case MacroExpand.expand (accMacros ++ sexprs) of
+          expanded = case MacroExpand.expandWith accMacros sexprs of
             Left e  -> error ("macro " ++ T.unpack modName ++ ": " ++ e)
             Right s -> s
           modProg = case SExpr.toProgram expanded of
@@ -2305,7 +2324,9 @@ multiModulePipeline modules mainSrc = do
           allImports = if isPrelude then cstImports
                        else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
           (rScope, tcCtx, nMap) = Mod.buildImportScope accExports allImports
-          exprs = Mod.desugarTopLevel (CST.progExprs modProg)
+          exprs = case Mod.desugarTopLevel (CST.progExprs modProg) of
+            Left e  -> error ("desugar " ++ T.unpack modName ++ ": " ++ e)
+            Right e -> e
           (typed, modEnvs) = case Resolve.resolveWith rScope nMap exprs of
             Left e  -> error ("resolve " ++ T.unpack modName ++ ": " ++ show e)
             Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of

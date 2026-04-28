@@ -75,14 +75,13 @@ spec = do
         _ -> expectationFailure (show r)
 
   describe "macro redefinition" $ do
-    it "second definition replaces first" $ do
-      -- Second (mac foo) replaces the first, so calling with 2 args fails
+    it "rejects duplicate macro in same scope" $ do
       case expandSrc (T.unlines [ "(mac foo (a b) `(add ,a ,b))"
                                 , "(mac foo (x) `,x)"
                                 , "(foo 1 2)"
                                 ]) of
-        Left _ -> pure ()
-        Right _ -> expectationFailure "expected error: second definition should replace first"
+        Left e  -> e `shouldContain` "duplicate macro definition: FOO"
+        Right _ -> expectationFailure "expected duplicate macro error"
 
   describe "recursive expansion" $ do
     it "re-expands macro calls in expansion output" $ do

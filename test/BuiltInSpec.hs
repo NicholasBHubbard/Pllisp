@@ -13,8 +13,8 @@ import qualified Pllisp.Type as Ty
 spec :: Spec
 spec = do
   describe "builtInNames" $ do
-    it "has 52 entries" $
-      S.size BuiltIn.builtInNames `shouldBe` 52
+    it "has 56 entries" $
+      S.size BuiltIn.builtInNames `shouldBe` 56
 
     it "contains ADD, NOT, PRINT, FLT-TO-STR, EQF" $ do
       S.member "ADD"      BuiltIn.builtInNames `shouldBe` True

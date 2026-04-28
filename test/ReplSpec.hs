@@ -24,6 +24,7 @@ import qualified Pllisp.SrcLoc         as Loc
 import qualified Pllisp.Stdlib         as Stdlib
 import qualified Pllisp.Resolve        as Resolve
 import qualified Pllisp.TypeCheck      as TC
+import qualified Pllisp.Module         as Mod
 
 spec :: Spec
 spec = do
@@ -119,14 +120,16 @@ compileRound preludeSexprs stRef roundNum src = do
   let sexprs = case Parser.parseSExprs "<repl>" src of
         Left e -> error ("parse error: " ++ show e)
         Right s -> s
-      expanded = case MacroExpand.expand (preludeSexprs ++ sexprs) of
+      expanded = case MacroExpand.expandWith preludeSexprs sexprs of
         Left e -> error ("macro error: " ++ e)
         Right s -> s
       prog = case SExpr.toProgram expanded of
         Left e -> error ("sexpr error: " ++ SExpr.ceMsg e)
         Right p -> p
       -- Include accumulated defs (TYPE declarations etc.) before this round's exprs
-      exprs = rsPrevExprs st ++ CST.progExprs prog
+  exprs <- case Mod.desugarTopLevel (rsPrevExprs st ++ CST.progExprs prog) of
+    Left e -> error ("desugar error: " ++ e)
+    Right e -> pure e
   case Resolve.resolve (rsScope st) exprs of
     Left e -> error ("resolve error: " ++ show e)
     Right resolved -> case TC.typecheck (rsContext st) resolved of

@@ -1,0 +1,3 @@
+# Two let definitions with the same name at top level
+(let ((x 1)) (print (int-to-str x)))
+(let ((x 2)) (print (int-to-str x)))

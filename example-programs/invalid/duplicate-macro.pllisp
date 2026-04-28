@@ -1,0 +1,4 @@
+# Duplicate macro definition at same level
+(mac foo (x) `,x)
+(mac foo (a b) `(add ,a ,b))
+(foo 1)

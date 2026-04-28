@@ -289,7 +289,9 @@ spec = do
 -- Helpers
 
 desugar :: T.Text -> CST.CST
-desugar src = Mod.desugarTopLevel (CST.progExprs (parse src))
+desugar src = case Mod.desugarTopLevel (CST.progExprs (parse src)) of
+  Left e  -> error ("desugar: " ++ e)
+  Right r -> r
 
 parse :: T.Text -> CST.Program
 parse src = case Parser.parseProgram "<test>" src of

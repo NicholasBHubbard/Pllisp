@@ -22,12 +22,14 @@ import           System.FilePath (takeBaseName, takeFileName)
 -- continuing to subsequent expressions. Bare expressions become _ bindings.
 -- This preserves proper let-polymorphism (each let group is generalized before
 -- its body) while making cross-expression bindings visible.
-desugarTopLevel :: CST.CST -> CST.CST
+-- Returns Left on duplicate definitions at the same nesting level.
+desugarTopLevel :: CST.CST -> Either String CST.CST
 desugarTopLevel exprs =
   let (decls, rest) = partition isDeclLike exprs
-  in decls ++ case rest of
-    [] -> []
-    _  -> [buildNestedLet rest]
+  in do checkDuplicateBindings rest
+        Right $ decls ++ case rest of
+          [] -> []
+          _  -> [buildNestedLet rest]
   where
     isDeclLike (Loc.Located _ e) = case e of
       CST.ExprType{}        -> True
@@ -58,6 +60,26 @@ desugarTopLevel exprs =
     partition _ [] = ([], [])
     partition p (x:xs) = let (ys, ns) = partition p xs
                          in if p x then (x:ys, ns) else (ys, x:ns)
+
+-- | Check for duplicate binding names at the same nesting level.
+-- Walks sequential expressions collecting names from let bindings;
+-- reports the first duplicate found.
+checkDuplicateBindings :: CST.CST -> Either String ()
+checkDuplicateBindings = go S.empty
+  where
+    go _ [] = Right ()
+    go seen (Loc.Located _ (CST.ExprLet binds body) : rest) = do
+      seen' <- checkBinds seen binds
+      -- The body is at a deeper nesting level — don't check it here.
+      -- But subsequent expressions at this level continue the check.
+      go seen' rest
+    go seen (_ : rest) = go seen rest
+
+    checkBinds seen [] = Right seen
+    checkBinds seen ((CST.TSymbol name _, _) : bs)
+      | name == "_"      = checkBinds seen bs
+      | S.member name seen = Left ("duplicate top-level definition: " ++ T.unpack name)
+      | otherwise        = checkBinds (S.insert name seen) bs
 
 -- EXPORT COLLECTION
 
@@ -115,8 +137,9 @@ mergeImportedCode importedModules localTyped =
       TC.TRFFICallback{} -> True
       _                  -> False
 
+    wrapCode []       = unitExpr
     wrapCode [single] = single
-    wrapCode _        = unitExpr
+    wrapCode (x:xs)   = mkTypedLet [("_", TC.typeOf x, x)] (wrapCode xs)
 
     mkTypedLet binds body =
       Loc.Located dummySp (Ty.Typed (TC.typeOf body) (TC.TRLet binds body))

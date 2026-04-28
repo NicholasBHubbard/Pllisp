@@ -1,0 +1,4 @@
+# A fun inside a let body can shadow an outer fun — this is fine
+(fun f ((x %INT)) x)
+(let ((result (let ((f (lam ((x %INT)) (add x 1)))) (f 5))))
+  (print (int-to-str result)))

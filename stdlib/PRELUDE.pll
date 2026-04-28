@@ -80,6 +80,48 @@
 (inst TRUTHY %(Either a b)
   (truthy (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))
 
+### EQ
+
+(cls EQ () (a) (eq %a %a %BOOL))
+
+(inst EQ %INT
+  (eq (lam ((a %INT) (b %INT)) (eqi a b))))
+
+(inst EQ %FLT
+  (eq (lam ((a %FLT) (b %FLT)) (eqf a b))))
+
+(inst EQ %STR
+  (eq (lam ((a %STR) (b %STR)) (eqs a b))))
+
+(inst EQ %BOOL
+  (eq (lam ((a %BOOL) (b %BOOL)) (if a b (not b)))))
+
+### ORD
+
+(cls ORD (EQ) (a)
+  (lt %a %a %BOOL)
+  (gt %a %a %BOOL)
+  (le %a %a %BOOL)
+  (ge %a %a %BOOL))
+
+(inst ORD %INT
+  (lt (lam ((a %INT) (b %INT)) (lti a b)))
+  (gt (lam ((a %INT) (b %INT)) (gti a b)))
+  (le (lam ((a %INT) (b %INT)) (lei a b)))
+  (ge (lam ((a %INT) (b %INT)) (gei a b))))
+
+(inst ORD %FLT
+  (lt (lam ((a %FLT) (b %FLT)) (ltf a b)))
+  (gt (lam ((a %FLT) (b %FLT)) (gtf a b)))
+  (le (lam ((a %FLT) (b %FLT)) (lef a b)))
+  (ge (lam ((a %FLT) (b %FLT)) (gef a b))))
+
+(inst ORD %STR
+  (lt (lam ((a %STR) (b %STR)) (lts a b)))
+  (gt (lam ((a %STR) (b %STR)) (gts a b)))
+  (le (lam ((a %STR) (b %STR)) (les a b)))
+  (ge (lam ((a %STR) (b %STR)) (ges a b))))
+
 ### STRINGY
 
 (cls STRINGY () (a) (str %a %STR))

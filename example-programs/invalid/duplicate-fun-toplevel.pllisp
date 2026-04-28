@@ -1,0 +1,4 @@
+# Two fun definitions with the same name at top level
+(fun f ((x %INT)) x)
+(fun f ((y %INT)) (add y 1))
+(print (int-to-str (f 5)))

@@ -5,7 +5,7 @@
 1
 -5
 eqi: true
-lt: true
+lti: true
 and: false
 or: true
 not: false

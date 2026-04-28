@@ -54,7 +54,7 @@ compileFile fp = do
       case macroResult of
         Left err -> putStrLn ("import error: " ++ err)
         Right importedMacros ->
-          case MacroExpand.expand (importedMacros ++ sexprs) of
+          case MacroExpand.expandWith importedMacros sexprs of
             Left err -> putStrLn ("macro error: " ++ err)
             Right expanded ->
               case SExpr.toProgram expanded of
@@ -83,8 +83,9 @@ compileProg fp src render prog = do
         Left err -> putStrLn err
         Right () -> do
           let (resolveScope, tcCtx, normMap) = Mod.buildImportScope exportMap fixedImports
-              exprs = Mod.desugarTopLevel (CST.progExprs prog)
-          case Resolve.resolveWith resolveScope normMap exprs of
+          case Mod.desugarTopLevel (CST.progExprs prog) of
+            Left err -> putStrLn ("desugar error: " ++ err)
+            Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
             Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
             Right resolved ->
               case TC.typecheckWith importedEnvs tcCtx resolved of
@@ -186,7 +187,7 @@ compileModules moduleInfos (modName : rest) accExports accTyped accEnvs =
       case macroResult of
         Left err -> pure (Left err)
         Right importedMacros ->
-          case MacroExpand.expand (importedMacros ++ sexprs) of
+          case MacroExpand.expandWith importedMacros sexprs of
             Left err -> pure (Left ("macro error in " ++ T.unpack modName ++ ": " ++ err))
             Right expanded -> case SExpr.toProgram expanded of
               Left err -> pure (Left ("syntax error in " ++ T.unpack modName
@@ -201,8 +202,9 @@ compileModules moduleInfos (modName : rest) accExports accTyped accEnvs =
                   Right () -> do
                     let (resolveScope, tcCtx, normMap) =
                           Mod.buildImportScope accExports allImports
-                        exprs = Mod.desugarTopLevel (CST.progExprs modProg)
-                    case Resolve.resolveWith resolveScope normMap exprs of
+                    case Mod.desugarTopLevel (CST.progExprs modProg) of
+                      Left err -> pure (Left ("desugar error in " ++ T.unpack modName ++ ": " ++ err))
+                      Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
                       Left errs -> do
                         src <- T.IO.readFile (miPath info)
                         pure (Left (concatMap (\e ->

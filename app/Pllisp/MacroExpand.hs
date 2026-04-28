@@ -2,7 +2,7 @@
 
 -- MODULE
 
-module Pllisp.MacroExpand (expand, extractMacroDefs) where
+module Pllisp.MacroExpand (expand, expandWith, extractMacroDefs) where
 
 import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
@@ -42,24 +42,32 @@ maxDepth = 256
 -- ENTRY POINT
 
 expand :: [SExpr.SExpr] -> Either String [SExpr.SExpr]
-expand sexprs =
-  let (macros, rest) = collectMacros M.empty sexprs
-  in State.evalStateT (mapM (expandExpr macros 0) rest) 0
+expand = expandWith []
+
+-- | Expand with imported macro sexprs pre-seeded (not subject to duplicate check).
+expandWith :: [SExpr.SExpr] -> [SExpr.SExpr] -> Either String [SExpr.SExpr]
+expandWith importedMacros localSexprs = do
+  (baseTable, _) <- collectMacros M.empty importedMacros
+  (macros, rest) <- collectMacros baseTable localSexprs
+  State.evalStateT (mapM (expandExpr macros 0) rest) 0
 
 -- COLLECT MACRO DEFINITIONS
 
 -- Walk top-level sexprs, collect (mac ...) forms into the table,
 -- return remaining non-macro sexprs.
-collectMacros :: MacroTable -> [SExpr.SExpr] -> (MacroTable, [SExpr.SExpr])
-collectMacros table [] = (table, [])
+collectMacros :: MacroTable -> [SExpr.SExpr] -> Either String (MacroTable, [SExpr.SExpr])
+collectMacros table [] = Right (table, [])
 collectMacros table (sx : rest) = case Loc.locVal sx of
   SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : macRest) ->
     case parseMacDef macRest of
-      Right (name, clause) ->
-        collectMacros (M.insert name clause table) rest
+      Right (name, clause)
+        | M.member name table ->
+            Left ("duplicate macro definition: " ++ T.unpack name)
+        | otherwise ->
+            collectMacros (M.insert name clause table) rest
       Left _ -> collectMacros table rest
-  _ -> let (table', rest') = collectMacros table rest
-       in (table', sx : rest')
+  _ -> do (table', rest') <- collectMacros table rest
+          Right (table', sx : rest')
 
 parseMacDef :: [SExpr.SExpr] -> Either String (T.Text, MacroClause)
 parseMacDef [Loc.Located _ (SExpr.SAtom name), Loc.Located _ (SExpr.SList paramSxs), template] = do

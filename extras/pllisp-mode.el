@@ -15,9 +15,10 @@
 (defconst pllisp-builtins
   '("add" "sub" "mul" "div" "mod" "neg"
     "addf" "subf" "mulf" "divf" "negf"
-    "eqi" "lt" "gt" "le" "ge"
+    "eqi" "lti" "gti" "lei" "gei"
     "eqf" "ltf" "gtf" "lef" "gef"
-    "eqs" "and" "or" "not"
+    "eqs" "lts" "gts" "les" "ges"
+    "and" "or" "not"
     "concat" "strlen" "substr" "str-contains"
     "print" "read-line" "is-eof"
     "argc" "argv"
