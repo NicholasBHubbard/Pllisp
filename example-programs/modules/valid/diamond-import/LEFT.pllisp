@@ -1,0 +1,3 @@
+(module LEFT)
+(import SHARED (inc))
+(fun inc-twice (x) (inc (inc x)))

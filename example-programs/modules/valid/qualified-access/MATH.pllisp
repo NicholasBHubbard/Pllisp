@@ -1,0 +1,2 @@
+(module MATH)
+(fun square (x) (mul x x))

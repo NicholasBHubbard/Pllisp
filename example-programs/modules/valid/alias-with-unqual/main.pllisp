@@ -1,0 +1,4 @@
+# Use alias M for qualified access, and bring square into scope unqualified
+(import MATH M (square))
+(print (int-to-str (square 6)))
+(print (int-to-str (M.cube 2)))

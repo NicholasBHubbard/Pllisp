@@ -1,0 +1,3 @@
+(import SHAPES (Circle Rect area))
+(print (int-to-str (area (Circle 5))))
+(print (int-to-str (area (Rect 3 4))))

@@ -1,0 +1,2 @@
+(import A (from-a))
+(print (int-to-str (from-a 5)))

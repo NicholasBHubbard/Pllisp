@@ -1,0 +1,3 @@
+(module MATH)
+(fun square (x) (mul x x))
+(fun cube (x) (mul x (mul x x)))

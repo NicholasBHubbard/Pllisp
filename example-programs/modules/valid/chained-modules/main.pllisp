@@ -1,0 +1,2 @@
+(import MIDDLE (quadruple))
+(print (int-to-str (quadruple 3)))

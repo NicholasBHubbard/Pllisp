@@ -1,0 +1,2 @@
+(module BASE)
+(fun double (x) (mul 2 x))

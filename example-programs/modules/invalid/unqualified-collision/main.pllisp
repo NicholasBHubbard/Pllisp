@@ -1,0 +1,4 @@
+# Both FOO and BAR export helper; importing both unqualified is ambiguous
+(import FOO (helper))
+(import BAR (helper))
+(print (int-to-str (helper 5)))

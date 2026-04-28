@@ -244,7 +244,7 @@ dependencyOrder deps = go S.empty S.empty (M.keys deps) []
             Right (visited', childAcc) ->
               case goChildren (S.insert c visited') (S.delete c visiting') cs of
                 Left err -> Left err
-                Right (visited'', csAcc) -> Right (visited'', c : childAcc ++ csAcc)
+                Right (visited'', csAcc) -> Right (visited'', csAcc ++ childAcc ++ [c])
 
 -- MODULE NAME VALIDATION
 

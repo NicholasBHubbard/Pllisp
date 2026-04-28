@@ -1,0 +1,3 @@
+(module A)
+(import B)
+(fun from-a (x) (add x 1))

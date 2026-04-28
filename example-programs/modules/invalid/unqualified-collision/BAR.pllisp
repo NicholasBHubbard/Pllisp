@@ -1,0 +1,2 @@
+(module BAR)
+(fun helper (x) (mul x 2))

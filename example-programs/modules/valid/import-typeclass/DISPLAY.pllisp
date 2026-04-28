@@ -1,0 +1,7 @@
+(module DISPLAY)
+(cls DISPLAY () (a)
+  (display %a %STR))
+(inst DISPLAY %INT
+  (display (lam ((x %INT)) (int-to-str x))))
+(inst DISPLAY %STR
+  (display (lam ((x %STR)) (concat "\"" (concat x "\"")))))

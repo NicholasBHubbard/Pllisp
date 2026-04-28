@@ -1,0 +1,8 @@
+(module SHAPES)
+(type Shape ()
+  (Circle %INT)
+  (Rect %INT %INT))
+(fun area (s)
+  (case s
+    ((Circle r) (mul r r))
+    ((Rect w h) (mul w h))))

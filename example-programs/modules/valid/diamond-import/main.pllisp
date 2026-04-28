@@ -1,0 +1,4 @@
+(import LEFT (inc-twice))
+(import RIGHT (inc-thrice))
+(print (int-to-str (inc-twice 10)))
+(print (int-to-str (inc-thrice 10)))

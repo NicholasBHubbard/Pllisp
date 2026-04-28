@@ -1,0 +1,3 @@
+(module HELPER)
+(fun double (x) (mul 2 x))
+(fun triple (x) (mul 3 x))
