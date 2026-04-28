@@ -4,6 +4,56 @@ A Lisp programming language that compiles to LLVM.
 
 This project is currently in development.
 
+## Getting Started
+
+### Requirements
+
+- GHC and `cabal`
+- `clang`
+- native libraries for `pcre2`, `libgc`, and `libffi`
+
+The compiler lowers programs to LLVM IR, then invokes `clang` to link an
+executable.
+
+### Build
+
+```sh
+cabal build
+```
+
+### Run the Compiler
+
+```sh
+cabal run pllisp -- example-programs/valid/hello.pllisp
+./example-programs/valid/hello
+```
+
+The compiler writes the executable next to the input file, using the same
+basename.
+
+The entry file can use any filename you pass on the command line. Imported
+modules are different: they are resolved as exact `MODULE.pll` filenames.
+
+### Run Tests
+
+```sh
+cabal test pllisp-test
+```
+
+## Manual
+
+Start with [Overview](doc/overview.md), then use the docs under [`doc/`](doc):
+
+- [Naming Conventions](doc/conventions.md)
+- [Expressions](doc/expressions.md)
+- [Types](doc/types.md)
+- [Typeclasses](doc/typeclasses.md)
+- [Macros](doc/macros.md)
+- [Modules](doc/modules.md)
+- [FFI](doc/ffi.md)
+- [Standard Library](doc/stdlib.md)
+- [Reference](doc/reference.md)
+
 ## AI Usage Statement
 
 This project was developed collaboratively by Nicholas B. Hubbard (student) and Claude (Anthropic's AI assistant, via Claude Code). Per course policy, the AI is treated as a team member on a group project.

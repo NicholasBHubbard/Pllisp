@@ -2,8 +2,12 @@
 
 ## Declaring a Module
 
-The `module` declaration must be the first form in the file, and the name
-must match the filename (case-insensitive):
+The compiler scans the whole file for a `module` declaration. It does not
+enforce that `module` is the first form, but keeping it at the top is the
+least confusing style.
+
+For the file being compiled directly, the declared module name must match the
+file basename case-insensitively:
 
 ```
 # File: MATH.pll
@@ -15,6 +19,10 @@ must match the filename (case-insensitive):
 
 ## Imports
 
+The compiler scans the whole file for `import` declarations. It does not
+enforce that they appear immediately after `module`, but keeping them grouped
+near the top is recommended.
+
 ```
 (import MATH)              # qualified access only: MATH.square
 (import MATH (square))     # also bring square into scope
@@ -22,14 +30,40 @@ must match the filename (case-insensitive):
 (import MATH M (square))   # alias + unqualified
 ```
 
-Import declarations must appear after the `module` declaration and before any
-other code.
+Imported modules are resolved as exact `MODULE.pll` filenames in the current
+directory first, then in the stdlib directory. On a case-sensitive filesystem,
+`(import MATH)` looks for `MATH.pll`, not `math.pll`.
+
+The main entry file may use whatever filename you pass to the CLI. Imported
+support files must be named `MODULE.pll`.
+
+If you use an alias, that alias replaces the original qualifier:
+
+```
+(import MATH M)
+(print (int-to-str (M.square 5)))   # ok
+```
+
+`MATH.square` is not in scope in that program.
+
+Unqualified import lists are validated. If you request a name the module does
+not export, compilation fails.
 
 ## Exports
 
-Everything defined at the top level is exported automatically: `let` bindings
-(except `_`), type constructors, and typeclass methods. There is no explicit
-export list.
+There is no explicit export list.
+
+Currently exported automatically:
+
+- top-level `let` bindings, except `_`
+- data constructors from `type` declarations
+- typeclass methods
+
+Not currently exported across modules:
+
+- top-level `ffi`, `ffi-var`, `ffi-struct`, `ffi-enum`, and `ffi-callback`
+  declarations
+- declaration names like the type name itself or the class name itself
 
 ## Qualified Access
 
@@ -49,5 +83,9 @@ The `PRELUDE` module is implicitly imported into every program. It provides
 the standard types (`List`, `Maybe`, `Either`, `Pair`, `Unit`), control flow
 macros (`fun`, `progn`, `if_`, `when`, `unless`, `cond`, etc.), and
 typeclasses (`TRUTHY`, `STRINGY`).
+
+Do not write an explicit `(import PRELUDE)`. The compiler already injects it,
+and an explicit import currently fails with duplicate PRELUDE macro
+definitions.
 
 See [Standard Library](stdlib.md) for full details.

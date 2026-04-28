@@ -2,7 +2,9 @@
 
 ## Reserved Words
 
-These cannot be used as variable names:
+These cannot be used where the program introduces a name, such as `let`
+bindings, lambda parameters, rest/optional/keyword parameters, or pattern
+variables:
 
 `lam`, `let`, `if`, `true`, `false`, `unit`, `type`, `case`, `module`, `import`
 
