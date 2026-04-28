@@ -1,0 +1,3 @@
+# Passing a non-function where a function is expected
+(let ((apply (lam (f x) (f x))))
+  (print (int-to-str (apply 42 1))))

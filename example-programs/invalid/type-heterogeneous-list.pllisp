@@ -1,0 +1,3 @@
+# List elements must have the same type
+(let ((xs (Cons 1 (Cons "two" Empty))))
+  (print "ok"))

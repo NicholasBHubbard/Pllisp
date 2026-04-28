@@ -1,0 +1,3 @@
+# Using eq on a type with no EQ instance
+(type Color () (Red) (Green) (Blue))
+(print (if (eq Red Green) "same" "diff"))

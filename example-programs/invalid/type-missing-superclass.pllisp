@@ -1,0 +1,8 @@
+# ORD requires EQ superclass — Wrapper has no EQ instance
+(type Wrapper () (Wrap %INT))
+(inst ORD %(Wrapper)
+  (lt (lam ((a %(Wrapper)) (b %(Wrapper))) true))
+  (gt (lam ((a %(Wrapper)) (b %(Wrapper))) false))
+  (le (lam ((a %(Wrapper)) (b %(Wrapper))) true))
+  (ge (lam ((a %(Wrapper)) (b %(Wrapper))) false)))
+(print "ok")

@@ -1,0 +1,4 @@
+# Two type definitions with the same name
+(type Foo () (A) (B))
+(type Foo () (X) (Y))
+(print "ok")

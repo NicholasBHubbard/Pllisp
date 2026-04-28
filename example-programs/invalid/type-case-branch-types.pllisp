@@ -1,0 +1,5 @@
+# Case branches return different types (STR vs INT)
+(let ((x (Just 42)))
+  (case x
+    ((Just n) (int-to-str n))
+    ((Nothing) 0)))

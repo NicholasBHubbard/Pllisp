@@ -26,7 +26,8 @@ import           System.FilePath (takeBaseName, takeFileName)
 desugarTopLevel :: CST.CST -> Either String CST.CST
 desugarTopLevel exprs =
   let (decls, rest) = partition isDeclLike exprs
-  in do checkDuplicateBindings rest
+  in do checkDuplicateDecls decls
+        checkDuplicateBindings rest
         Right $ decls ++ case rest of
           [] -> []
           _  -> [buildNestedLet rest]
@@ -80,6 +81,20 @@ checkDuplicateBindings = go S.empty
       | name == "_"      = checkBinds seen bs
       | S.member name seen = Left ("duplicate top-level definition: " ++ T.unpack name)
       | otherwise        = checkBinds (S.insert name seen) bs
+
+checkDuplicateDecls :: CST.CST -> Either String ()
+checkDuplicateDecls = go S.empty
+  where
+    go _ [] = Right ()
+    go seen (Loc.Located _ e : rest) = case declInfo e of
+      Just (kind, name)
+        | S.member name seen -> Left ("duplicate " ++ kind ++ " definition: " ++ T.unpack name)
+        | otherwise          -> go (S.insert name seen) rest
+      Nothing -> go seen rest
+
+    declInfo (CST.ExprType name _ _)  = Just ("type", name)
+    declInfo (CST.ExprCls name _ _ _) = Just ("typeclass", name)
+    declInfo _                        = Nothing
 
 -- EXPORT COLLECTION
 

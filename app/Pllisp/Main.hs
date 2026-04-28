@@ -86,32 +86,32 @@ compileProg fp src render prog = do
           case Mod.desugarTopLevel (CST.progExprs prog) of
             Left err -> putStrLn ("desugar error: " ++ err)
             Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
-            Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
-            Right resolved ->
-              case TC.typecheckWith importedEnvs tcCtx resolved of
-                Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
-                Right (typed, _) -> do
-                  let merged = Mod.mergeImportedCode importedTypedModules typed
-                  case Exhaust.exhaustCheck merged of
-                    errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
-                    [] -> do
-                      let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
-                          base = dropExtension fp
-                          llFile = base ++ ".ll"
-                          bridgeFile = base ++ "_ffi_bridge.c"
-                          exeFile = base
-                      T.IO.writeFile llFile ir
-                      T.IO.writeFile bridgeFile Ty.ffiBridgeC
-                      (ec, _, err') <- readProcessWithExitCode
-                        "clang" [llFile, bridgeFile, "-o", exeFile,
-                                 "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-                      removeFile bridgeFile
-                      case ec of
-                        ExitFailure _ -> do
-                          putStrLn ("clang failed:\n" ++ err')
-                          exitFailure
-                        ExitSuccess ->
-                          putStrLn ("compiled: " ++ exeFile)
+              Left errs -> mapM_ (\e -> render "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs
+              Right resolved ->
+                case TC.typecheckWith importedEnvs tcCtx resolved of
+                  Left errs -> mapM_ (\e -> render "type" (TC.teSpan e) (TC.teMsg e)) errs
+                  Right (typed, _) -> do
+                    let merged = Mod.mergeImportedCode importedTypedModules typed
+                    case Exhaust.exhaustCheck merged of
+                      errs@(_:_) -> mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
+                      [] -> do
+                        let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+                            base = dropExtension fp
+                            llFile = base ++ ".ll"
+                            bridgeFile = base ++ "_ffi_bridge.c"
+                            exeFile = base
+                        T.IO.writeFile llFile ir
+                        T.IO.writeFile bridgeFile Ty.ffiBridgeC
+                        (ec, _, err') <- readProcessWithExitCode
+                          "clang" [llFile, bridgeFile, "-o", exeFile,
+                                   "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+                        removeFile bridgeFile
+                        case ec of
+                            ExitFailure _ -> do
+                              putStrLn ("clang failed:\n" ++ err')
+                              exitFailure
+                            ExitSuccess ->
+                              putStrLn ("compiled: " ++ exeFile)
 
 -- | Scanned module info (before compilation).
 data ModuleInfo = ModuleInfo
@@ -205,20 +205,20 @@ compileModules moduleInfos (modName : rest) accExports accTyped accEnvs =
                     case Mod.desugarTopLevel (CST.progExprs modProg) of
                       Left err -> pure (Left ("desugar error in " ++ T.unpack modName ++ ": " ++ err))
                       Right exprs -> case Resolve.resolveWith resolveScope normMap exprs of
-                      Left errs -> do
-                        src <- T.IO.readFile (miPath info)
-                        pure (Left (concatMap (\e ->
-                          Error.renderError src "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs))
-                      Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
                         Left errs -> do
                           src <- T.IO.readFile (miPath info)
                           pure (Left (concatMap (\e ->
-                            Error.renderError src "type" (TC.teSpan e) (TC.teMsg e)) errs))
-                        Right (typed, modEnvs) -> do
-                          let exports = Mod.collectExports modEnvs typed
-                              accExports' = M.insert modName exports accExports
-                          compileModules moduleInfos rest
-                            accExports' (accTyped ++ [typed]) modEnvs
+                            Error.renderError src "resolve" (Resolve.errSpan e) (Resolve.errMsg e)) errs))
+                        Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
+                          Left errs -> do
+                            src <- T.IO.readFile (miPath info)
+                            pure (Left (concatMap (\e ->
+                              Error.renderError src "type" (TC.teSpan e) (TC.teMsg e)) errs))
+                          Right (typed, modEnvs) -> do
+                            let exports = Mod.collectExports modEnvs typed
+                                accExports' = M.insert modName exports accExports
+                            compileModules moduleInfos rest
+                              accExports' (accTyped ++ [typed]) modEnvs
 
 -- | Find a module file, checking source directory first, then stdlib.
 findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)

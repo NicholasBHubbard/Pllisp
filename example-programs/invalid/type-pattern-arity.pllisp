@@ -1,0 +1,5 @@
+# Pattern has wrong number of fields for constructor
+(type Pair (a b) (MkPair a b))
+(let ((p (MkPair 1 2)))
+  (case p
+    ((MkPair x) (print (int-to-str x)))))
