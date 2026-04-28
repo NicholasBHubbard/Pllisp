@@ -164,23 +164,30 @@ mergeImportedCode importedModules localTyped =
 
 -- IMPORT SCOPE BUILDING
 
--- | Check for unqualified name collisions across imports.
--- Returns Left with error message if the same unqualified name is imported
--- from multiple modules.
+-- | Validate unqualified imports.
+-- Returns Left if an import requests an unqualified name the module does not
+-- export, or if the same unqualified name is imported from multiple modules.
 checkImportCollisions
   :: M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)
   -> [CST.Import]
   -> Either String ()
 checkImportCollisions exports imports =
-  let unqualPairs = concatMap getUnquals imports
+  let missing = concatMap getMissing imports
+      unqualPairs = concatMap getUnquals imports
       grouped = M.fromListWith (++) [(n, [m]) | (n, m) <- unqualPairs]
       collisions = M.filter (\ms -> length ms > 1) grouped
-  in if M.null collisions then Right ()
+  in if not (null missing) then Left (unlines missing)
+     else if M.null collisions then Right ()
      else Left $ unlines
        [ "ambiguous import: " ++ T.unpack name ++ " is imported unqualified from "
          ++ T.unpack (T.intercalate ", " mods)
        | (name, mods) <- M.toList collisions]
   where
+    getMissing (CST.Import modName _ unquals) =
+      let modExports = M.findWithDefault M.empty modName exports
+      in [ "module " ++ T.unpack modName ++ " does not export " ++ T.unpack n
+         | n <- unquals, M.notMember n modExports
+         ]
     getUnquals (CST.Import modName _ unquals) =
       let modExports = M.findWithDefault M.empty modName exports
       in [(n, modName) | n <- unquals, M.member n modExports]

@@ -125,6 +125,12 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
   SList (Loc.Located _ (SAtom "FFI-VAR") : rest) -> Loc.Located sp <$> toFFIVar sp rest
   SList (Loc.Located _ (SAtom "FFI-ENUM") : rest) -> Loc.Located sp <$> toFFIEnum sp rest
   SList (Loc.Located _ (SAtom "FFI-CALLBACK") : rest) -> Loc.Located sp <$> toFFICallback sp rest
+  SList (Loc.Located _ (SAtom "MODULE") : _) ->
+    Left $ ConvertError sp "invalid module declaration"
+  SList (Loc.Located _ (SAtom "IMPORT") : _) ->
+    Left $ ConvertError sp "invalid import"
+  SList (Loc.Located _ (SAtom "MAC") : _) ->
+    Left $ ConvertError sp "invalid mac definition"
   SList [Loc.Located _ (SAtom dotName), arg]
     | Just field <- T.stripPrefix "." dotName -> do
         arg' <- toExpr arg

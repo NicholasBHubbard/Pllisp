@@ -65,7 +65,7 @@ collectMacros table (sx : rest) = case Loc.locVal sx of
             Left ("duplicate macro definition: " ++ T.unpack name)
         | otherwise ->
             collectMacros (M.insert name clause table) rest
-      Left _ -> collectMacros table rest
+      Left err -> Left err
   _ -> do (table', rest') <- collectMacros table rest
           Right (table', sx : rest')
 

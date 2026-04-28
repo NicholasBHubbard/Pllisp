@@ -239,6 +239,13 @@ spec = do
           imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" []]
       Mod.checkImportCollisions exports imports `shouldBe` Right ()
 
+    it "rejects unqualified names a module does not export" $ do
+      let exports = M.singleton "A" (M.singleton "X" (TC.Forall S.empty Ty.TyInt))
+          imports = [CST.Import "A" "A" ["Y"]]
+      case Mod.checkImportCollisions exports imports of
+        Left err  -> err `shouldContain` "module A does not export Y"
+        Right _ -> expectationFailure "expected missing export error"
+
   describe "mergeImportedCode" $ do
     it "prepends imported type decls" $ do
       let importedTyped = typecheckSrc "(type M (a) (N) (J a))"

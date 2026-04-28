@@ -71,6 +71,7 @@ executable pllisp
                       Pllisp.ClosureConvert,
                       Pllisp.Codegen,
                       Pllisp.CST,
+                      Pllisp.Driver,
                       Pllisp.Error,
                       Pllisp.ExhaustCheck,
                       Pllisp.LambdaLift,
@@ -115,6 +116,7 @@ test-suite pllisp-test
     main-is:          Spec.hs
     ghc-options:      -fhpc -rtsopts "-with-rtsopts=--read-tix-file=no"
     other-modules:    BuiltInSpec,
+                      DriverSpec,
                       ClosureConvertSpec,
                       CodegenSpec,
                       ErrorSpec,
@@ -135,6 +137,7 @@ test-suite pllisp-test
                       Pllisp.ClosureConvert,
                       Pllisp.Codegen,
                       Pllisp.CST,
+                      Pllisp.Driver,
                       Pllisp.Error,
                       Pllisp.ExhaustCheck,
                       Pllisp.LambdaLift,
