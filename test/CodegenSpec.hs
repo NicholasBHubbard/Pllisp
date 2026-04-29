@@ -1161,6 +1161,13 @@ spec = do
         , "(my-when true (print \"ok\"))"
         ]) >>= (`shouldBe` "ok")
 
+    it "fun macro accepts an explicit return annotation" $ do
+      run (T.unlines
+        [ "(fun inc ((x %INT)) %INT"
+        , "  (add x 1))"
+        , "(print (int-to-str (inc 41)))"
+        ]) >>= (`shouldBe` "42")
+
     it "macro with type annotations" $ do
       run (T.unlines
         [ "(mac typed-id (x) `,x)"

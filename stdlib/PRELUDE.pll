@@ -1,8 +1,13 @@
 (module PRELUDE)
 
-(mac fun (name params body)
-  `(let ((,name (lam ,params ,body)))
-    ,name))
+(mac fun (name params &rest rest)
+  (if (eq (length rest) 1)
+    `(let ((,name (lam ,params ,(car rest))))
+      ,name)
+    (if (eq (length rest) 2)
+      `(let ((,name (lam ,params ,(car rest) ,(car (cdr rest)))))
+        ,name)
+      (error "fun expects (fun name params body) or (fun name params %type body)"))))
 
 (type List (a)
   (Empty)
@@ -70,49 +75,44 @@
       `(if ,(car args) true (or ,@(cdr args))))))
 
 (eval-when (:compile-toplevel)
-  (let ((append (lam (xs ys)
+  (fun append (xs ys)
     (if (list? xs)
       (if (list? ys)
         (if (null? xs)
           ys
           (cons (car xs) (append (cdr xs) ys)))
         (error "append: arguments must be lists"))
-      (error "append: arguments must be lists")))))
-    append)
+      (error "append: arguments must be lists")))
 
-  (let ((reverse (lam (xs)
+  (fun reverse (xs)
     (if (list? xs)
       (if (null? xs)
         ()
         (append (reverse (cdr xs)) (cons (car xs) ())))
-      (error "reverse: not a list")))))
-    reverse)
+      (error "reverse: not a list")))
 
-  (let ((map (lam (fn xs)
+  (fun map (fn xs)
     (if (list? xs)
       (if (null? xs)
         ()
         (cons (fn (car xs)) (map fn (cdr xs))))
-      (error "map: second argument must be a list")))))
-    map)
+      (error "map: second argument must be a list")))
 
-  (let ((filter (lam (fn xs)
+  (fun filter (fn xs)
     (if (list? xs)
       (if (null? xs)
         ()
         (if (fn (car xs))
           (cons (car xs) (filter fn (cdr xs)))
           (filter fn (cdr xs))))
-      (error "filter: second argument must be a list")))))
-    filter)
+      (error "filter: second argument must be a list")))
 
-  (let ((foldl (lam (fn acc xs)
+  (fun foldl (fn acc xs)
     (if (list? xs)
       (if (null? xs)
         acc
         (foldl fn (fn acc (car xs)) (cdr xs)))
-      (error "foldl: third argument must be a list")))))
-    foldl))
+      (error "foldl: third argument must be a list"))))
 
 (ffi pll-print (%STR) %VOID)
 (ffi pll-read-line (%INT) %PTR)
@@ -221,125 +221,98 @@
 (inst STRINGY %USYM
   (str (lam ((x %USYM)) (usym-to-str x))))
 
-(let ((not (lam ((x %BOOL)) %BOOL
-  (if x false true))))
-  not)
+(fun not ((x %BOOL)) %BOOL
+  (if x false true))
 
-(let ((neg (lam ((x %INT)) %INT
-  (sub 0 x))))
-  neg)
+(fun neg ((x %INT)) %INT
+  (sub 0 x))
 
-(let ((negf (lam ((x %FLT)) %FLT
-  (subf 0.0 x))))
-  negf)
+(fun negf ((x %FLT)) %FLT
+  (subf 0.0 x))
 
-(let ((gti (lam ((a %INT) (b %INT)) %BOOL
-  (lti b a))))
-  gti)
+(fun gti ((a %INT) (b %INT)) %BOOL
+  (lti b a))
 
-(let ((lei (lam ((a %INT) (b %INT)) %BOOL
-  (if (lti a b) true (eqi a b)))))
-  lei)
+(fun lei ((a %INT) (b %INT)) %BOOL
+  (if (lti a b) true (eqi a b)))
 
-(let ((gei (lam ((a %INT) (b %INT)) %BOOL
-  (if (lti b a) true (eqi a b)))))
-  gei)
+(fun gei ((a %INT) (b %INT)) %BOOL
+  (if (lti b a) true (eqi a b)))
 
-(let ((gtf (lam ((a %FLT) (b %FLT)) %BOOL
-  (ltf b a))))
-  gtf)
+(fun gtf ((a %FLT) (b %FLT)) %BOOL
+  (ltf b a))
 
-(let ((lef (lam ((a %FLT) (b %FLT)) %BOOL
-  (if (ltf a b) true (eqf a b)))))
-  lef)
+(fun lef ((a %FLT) (b %FLT)) %BOOL
+  (if (ltf a b) true (eqf a b)))
 
-(let ((gef (lam ((a %FLT) (b %FLT)) %BOOL
-  (if (ltf b a) true (eqf a b)))))
-  gef)
+(fun gef ((a %FLT) (b %FLT)) %BOOL
+  (if (ltf b a) true (eqf a b)))
 
-(let ((gts (lam ((a %STR) (b %STR)) %BOOL
-  (lts b a))))
-  gts)
+(fun gts ((a %STR) (b %STR)) %BOOL
+  (lts b a))
 
-(let ((les (lam ((a %STR) (b %STR)) %BOOL
-  (if (lts a b) true (eqs a b)))))
-  les)
+(fun les ((a %STR) (b %STR)) %BOOL
+  (if (lts a b) true (eqs a b)))
 
-(let ((ges (lam ((a %STR) (b %STR)) %BOOL
-  (if (lts b a) true (eqs a b)))))
-  ges)
+(fun ges ((a %STR) (b %STR)) %BOOL
+  (if (lts b a) true (eqs a b)))
 
-(let ((str-contains (lam ((haystack %STR) (needle %STR)) %BOOL
+(fun str-contains ((haystack %STR) (needle %STR)) %BOOL
   (let ((needle-len (strlen needle))
         (hay-len (strlen haystack)))
     (if (eqi needle-len 0)
       true
       (if (lti hay-len needle-len)
         false
-        (let ((go (lam ((i %INT)) %BOOL
+        (let ((go (fun go ((i %INT)) %BOOL
           (if (lti hay-len (add i needle-len))
             false
             (if (eqs (substr haystack i needle-len) needle)
               true
               (go (add i 1)))))))
-          (go 0))))))))
-  str-contains)
+          (go 0))))))
 
-(let ((print (lam ((s %STR))
-  (pll-print s))))
-  print)
+(fun print ((s %STR))
+  (pll-print s))
 
-(let ((read-line (lam ((u %UNIT)) %STR
+(fun read-line ((u %UNIT)) %STR
   (let ((_ u))
-    (if true (pll-read-line 0) "")))))
-  read-line)
+    (if true (pll-read-line 0) "")))
 
-(let ((is-eof (lam ((u %UNIT)) %BOOL
+(fun is-eof ((u %UNIT)) %BOOL
   (let ((_ u))
-    (if (eqi (pll-is-eof 0) 0) false true)))))
-  is-eof)
+    (if (eqi (pll-is-eof 0) 0) false true)))
 
-(let ((argc (lam ((u %UNIT)) %INT
+(fun argc ((u %UNIT)) %INT
   (let ((_ u))
-    (pll-argc 0)))))
-  argc)
+    (pll-argc 0)))
 
-(let ((argv (lam ((i %INT)) %STR
-  (if true (pll-argv i) ""))))
-  argv)
+(fun argv ((i %INT)) %STR
+  (if true (pll-argv i) ""))
 
-(let ((int-to-str (lam ((x %INT)) %STR
-  (if true (pll-int-to-str x) ""))))
-  int-to-str)
+(fun int-to-str ((x %INT)) %STR
+  (if true (pll-int-to-str x) ""))
 
-(let ((flt-to-str (lam ((x %FLT)) %STR
-  (if true (pll-flt-to-str x) ""))))
-  flt-to-str)
+(fun flt-to-str ((x %FLT)) %STR
+  (if true (pll-flt-to-str x) ""))
 
-(let ((rx-match (lam ((re %RX) (subj %STR)) %BOOL
-  (if (eqi (pll-rx-match re subj) 0) false true))))
-  rx-match)
+(fun rx-match ((re %RX) (subj %STR)) %BOOL
+  (if (eqi (pll-rx-match re subj) 0) false true))
 
-(let ((rx-find (lam ((re %RX) (subj %STR)) %STR
-  (if true (pll-rx-find re subj) ""))))
-  rx-find)
+(fun rx-find ((re %RX) (subj %STR)) %STR
+  (if true (pll-rx-find re subj) ""))
 
-(let ((rx-sub (lam ((re %RX) (repl %STR) (subj %STR)) %STR
-  (if true (pll-rx-sub re repl subj) ""))))
-  rx-sub)
+(fun rx-sub ((re %RX) (repl %STR) (subj %STR)) %STR
+  (if true (pll-rx-sub re repl subj) ""))
 
-(let ((rx-gsub (lam ((re %RX) (repl %STR) (subj %STR)) %STR
-  (if true (pll-rx-gsub re repl subj) ""))))
-  rx-gsub)
+(fun rx-gsub ((re %RX) (repl %STR) (subj %STR)) %STR
+  (if true (pll-rx-gsub re repl subj) ""))
 
-(let ((rx-split (lam ((re %RX) (subj %STR)) %(List %STR)
-  (if true (pll-rx-split re subj) Empty))))
-  rx-split)
+(fun rx-split ((re %RX) (subj %STR)) %(List %STR)
+  (if true (pll-rx-split re subj) Empty))
 
-(let ((rx-captures (lam ((re %RX) (subj %STR)) %(List %STR)
-  (if true (pll-rx-captures re subj) Empty))))
-  rx-captures)
+(fun rx-captures ((re %RX) (subj %STR)) %(List %STR)
+  (if true (pll-rx-captures re subj) Empty))
 
-(let ((rx-compile (lam ((src %STR)) %RX
-  (if true (pll-rx-compile src) //))))
-  rx-compile)
+(fun rx-compile ((src %STR)) %RX
+  (if true (pll-rx-compile src) //))

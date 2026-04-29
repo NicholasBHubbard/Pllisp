@@ -132,6 +132,7 @@ test-suite pllisp-test
                       ReplSpec,
                       ResolveSpec,
                       SExprSpec,
+                      StdlibSpec,
                       TypeCheckSpec,
                       TypeSpec,
                       Pllisp.BuiltIn,

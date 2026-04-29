@@ -21,6 +21,7 @@ import qualified MacroInterpSpec
 import qualified ReplSpec
 import qualified ModuleSpec
 import qualified SExprSpec
+import qualified StdlibSpec
 
 main :: IO ()
 main = hspec $ do
@@ -30,6 +31,7 @@ main = hspec $ do
   describe "Driver"    DriverSpec.spec
   describe "Parser"    ParserSpec.spec
   describe "SExpr"     SExprSpec.spec
+  describe "Stdlib"    StdlibSpec.spec
   describe "Resolve"   ResolveSpec.spec
   describe "TypeCheck" TypeCheckSpec.spec
   describe "Exhaust"   ExhaustCheckSpec.spec
