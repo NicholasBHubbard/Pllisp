@@ -239,8 +239,6 @@ externDecls = T.unlines
   [ "declare ptr @GC_malloc(i64)"
   , "declare ptr @GC_realloc(ptr, i64)"
   , "declare void @GC_init()"
-  , "declare void @GC_gcollect()"
-  , "declare i64 @GC_get_heap_size()"
   , "declare i32 @puts(ptr)"
   , "declare i64 @strlen(ptr)"
   , "declare i32 @strcmp(ptr, ptr)"
@@ -276,7 +274,7 @@ externDecls = T.unlines
 -- Functions already declared in externDecls that shouldn't be re-declared by FFI
 builtinExterns :: S.Set CST.Symbol
 builtinExterns = S.fromList
-  [ "GC_MALLOC", "GC_REALLOC", "GC_INIT", "GC_GCOLLECT", "GC_GET_HEAP_SIZE"
+  [ "GC_MALLOC", "GC_REALLOC", "GC_INIT"
   , "PUTS", "STRLEN", "STRCMP", "STRCPY", "STRCAT", "STRSTR", "MEMCPY"
   , "SNPRINTF", "FGETS", "FEOF"
   , "PCRE2_COMPILE_8", "PCRE2_MATCH_DATA_CREATE_FROM_PATTERN_8"
@@ -1327,18 +1325,15 @@ genBuiltIn name args _resTy = case name of
     emit (stdinVal <> " = load ptr, ptr @stdin")
     d <- fresh
     emit (d <> " = call ptr @fgets(ptr " <> buf <> ", i32 1024, ptr " <> stdinVal <> ")")
-    -- Check for EOF (fgets returns null)
     isNull <- fresh
     emit (isNull <> " = icmp eq ptr " <> d <> ", null")
     eofLbl <- freshLabel "readline.eof"
-    okLbl  <- freshLabel "readline.ok"
+    okLbl <- freshLabel "readline.ok"
     doneLbl <- freshLabel "readline.done"
     emit ("br i1 " <> isNull <> ", label %" <> eofLbl <> ", label %" <> okLbl)
-    -- EOF: null-terminate at position 0
     emitLabel eofLbl
     emit ("store i8 0, ptr " <> buf)
     emit ("br label %" <> doneLbl)
-    -- OK: strip trailing newline
     emitLabel okLbl
     len <- fresh
     emit (len <> " = call i64 @strlen(ptr " <> buf <> ")")
@@ -1480,16 +1475,6 @@ genBuiltIn name args _resTy = case name of
       <> ", ptr " <> errcode <> ", ptr " <> erroff <> ", ptr null)")
     pure compiled
 
-  -- GC
-  "GC-COLLECT" -> do
-    emit "call void @GC_gcollect()"
-    pure "0"
-
-  "GC-HEAP-SIZE" -> do
-    r <- fresh
-    emit (r <> " = call i64 @GC_get_heap_size()")
-    pure r
-
   -- Mutable refs
   "REF" -> do
     let (valTy, valOp) = head args
@@ -1550,7 +1535,6 @@ strCmp _ _ = error "strCmp: expected 2 args"
 
 rxHelperDefs :: T.Text
 rxHelperDefs = T.unlines
-  -- pll_rx_match: does compiled rx match subject? returns i32 (0/1)
   [ "define i32 @pll_rx_match(ptr %re, ptr %subj) {"
   , "entry:"
   , "  %null = icmp eq ptr %re, null"

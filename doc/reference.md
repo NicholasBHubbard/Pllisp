@@ -177,8 +177,6 @@ At call sites, keyword arguments are written as:
 
 | Function | Type |
 |----------|------|
-| `gc-collect` | `UNIT -> UNIT` |
-| `gc-heap-size` | `UNIT -> INT` |
 
 ## PRELUDE Convenience Names
 

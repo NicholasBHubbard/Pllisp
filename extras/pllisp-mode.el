@@ -27,7 +27,7 @@
     "rx-match" "rx-find" "rx-sub" "rx-gsub"
     "rx-split" "rx-captures" "rx-compile"
     "ref" "deref" "set!"
-    "gc-collect" "gc-heap-size")
+    )
   "Built-in functions.")
 
 (defconst pllisp-constants

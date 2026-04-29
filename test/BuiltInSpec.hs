@@ -13,20 +13,24 @@ import qualified Pllisp.Type as Ty
 spec :: Spec
 spec = do
   describe "builtInNames" $ do
-    it "has 56 entries" $
-      S.size BuiltIn.builtInNames `shouldBe` 56
+    it "has 54 entries" $
+      S.size BuiltIn.builtInNames `shouldBe` 54
 
     it "contains ADD, NOT, PRINT, FLT-TO-STR, EQF" $ do
-      S.member "ADD"      BuiltIn.builtInNames `shouldBe` True
-      S.member "NOT"      BuiltIn.builtInNames `shouldBe` True
-      S.member "PRINT"    BuiltIn.builtInNames `shouldBe` True
+      S.member "ADD" BuiltIn.builtInNames `shouldBe` True
+      S.member "NOT" BuiltIn.builtInNames `shouldBe` True
+      S.member "PRINT" BuiltIn.builtInNames `shouldBe` True
       S.member "FLT-TO-STR" BuiltIn.builtInNames `shouldBe` True
-      S.member "EQF"      BuiltIn.builtInNames `shouldBe` True
+      S.member "EQF" BuiltIn.builtInNames `shouldBe` True
 
     it "contains REF, DEREF, SET!" $ do
-      S.member "REF"   BuiltIn.builtInNames `shouldBe` True
+      S.member "REF" BuiltIn.builtInNames `shouldBe` True
       S.member "DEREF" BuiltIn.builtInNames `shouldBe` True
-      S.member "SET!"  BuiltIn.builtInNames `shouldBe` True
+      S.member "SET!" BuiltIn.builtInNames `shouldBe` True
+
+    it "does not contain GC-COLLECT or GC-HEAP-SIZE" $ do
+      S.member "GC-COLLECT" BuiltIn.builtInNames `shouldBe` False
+      S.member "GC-HEAP-SIZE" BuiltIn.builtInNames `shouldBe` False
 
   describe "builtInTypes" $ do
     it "ADD :: Int -> Int -> Int" $
