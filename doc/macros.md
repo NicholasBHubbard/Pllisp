@@ -23,7 +23,7 @@ enough.
 
 ```lisp
 (mac unless (cond body)
-  `(if_ ,cond unit ,body))
+  `(if ,cond unit ,body))
 ```
 
 General form:
