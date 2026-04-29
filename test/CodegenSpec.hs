@@ -966,12 +966,21 @@ spec = do
           mainSrc = "(print (int-to-str (apply-helper 5)))"
       runWithModule "MOD" modSrc ["HELPER"] mainSrc >>= (`shouldBe` "25")
 
+    it "macros can use earlier runtime function definitions from the same module" $ do
+      let src = T.unlines
+            [ "(fun double-int ((x %INT)) (add x x))"
+            , "(mac double-lit (x)"
+            , "  (syntax-int (double-int (syntax-int-value x))))"
+            , "(print (int-to-str (double-lit 21)))"
+            ]
+      runWithModules [] src >>= (`shouldBe` "42")
+
     it "imported procedural macro" $ do
       let modSrc = T.unlines
             [ "(mac my-do (&rest args)"
-            , "  (if (eq (length args) 1)"
-            , "    (car args)"
-            , "    `(let ((_ ,(car args))) (my-do ,@(cdr args)))))"
+            , "  (if (eq (syntax-length args) 1)"
+            , "    (syntax-car args)"
+            , "    `(let ((_ ,(syntax-car args))) (my-do ,@(syntax-cdr args)))))"
             ]
           mainSrc = "(my-do (print \"a\") (print \"b\") (print \"c\"))"
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "a\nb\nc")
@@ -985,6 +994,30 @@ spec = do
             ]
           mainSrc = "(print (int-to-str (double 21)))"
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "42")
+
+    it "imported macro libraries can capture earlier runtime function definitions" $ do
+      let modSrc = T.unlines
+            [ "(fun double-int ((x %INT)) (add x x))"
+            , "(mac double-lit (x)"
+            , "  (syntax-int (double-int (syntax-int-value x))))"
+            ]
+          mainSrc = "(print (int-to-str (double-lit 21)))"
+      runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "42")
+
+    it "imported macro libraries can capture pure runtime helpers from imported modules" $ do
+      let modBase = T.unlines
+            [ "(fun double-int ((x %INT)) (add x x))"
+            ]
+          modLib = T.unlines
+            [ "(import BASE)"
+            , "(mac double-lit (x)"
+            , "  (syntax-int (double-int (syntax-int-value x))))"
+            ]
+          mainSrc = T.unlines
+            [ "(import LIB)"
+            , "(print (int-to-str (double-lit 21)))"
+            ]
+      runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "42")
 
     it "aliased macro-providing modules still expose macros" $ do
       let modSrc = "(mac double (x) `(add ,x ,x))"
@@ -1174,9 +1207,9 @@ spec = do
     it "do macro sequences expressions" $ do
       run (T.unlines
         [ "(mac do (&rest args)"
-        , "  (if (eq (length args) 1)"
-        , "    (car args)"
-        , "    `(let ((_ ,(car args))) (do ,@(cdr args)))))"
+        , "  (if (eq (syntax-length args) 1)"
+        , "    (syntax-car args)"
+        , "    `(let ((_ ,(syntax-car args))) (do ,@(syntax-cdr args)))))"
         , "(do (print \"a\") (print \"b\") (print \"c\"))"
         ]) >>= (`shouldBe` "a\nb\nc")
 

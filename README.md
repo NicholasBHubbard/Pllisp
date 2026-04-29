@@ -69,9 +69,9 @@ Start with [Overview](doc/overview.md), then use the docs under [`doc/`](doc):
 - [Typeclasses](doc/typeclasses.md) — classes, instances, superclasses,
   parametric instances, and higher-kinded classes
 - [Macros](doc/macros.md) — `mac`, quasiquote, `eval-when`, helper bindings,
-  module macro libraries, and `gensym`
+  `%SYNTAX`, typed compile-time helpers, module macro libraries, and `gensym`
 - [Modules](doc/modules.md) — file layout, runtime imports, macro imports,
-  aliases, exports, and PRELUDE behavior
+  aliases, compile-time exports, and PRELUDE behavior
 - [FFI](doc/ffi.md) — calling C functions, structs, enums, arrays,
   variadics, and callbacks
 - [Standard Library](doc/stdlib.md) — the implicit `PRELUDE` module:

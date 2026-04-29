@@ -1,1 +1,1 @@
-ambiguous import: HELPER
+compile-time helper collision: HELPER from FOO and BAR

@@ -59,6 +59,10 @@ spec = do
       withTempSource "redefine-prelude-macro.pll" "(let ((fun 1)) fun)" $ \fp ->
         Driver.runFiles [fp] `shouldReturn` ExitFailure 1
 
+    it "rejects runtime use of %SYNTAX" $
+      withTempSource "runtime-syntax.pll" "(fun id-syntax ((x %SYNTAX)) x)" $ \fp ->
+        Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
     it "rejects duplicate imported compile-time helpers" $
       withTempModuleProject
         [ ("A.pll", unlines

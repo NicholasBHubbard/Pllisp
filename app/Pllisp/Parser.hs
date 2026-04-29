@@ -230,6 +230,7 @@ typeParserBody = MP.choice
       "UNIT"  -> pure Ty.TyUnit
       "RX"    -> pure Ty.TyRx
       "USYM"  -> pure Ty.TyUSym
+      "SYNTAX" -> pure Ty.TySyntax
       other   -> pure (Ty.TyCon other [])
   ]
 
@@ -255,6 +256,7 @@ typeElem = MP.choice
       "UNIT"  -> pure Ty.TyUnit
       "RX"    -> pure Ty.TyRx
       "USYM"  -> pure Ty.TyUSym
+      "SYNTAX" -> pure Ty.TySyntax
       other   -> pure (Ty.TyCon other [])
   ]
 

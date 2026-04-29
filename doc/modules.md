@@ -136,6 +136,16 @@ Currently exported automatically at compile time:
 That means a module can be a real macro library, not just a bag of runtime
 functions.
 
+Also important:
+
+- later compile-time code in a module can use earlier top-level runtime
+  bindings from that same module when those bindings are themselves
+  compile-time-evaluable
+- imported runtime bindings from other modules are also available to
+  compile-time code when those bindings can be evaluated at compile time
+- FFI-backed runtime bindings are still not executable at macro expansion
+  time, so they fail explicitly instead of acting like missing names
+
 ### Simple Macro Module
 
 `MACROS.pll`:
@@ -223,6 +233,74 @@ Compile-time helper code can also use earlier declarations from the same module.
 That works because the constructor `Flag` is part of the module’s compile-time
 declaration surface once the earlier `type` form has been seen.
 
+### Macro Module Capturing Earlier Runtime Functions
+
+Later compile-time code can also call earlier top-level runtime bindings from
+the same module when those bindings can be evaluated at compile time.
+
+`MATHMAC.pll`:
+
+```lisp
+(module MATHMAC)
+
+(fun double-int ((x %INT)) %INT
+  (add x x))
+
+(eval-when (:compile-toplevel)
+  (fun emit-double ((x %SYNTAX)) %SYNTAX
+    (syntax-int (double-int (syntax-int-value x)))))
+
+(mac doubled (x)
+  (emit-double x))
+```
+
+`main.pllisp`:
+
+```lisp
+(import MATHMAC)
+
+(print (int-to-str (doubled 21)))
+```
+
+The importing module gets `doubled`, but it does not get `double-int` as a new
+compile-time helper name. The macro library captures that earlier runtime
+binding inside its own compile-time definitions.
+
+### Macro Module Capturing Imported Pure Runtime Helpers
+
+Compile-time code can also use pure runtime helpers imported from other
+modules.
+
+`BASE.pll`:
+
+```lisp
+(module BASE)
+
+(fun double-int ((x %INT)) %INT
+  (add x x))
+```
+
+`MACROS.pll`:
+
+```lisp
+(module MACROS)
+(import BASE)
+
+(mac doubled (x)
+  (syntax-int (double-int (syntax-int-value x))))
+```
+
+`main.pllisp`:
+
+```lisp
+(import MACROS)
+
+(print (int-to-str (doubled 21)))
+```
+
+That works because `double-int` is a pure imported runtime binding, so it is
+available while `MACROS` is building its compile-time environment.
+
 ### Transitive Macro Imports Work
 
 If module `A` exports a macro, and module `B` imports `A` and defines another
@@ -238,8 +316,12 @@ Important rules:
 - imported macros are called by bare name, not by qualified name
 - module aliases affect runtime qualified names, not macro call syntax
 - unqualified import lists control runtime names, not whether macros are loaded
-- ordinary runtime `let` exports are still runtime names; if you need a helper
-  binding for macro expansion, define it in `eval-when (:compile-toplevel ...)`
+- earlier runtime bindings in the same module are visible to later compile-time
+  code when they are compile-time-evaluable
+- imported runtime bindings can also be used at compile time when they are
+  compile-time-evaluable
+- FFI-backed runtime bindings still are not executable at macro expansion
+  time
 
 So this works:
 

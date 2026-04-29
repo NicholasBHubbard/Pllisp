@@ -1,6 +1,6 @@
 # Reference
 
-This page is a quick syntax and builtin cheat sheet.
+This page is a quick syntax and always-in-scope name cheat sheet.
 
 ## Reserved Words
 
@@ -27,10 +27,14 @@ variables:
 | Type form | Example |
 |-----------|---------|
 | Primitive | `%INT` |
+| Compile-time syntax | `%SYNTAX` |
 | Function | `%(-> INT INT BOOL)` |
 | Parameterized | `%(List INT)` |
 | Nested parameterized | `%(Maybe (List STR))` |
 | Type variable in user declarations | `a`, `b`, `f` |
+
+`%SYNTAX` is a compile-time-only type. Use it in macro bodies and
+`eval-when (:compile-toplevel ...)` helper code, not in ordinary runtime code.
 
 ## Special Forms
 
@@ -44,6 +48,7 @@ variables:
 | Class | `(cls CLASS (supers...) (tyvars...) (method %types...)...)` |
 | Instance | `(inst CLASS %Type (method impl)...)` |
 | Macro | `(mac name (params...) body)` |
+| Eval-when | `(eval-when (phases...) form...)` |
 | Module | `(module MODULE)` |
 | Import | `(import MODULE [Alias] [(unquals...)])` |
 | Field access | `(.field expr)` |
@@ -92,31 +97,22 @@ At call sites, keyword arguments are written as:
 | Uninterned symbol | `:foo` | Equal usym |
 | Constructor | `(Just x)` | ADT constructor |
 
-## Runtime Builtins
+## Primitive Runtime Functions
 
 ### Arithmetic
 
 | Function | Type |
 |----------|------|
 | `add`, `sub`, `mul`, `div`, `mod` | `INT -> INT -> INT` |
-| `neg` | `INT -> INT` |
 | `addf`, `subf`, `mulf`, `divf` | `FLT -> FLT -> FLT` |
-| `negf` | `FLT -> FLT` |
 
 ### Comparison
 
 | Function | Type |
 |----------|------|
-| `eqi`, `lti`, `gti`, `lei`, `gei` | `INT -> INT -> BOOL` |
-| `eqf`, `ltf`, `gtf`, `lef`, `gef` | `FLT -> FLT -> BOOL` |
-| `eqs`, `lts`, `gts`, `les`, `ges` | `STR -> STR -> BOOL` |
-
-### Boolean
-
-| Function | Type |
-|----------|------|
-| `and`, `or` | `BOOL -> BOOL -> BOOL` |
-| `not` | `BOOL -> BOOL` |
+| `eqi`, `lti` | `INT -> INT -> BOOL` |
+| `eqf`, `ltf` | `FLT -> FLT -> BOOL` |
+| `eqs`, `lts` | `STR -> STR -> BOOL` |
 
 ### String
 
@@ -125,22 +121,6 @@ At call sites, keyword arguments are written as:
 | `concat` | `STR -> STR -> STR` |
 | `strlen` | `STR -> INT` |
 | `substr` | `STR -> INT -> INT -> STR` |
-| `str-contains` | `STR -> STR -> BOOL` |
-
-### I/O
-
-| Function | Type |
-|----------|------|
-| `print` | `STR -> UNIT` |
-| `read-line` | `UNIT -> STR` |
-| `is-eof` | `UNIT -> BOOL` |
-
-### Command Line
-
-| Function | Type |
-|----------|------|
-| `argc` | `UNIT -> INT` |
-| `argv` | `INT -> STR` |
 
 ### Conversion
 
@@ -148,22 +128,8 @@ At call sites, keyword arguments are written as:
 |----------|------|
 | `int-to-flt` | `INT -> FLT` |
 | `flt-to-int` | `FLT -> INT` |
-| `int-to-str` | `INT -> STR` |
-| `flt-to-str` | `FLT -> STR` |
 | `usym-to-str` | `USYM -> STR` |
 | `str-to-usym` | `STR -> USYM` |
-
-### Regex
-
-| Function | Type |
-|----------|------|
-| `rx-match` | `RX -> STR -> BOOL` |
-| `rx-find` | `RX -> STR -> STR` |
-| `rx-sub` | `RX -> STR -> STR -> STR` |
-| `rx-gsub` | `RX -> STR -> STR -> STR` |
-| `rx-split` | `RX -> STR -> List STR` |
-| `rx-captures` | `RX -> STR -> List STR` |
-| `rx-compile` | `STR -> RX` |
 
 ### References
 
@@ -173,34 +139,82 @@ At call sites, keyword arguments are written as:
 | `deref` | `Ref a -> a` |
 | `set!` | `Ref a -> a -> UNIT` |
 
-### GC
+## Implicit PRELUDE Macros
+
+`fun`, `progn`, `if_`, `when`, `unless`, `cond`, `if-let`, `when-let`,
+`unless-let`, `and`, `or`
+
+## Implicit PRELUDE Functions and Methods
+
+These are not primitive runtime functions, but they are still in scope through
+the implicit `PRELUDE`.
+
+### Derived Scalar Helpers
 
 | Function | Type |
 |----------|------|
+| `not` | `BOOL -> BOOL` |
+| `neg` | `INT -> INT` |
+| `negf` | `FLT -> FLT` |
+| `gti`, `lei`, `gei` | `INT -> INT -> BOOL` |
+| `gtf`, `lef`, `gef` | `FLT -> FLT -> BOOL` |
+| `gts`, `les`, `ges` | `STR -> STR -> BOOL` |
+| `str-contains` | `STR -> STR -> BOOL` |
 
-## PRELUDE Convenience Names
+### I/O and Command Line
 
-These are not hardwired runtime builtins, but they are in scope through the
-implicit PRELUDE.
+| Function | Type |
+|----------|------|
+| `print` | `STR -> UNIT` |
+| `read-line` | `UNIT -> STR` |
+| `is-eof` | `UNIT -> BOOL` |
+| `argc` | `UNIT -> INT` |
+| `argv` | `INT -> STR` |
 
-### PRELUDE Macros
+### Formatting and Regex
 
-`fun`, `progn`, `if_`, `when`, `unless`, `cond`, `if-let`, `when-let`,
-`unless-let`
+| Function | Type |
+|----------|------|
+| `int-to-str` | `INT -> STR` |
+| `flt-to-str` | `FLT -> STR` |
+| `rx-match` | `RX -> STR -> BOOL` |
+| `rx-find` | `RX -> STR -> STR` |
+| `rx-sub` | `RX -> STR -> STR -> STR` |
+| `rx-gsub` | `RX -> STR -> STR -> STR` |
+| `rx-split` | `RX -> STR -> List STR` |
+| `rx-captures` | `RX -> STR -> List STR` |
+| `rx-compile` | `STR -> RX` |
 
-### PRELUDE Typeclass Methods
+### Typeclass Methods
 
 `truthy`, `eq`, `lt`, `gt`, `le`, `ge`, `str`
 
 See [Standard Library](stdlib.md) for details and examples.
 
-## Macro-Time Builtins
+## Compile-Time Syntax API
 
-These are available inside macro definitions:
+These are available inside macro definitions and
+`eval-when (:compile-toplevel ...)` helper code. Compile-time code can also
+call ordinary runtime bindings when those bindings can actually be evaluated at
+macro expansion time. In practice that includes pure functions, references, and
+regex helpers. FFI-backed runtime bindings are still unavailable at macro
+expansion time.
 
-`car`, `cdr`, `cons`, `list`, `append`, `reverse`, `length`, `map`, `filter`,
-`foldl`, `null?`, `symbol?`, `list?`, `string?`, `number?`, `bool?`, `type?`,
-`eq`, `not`, `add`, `sub`, `mul`, `lt`, `gt`, `concat`, `sym-to-str`,
-`str-to-sym`, `usym-to-str`, `str-to-usym`, `gensym`, `error`
+### Syntax Constructors and Conversions
+
+`syntax-lift`, `syntax-symbol`, `syntax-int`, `syntax-float`, `syntax-string`,
+`syntax-bool`, `syntax-usym`, `syntax-rx`, `syntax-type`, `syntax-empty`, `syntax-cons`,
+`syntax-append`
+
+### Syntax Inspectors and Predicates
+
+`syntax-car`, `syntax-cdr`, `syntax-length`, `syntax-null?`, `syntax-symbol?`,
+`syntax-list?`, `syntax-string?`, `syntax-number?`, `syntax-bool?`,
+`syntax-type?`, `syntax-int-value`, `syntax-float-value`,
+`syntax-string-value`, `syntax-symbol-name`, `syntax-usym-name`
+
+### Compile-Time Helpers
+
+`append`, `reverse`, `map`, `filter`, `foldl`, `gensym`, `error`
 
 See [Macros](macros.md) for usage patterns.

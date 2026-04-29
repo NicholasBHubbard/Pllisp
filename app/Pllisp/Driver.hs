@@ -110,29 +110,118 @@ compileExpandedProgram fp _ render loaded prog = do
                     pure (ExitFailure 1)
                   Right (typed, _) -> do
                     let merged = Mod.mergeImportedCode (liTypedModules loaded) typed
-                    case Exhaust.exhaustCheck merged of
-                      errs@(_:_) -> do
-                        mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
-                        pure (ExitFailure 1)
-                      [] -> do
-                        let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
-                            base = dropExtension fp
-                            llFile = base ++ ".ll"
-                            bridgeFile = base ++ "_ffi_bridge.c"
-                            exeFile = base
-                        T.IO.writeFile llFile ir
-                        T.IO.writeFile bridgeFile Ty.ffiBridgeC
-                        (ec, _, err') <- readProcessWithExitCode
-                          "clang" [llFile, bridgeFile, "-o", exeFile,
-                                   "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-                        removeFile bridgeFile
-                        case ec of
-                          ExitFailure _ -> do
-                            putStrLn ("clang failed:\n" ++ err')
+                    case validateRuntimeSyntaxTypes merged of
+                      Just (sp, msg) -> render "type" sp msg >> pure (ExitFailure 1)
+                      Nothing ->
+                        case Exhaust.exhaustCheck merged of
+                          errs@(_:_) -> do
+                            mapM_ (\e -> render "exhaust" (Exhaust.exhaSpan e) (Exhaust.exhaMsg e)) errs
                             pure (ExitFailure 1)
-                          ExitSuccess -> do
-                            putStrLn ("compiled: " ++ exeFile)
-                            pure ExitSuccess
+                          [] -> do
+                            let ir = Codegen.codegen (LL.lambdaLift (CC.closureConvert merged))
+                                base = dropExtension fp
+                                llFile = base ++ ".ll"
+                                bridgeFile = base ++ "_ffi_bridge.c"
+                                exeFile = base
+                            T.IO.writeFile llFile ir
+                            T.IO.writeFile bridgeFile Ty.ffiBridgeC
+                            (ec, _, err') <- readProcessWithExitCode
+                              "clang" [llFile, bridgeFile, "-o", exeFile,
+                                       "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+                            removeFile bridgeFile
+                            case ec of
+                              ExitFailure _ -> do
+                                putStrLn ("clang failed:\n" ++ err')
+                                pure (ExitFailure 1)
+                              ExitSuccess -> do
+                                putStrLn ("compiled: " ++ exeFile)
+                                pure ExitSuccess
+
+validateRuntimeSyntaxTypes :: TC.TResolvedCST -> Maybe (Loc.Span, String)
+validateRuntimeSyntaxTypes = firstJust checkExpr
+  where
+    checkExpr (Loc.Located sp (Ty.Typed ty exprF)) =
+      checkType sp ty
+        `orElse` checkExprF sp exprF
+
+    checkExprF sp exprF = case exprF of
+      TC.TRLit _ -> Nothing
+      TC.TRBool _ -> Nothing
+      TC.TRUnit -> Nothing
+      TC.TRVar _ -> Nothing
+      TC.TRLam params retTy body ->
+        firstJust (checkType sp . snd) params
+          `orElse` checkType sp retTy
+          `orElse` checkExpr body
+      TC.TRLet binds body ->
+        firstJust checkBind binds
+          `orElse` checkExpr body
+      TC.TRIf cond thenBr elseBr ->
+        checkExpr cond
+          `orElse` checkExpr thenBr
+          `orElse` checkExpr elseBr
+      TC.TRApp fn args ->
+        checkExpr fn
+          `orElse` firstJust checkExpr args
+      TC.TRType _ _ ctors ->
+        firstJust checkCtor ctors
+      TC.TRCase scrutinee arms ->
+        checkExpr scrutinee
+          `orElse` firstJust checkArm arms
+      TC.TRLoop params body ->
+        firstJust (checkType sp . snd) params
+          `orElse` checkExpr body
+      TC.TRRecur args ->
+        firstJust checkExpr args
+      TC.TRFFI _ _ _ -> Nothing
+      TC.TRFFIStruct _ fields ->
+        firstJust (checkCType sp . snd) fields
+      TC.TRFFIVar _ _ _ -> Nothing
+      TC.TRFFIEnum _ _ -> Nothing
+      TC.TRFFICallback _ _ _ -> Nothing
+
+    checkBind (_, bindTy, bindExpr) =
+      checkType (Loc.locSpan bindExpr) bindTy
+        `orElse` checkExpr bindExpr
+
+    checkArm (pat, body) =
+      checkPattern pat
+        `orElse` checkExpr body
+
+    checkPattern pat = case pat of
+      TC.TRPatLit _ -> Nothing
+      TC.TRPatBool _ -> Nothing
+      TC.TRPatVar _ ty -> checkType dummySpan ty
+      TC.TRPatWild ty -> checkType dummySpan ty
+      TC.TRPatCon _ ty pats ->
+        checkType dummySpan ty
+          `orElse` firstJust checkPattern pats
+
+    checkCtor dc =
+      firstJust (checkType dummySpan) (CST.dcArgs dc)
+
+    checkCType _ _ = Nothing
+
+    checkType sp ty
+      | containsSyntaxType ty = Just (sp, "SYNTAX is a compile-time-only type")
+      | otherwise = Nothing
+
+    containsSyntaxType ty = case ty of
+      Ty.TySyntax -> True
+      Ty.TyFun args retTy -> any containsSyntaxType args || containsSyntaxType retTy
+      Ty.TyCon _ args -> any containsSyntaxType args
+      Ty.TyApp f a -> containsSyntaxType f || containsSyntaxType a
+      _ -> False
+
+    firstJust f = go
+      where
+        go [] = Nothing
+        go (x:xs) = f x `orElse` go xs
+
+    orElse (Just x) _ = Just x
+    orElse Nothing y = y
+
+    dummySpan = Loc.Span (Loc.Pos "<type>" 0 0) (Loc.Pos "<type>" 0 0)
 
 data ModuleInfo = ModuleInfo
   { miPath :: FilePath

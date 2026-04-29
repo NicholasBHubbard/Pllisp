@@ -137,6 +137,30 @@ spec = do
             ]
         ]
 
+    it "does not fail on earlier runtime bindings that are not compile-time evaluable" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(let ((counter (ref 0))) counter)"
+          , "(mac two () `2)"
+          , "(two)"
+          ])
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "LET")
+            , l (SExpr.SList
+                [ l (SExpr.SList
+                    [ l (SExpr.SAtom "COUNTER")
+                    , l (SExpr.SList
+                        [ l (SExpr.SAtom "REF")
+                        , l (SExpr.SInt 0)
+                        ])
+                    ])
+                ])
+            , l (SExpr.SAtom "COUNTER")
+            ]
+        , SExpr.SInt 2
+        ]
+
   describe "eval-when" $ do
     it "uses compile-time helper bindings for later macros" $ do
       r <- either fail pure $ expandSrc
@@ -234,6 +258,19 @@ spec = do
         Left e  -> e `shouldContain` "invalid eval-when phase"
         Right _ -> expectationFailure "expected invalid eval-when phase error"
 
+    it "reports unsupported earlier runtime helpers explicitly" $ do
+      case expandSrc
+        (T.unlines
+          [ "(let ((printer (lam ((x %STR)) (print x)))) printer)"
+          , "(eval-when (:compile-toplevel)"
+          , "  (fun emit-bad () %SYNTAX"
+          , "    (printer \"hello\")))"
+          , "(mac bad () (emit-bad))"
+          , "(bad)"
+          ]) of
+        Left e  -> e `shouldContain` "PRINTER is not available at compile time"
+        Right _ -> expectationFailure "expected compile-time unavailable error"
+
     it "rejects non-list phase specifications" $ do
       case expandSrc "(eval-when :compile-toplevel 1)" of
         Left e  -> e `shouldContain` "invalid eval-when phase list"
@@ -253,6 +290,26 @@ spec = do
           , "(use-default)"
           ])
       r `shouldBe` [SExpr.SInt 42]
+
+    it "allows explicit %SYNTAX helper annotations and public syntax constructors" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(eval-when (:compile-toplevel)"
+          , "  (fun emit-answer () %SYNTAX"
+          , "    (syntax-int 42)))"
+          , "(mac answer () (emit-answer))"
+          , "(answer)"
+          ])
+      r `shouldBe` [SExpr.SInt 42]
+
+    it "allows typed macro bodies to inspect and rebuild integer syntax directly" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(mac dec-int (x)"
+          , "  (syntax-int (sub (syntax-int-value x) 1)))"
+          , "(dec-int 5)"
+          ])
+      r `shouldBe` [SExpr.SInt 4]
 
     it "allows later compile-time helpers to use earlier runtime type declarations" $ do
       r <- either fail pure $ expandSrc
@@ -347,7 +404,7 @@ spec = do
     it "usym in procedural macro" $ do
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac first-sym (&rest args)"
-                   , "  (car args))"
+                   , "  (syntax-car args))"
                    , "(first-sym :hello :world)"
                    ])
       r `shouldBe` [SExpr.SUSym "HELLO"]
@@ -368,10 +425,10 @@ spec = do
   -- ---------------------------------------------------------------
   describe "procedural macros" $ do
     it "macro with compile-time computation" $ do
-      -- Macro body uses car to extract first arg and builds code
+      -- Macro body uses syntax-car to extract first arg and builds code
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac first-of (&rest args)"
-                   , "  (car args))"
+                   , "  (syntax-car args))"
                    , "(first-of 42 99)"
                    ])
       r `shouldBe` [SExpr.SInt 42]
@@ -389,7 +446,7 @@ spec = do
     it "macro with conditional code generation" $ do
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac maybe-wrap (flag expr)"
-                   , "  (if (eq flag (quote YES))"
+                   , "  (if (eq (syntax-symbol-name flag) \"YES\")"
                    , "    `(just ,expr)"
                    , "    expr))"
                    , "(maybe-wrap yes 42)"
@@ -400,7 +457,7 @@ spec = do
       -- Filter even numbers at compile time
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac count-args (&rest args)"
-                   , "  (length args))"
+                   , "  (syntax-length args))"
                    , "(count-args a b c d)"
                    ])
       r `shouldBe` [SExpr.SInt 4]
@@ -408,7 +465,7 @@ spec = do
     it "macro with map to transform args" $ do
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac quote-all (&rest args)"
-                   , "  (cons (quote LIST) args))"
+                   , "  (syntax-cons (quote LIST) args))"
                    , "(quote-all 1 2 3)"
                    ])
       r `shouldBe` [SExpr.SList [l (SExpr.SAtom "LIST"),
@@ -420,9 +477,9 @@ spec = do
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac my-list (&rest xs)"
                    , "  (let ((build (lam (items)"
-                   , "    (if (null? items)"
+                   , "    (if (syntax-null? items)"
                    , "      (quote UNIT)"
-                   , "      `(CONS ,(car items) ,(build (cdr items)))))))"
+                   , "      `(CONS ,(syntax-car items) ,(build (syntax-cdr items)))))))"
                    , "    (build xs)))"
                    , "(my-list 1 2 3)"
                    ])
@@ -434,7 +491,7 @@ spec = do
     it "macro with string manipulation" $ do
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac make-name (prefix suffix)"
-                   , "  (str-to-sym (concat (sym-to-str prefix) (sym-to-str suffix))))"
+                   , "  (syntax-symbol (concat (syntax-symbol-name prefix) (syntax-symbol-name suffix))))"
                    , "(make-name FOO BAR)"
                    ])
       r `shouldBe` [SExpr.SAtom "FOOBAR"]

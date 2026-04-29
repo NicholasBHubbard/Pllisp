@@ -591,6 +591,7 @@ checkInstanceKind classEnv methodEnv className instTy =
     isGroundType Ty.TyUnit = True
     isGroundType Ty.TyRx   = True
     isGroundType Ty.TyUSym = True
+    isGroundType Ty.TySyntax = True
     isGroundType _         = False
 
 -- | Validate that all superclass constraints are satisfied for each instance.
@@ -682,6 +683,7 @@ typeToName Ty.TyBool = "BOOL"
 typeToName Ty.TyUnit = "UNIT"
 typeToName Ty.TyRx = "RX"
 typeToName Ty.TyUSym = "USYM"
+typeToName Ty.TySyntax = "SYNTAX"
 typeToName (Ty.TyCon n []) = n
 typeToName (Ty.TyCon n ts) = n <> "_" <> T.intercalate "_" (map typeToName ts)
 typeToName (Ty.TyApp f a) = typeToName f <> "_" <> typeToName a
@@ -1299,6 +1301,7 @@ fieldOwnerMismatchMsg fieldName expectedTy actualTy
       Ty.TyUnit     -> Just "UNIT"
       Ty.TyRx       -> Just "RX"
       Ty.TyUSym     -> Just "USYM"
+      Ty.TySyntax   -> Just "SYNTAX"
       Ty.TyFun _ _  -> Just "->"
       Ty.TyCon s _  -> Just s
       Ty.TyApp f _  -> typeHead f
@@ -1452,7 +1455,7 @@ unify _ Ty.TyBool Ty.TyBool = Right M.empty
 unify _ Ty.TyUnit Ty.TyUnit = Right M.empty
 unify _ Ty.TyRx Ty.TyRx = Right M.empty
 unify _ Ty.TyUSym Ty.TyUSym = Right M.empty
-unify _ Ty.TyDatum Ty.TyDatum = Right M.empty
+unify _ Ty.TySyntax Ty.TySyntax = Right M.empty
 unify sp t1 t2 = Left [TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)]
 
 -- | Unify multiple type pairs, collecting all errors

@@ -99,6 +99,7 @@ executable pllisp
                       megaparsec ^>=9.7.0,
                       mtl        ^>=2.3.2,
                       process,
+                      regex-tdfa,
                       text       ^>=2.1.2,
                       unix
 
@@ -162,6 +163,7 @@ test-suite pllisp-test
                       mtl        ^>=2.3.2,
                       filepath,
                       process,
+                      regex-tdfa,
                       text       ^>=2.1.2,
                       unix,
                       hspec      ^>=2.11,

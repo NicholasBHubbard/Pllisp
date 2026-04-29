@@ -119,41 +119,41 @@ compilePrepare (Loc.Located sp sexprF) = case sexprF of
 
 datumPrepare :: SExpr -> SExpr
 datumPrepare (Loc.Located sp sexprF) = case sexprF of
-  SAtom "TRUE"   -> mkCtCall sp "__CT-BOOL" [Loc.Located sp (SAtom "TRUE")]
-  SAtom "FALSE"  -> mkCtCall sp "__CT-BOOL" [Loc.Located sp (SAtom "FALSE")]
-  SAtom name     -> mkCtCall sp "__CT-ATOM" [Loc.Located sp (SStr name)]
-  SInt n         -> mkCtCall sp "__CT-INT" [Loc.Located sp (SInt n)]
-  SFlt f         -> mkCtCall sp "__CT-FLT" [Loc.Located sp (SFlt f)]
-  SStr t         -> mkCtCall sp "__CT-STR" [Loc.Located sp (SStr t)]
-  SRx p f        -> mkCtCall sp "__CT-RX" [Loc.Located sp (SStr p), Loc.Located sp (SStr f)]
-  SUSym t        -> mkCtCall sp "__CT-USYM" [Loc.Located sp (SStr t)]
-  SType inner    -> mkCtCall sp "__CT-TYPE" [datumPrepare inner]
-  SList xs       -> foldr consDatum (Loc.Located sp (SAtom "__CT-NIL")) xs
+  SAtom "TRUE"   -> mkCtCall sp "SYNTAX-BOOL" [Loc.Located sp (SAtom "TRUE")]
+  SAtom "FALSE"  -> mkCtCall sp "SYNTAX-BOOL" [Loc.Located sp (SAtom "FALSE")]
+  SAtom name     -> mkCtCall sp "SYNTAX-SYMBOL" [Loc.Located sp (SStr name)]
+  SInt n         -> mkCtCall sp "SYNTAX-INT" [Loc.Located sp (SInt n)]
+  SFlt f         -> mkCtCall sp "SYNTAX-FLOAT" [Loc.Located sp (SFlt f)]
+  SStr t         -> mkCtCall sp "SYNTAX-STRING" [Loc.Located sp (SStr t)]
+  SRx p f        -> mkCtCall sp "SYNTAX-RX" [Loc.Located sp (SStr p), Loc.Located sp (SStr f)]
+  SUSym t        -> mkCtCall sp "SYNTAX-USYM" [Loc.Located sp (SStr t)]
+  SType inner    -> mkCtCall sp "SYNTAX-TYPE" [datumPrepare inner]
+  SList xs       -> foldr consDatum (Loc.Located sp (SAtom "SYNTAX-EMPTY")) xs
   SQuasi inner   -> datumPrepare (Loc.Located sp (SList [Loc.Located sp (SAtom "%QUASI"), inner]))
   SUnquote inner -> datumPrepare (Loc.Located sp (SList [Loc.Located sp (SAtom "%UNQUOTE"), inner]))
   SSplice inner  -> datumPrepare (Loc.Located sp (SList [Loc.Located sp (SAtom "%SPLICE"), inner]))
   where
-    consDatum x acc = mkCtCall sp "__CT-CONS" [datumPrepare x, acc]
+    consDatum x acc = mkCtCall sp "SYNTAX-CONS" [datumPrepare x, acc]
 
 quasiPrepare :: SExpr -> Either ConvertError SExpr
 quasiPrepare sx@(Loc.Located sp sexprF) = case sexprF of
   SUnquote inner -> compileLift sp inner
-  SList xs       -> foldM step (Loc.Located sp (SAtom "__CT-NIL")) (reverse xs)
+  SList xs       -> foldM step (Loc.Located sp (SAtom "SYNTAX-EMPTY")) (reverse xs)
   SSplice _      -> Left $ ConvertError sp "splice outside list in quasiquote"
   _              -> pure (datumPrepare sx)
   where
     step acc x = case Loc.locVal x of
       SSplice inner -> do
         inner' <- compilePrepare inner
-        pure $ mkCtCall sp "__CT-APPEND" [inner', acc]
+        pure $ mkCtCall sp "SYNTAX-APPEND" [inner', acc]
       _ -> do
         x' <- quasiPrepare x
-        pure $ mkCtCall sp "__CT-CONS" [x', acc]
+        pure $ mkCtCall sp "SYNTAX-CONS" [x', acc]
 
 compileLift :: Loc.Span -> SExpr -> Either ConvertError SExpr
 compileLift sp inner = do
   inner' <- compilePrepare inner
-  pure $ mkCtCall sp "__CT-LIFT" [inner']
+  pure $ mkCtCall sp "SYNTAX-LIFT" [inner']
 
 mkCtCall :: Loc.Span -> T.Text -> [SExpr] -> SExpr
 mkCtCall sp name args = Loc.Located sp (SList (Loc.Located sp (SAtom name) : args))
@@ -533,6 +533,7 @@ toType (Loc.Located _ (SAtom name)) = case name of
   "UNIT" -> Right Ty.TyUnit
   "RX"   -> Right Ty.TyRx
   "USYM" -> Right Ty.TyUSym
+  "SYNTAX" -> Right Ty.TySyntax
   other  -> Right (Ty.TyCon other [])
 toType (Loc.Located _ (SList (Loc.Located _ (SAtom "->") : rest))) = do
   tys <- mapM toType rest

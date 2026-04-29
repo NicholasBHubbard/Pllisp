@@ -4,6 +4,7 @@ module ReplSpec (spec) where
 
 import Test.Hspec
 
+import Control.Exception (ErrorCall(..))
 import Data.IORef
 import qualified Data.Map.Strict as M
 import qualified Data.Set        as S
@@ -101,11 +102,47 @@ spec = do
         , "(case xs ((Cons h _) (print (int-to-str h))))"
         ] >>= (`shouldBe` "1")
 
+    it "pure runtime helpers persist across rounds for later compile-time code" $
+      runRepl
+        [ "(let ((double-int (lam ((x %INT)) (add x x)))) double-int)"
+        , T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (fun emit-double ((x %SYNTAX)) %SYNTAX"
+            , "    (syntax-int (double-int (syntax-int-value x)))))"
+            ]
+        , "(mac doubled (x) (emit-double x))"
+        , "(print (int-to-str (doubled 21)))"
+        ] >>= (`shouldBe` "42")
+
     it "prelude regex helpers persist across rounds" $
       runRepl
         [ "(let ((digits (rx-compile \"[0-9]+\"))) digits)"
         , "(print (rx-find digits \"abc123def\"))"
         ] >>= (`shouldBe` "123")
+
+    it "regex helpers persist across rounds for later compile-time code" $
+      runRepl
+        [ "(let ((digits-rx (rx-compile \"[0-9]+\"))) digits-rx)"
+        , T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (fun emit-match () %SYNTAX"
+            , "    (syntax-string (rx-find digits-rx \"abc123def\"))))"
+            ]
+        , "(mac matched () (emit-match))"
+        , "(print (matched))"
+        ] >>= (`shouldBe` "123")
+
+    it "reports unsupported prior-round runtime helpers explicitly" $
+      runRepl
+        [ "(let ((printer (lam ((x %STR)) (print x)))) printer)"
+        , T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (fun emit-bad () %SYNTAX"
+            , "    (printer \"hello\")))"
+            ]
+        , "(mac bad () (emit-bad))"
+        , "(bad)"
+        ] `shouldThrow` (\(ErrorCall msg) -> "PRINTER is not available at compile time" `T.isInfixOf` T.pack msg)
 
     it "closure captures prior-round value" $
       runRepl

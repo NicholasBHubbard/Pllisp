@@ -94,10 +94,10 @@ Most macros use quasiquote:
 
 ```lisp
 (mac progn (&rest args)
-  (if (eq (length args) 1)
-    (car args)
-    `(let ((_ ,(car args)))
-       (progn ,@(cdr args)))))
+  (if (eq (syntax-length args) 1)
+    (syntax-car args)
+    `(let ((_ ,(syntax-car args)))
+       (progn ,@(syntax-cdr args)))))
 ```
 
 Key pieces:
@@ -132,6 +132,25 @@ expands to code shaped like:
 Treat `quote`, quasiquote, unquote, and unquote-splicing as macro-writing
 tools.
 
+## Syntax Values
+
+The public compile-time syntax type is `%SYNTAX`.
+
+Important facts:
+
+- macro parameters are `%SYNTAX`
+- `&rest` parameters receive one syntax-list value of type `%SYNTAX`
+- `quote` and quasiquote produce `%SYNTAX`
+- `%SYNTAX` is compile-time only and cannot appear in ordinary runtime code
+
+You can write explicit typed compile-time helpers against `%SYNTAX`:
+
+```lisp
+(eval-when (:compile-toplevel)
+  (fun emit-inc ((x %SYNTAX)) %SYNTAX
+    `(add ,x 1)))
+```
+
 ## Macro Parameters
 
 ### Positional Parameters
@@ -146,8 +165,8 @@ tools.
 `&rest` collects the remaining syntax arguments into a list:
 
 ```lisp
-(mac my-list (&rest xs)
-  `(list ,@xs))
+(mac call-with (f &rest xs)
+  `(,f ,@xs))
 ```
 
 ### Destructuring Parameters
@@ -180,14 +199,14 @@ programmatically:
 
 ```lisp
 (mac count-args (&rest xs)
-  `(int-to-str ,(length xs)))
+  `(int-to-str ,(syntax-length xs)))
 ```
 
 or:
 
 ```lisp
 (mac first-of (&rest xs)
-  (car xs))
+  (syntax-car xs))
 ```
 
 For larger compile-time logic, the better style is to put the logic in
@@ -208,30 +227,40 @@ cannot be converted back into syntax, expansion fails.
 
 ## The Compile-Time Environment
 
-Macro bodies do not run in the normal runtime environment. They run in a
-separate compile-time value environment.
+Macro bodies do not run in the final runtime program. They run at compile
+time, but they now use the ordinary typed pllisp language instead of a
+separate ad hoc macro language.
 
-Available there by default:
+That means compile-time code can use:
 
-- primitive compile-time functions like `car`, `cdr`, `cons`, `list`,
-  `length`, `null?`, `eq`, `add`, `sub`, `mul`, `lt`, `gt`, `concat`,
-  `sym-to-str`, `str-to-sym`, `usym-to-str`, `str-to-usym`, `gensym`, and
-  `error`
+- ordinary expressions like `let`, `lam`, `if`, `case`, and function calls
+- earlier declarations from the same module, such as constructors, typeclass
+  methods, FFI declarations, and earlier top-level runtime bindings that are
+  themselves compile-time-evaluable
+- imported compile-time definitions from macro libraries
+- imported runtime bindings from other modules when those bindings can be
+  evaluated at compile time
+- the public `%SYNTAX` API: `syntax-car`, `syntax-cdr`, `syntax-cons`,
+  `syntax-length`, `syntax-symbol`, `syntax-symbol-name`, and related helpers
 - compile-time helper functions loaded from `PRELUDE`, such as `append`,
   `reverse`, `map`, `filter`, and `foldl`
+- `ref`, `deref`, and `set!`
+- regex helpers such as `rx-compile`, `rx-match`, `rx-find`, `rx-sub`,
+  `rx-gsub`, `rx-split`, and `rx-captures`
+- `gensym` and `error`
 
-Important distinction:
+Two boundaries still matter:
 
-- these are compile-time functions over macro values and syntax values
-- they are not ordinary runtime function calls
-- if you want ordinary typed compile-time helper code, define it in
-  `eval-when (:compile-toplevel ...)` and call it from the macro
+- compile-time code must return syntax if it is being used as a macro result
+- FFI-backed runtime bindings are still not executable at macro expansion
+  time; attempts to use them fail explicitly instead of acting like missing
+  names
 
 For example:
 
 ```lisp
 (mac quote-all (&rest xs)
-  (map (lam (x) `(quote ,x)) xs))
+  (map (lam ((x %SYNTAX)) `(quote ,x)) xs))
 ```
 
 ## `eval-when`
@@ -263,8 +292,8 @@ This is how you define typed helper functions for later macros:
 
 ```lisp
 (eval-when (:compile-toplevel)
-  (let ((emit-double (lam (x) `(add ,x ,x))))
-    emit-double))
+  (fun emit-double ((x %SYNTAX)) %SYNTAX
+    `(add ,x ,x)))
 
 (mac double (x)
   (emit-double x))
@@ -273,9 +302,24 @@ This is how you define typed helper functions for later macros:
 Those helper forms are checked as ordinary pllisp code. They can use language
 features like:
 
+- earlier top-level runtime function bindings from the same module
 - `type` constructors and `case`
 - imported constructors and typeclass methods
 - earlier declaration forms in the same file
+
+For example:
+
+```lisp
+(fun double-int ((x %INT)) %INT
+  (add x x))
+
+(eval-when (:compile-toplevel)
+  (fun emit-double ((x %SYNTAX)) %SYNTAX
+    (syntax-int (double-int (syntax-int-value x)))))
+
+(mac doubled (x)
+  (emit-double x))
+```
 
 For example:
 
@@ -339,11 +383,14 @@ At compile time, the useful persistent top-level forms are:
 
 - `mac` definitions
 - top-level `let` bindings inside `:compile-toplevel`
+- earlier same-module runtime bindings that are compile-time-evaluable and are
+  captured by later compile-time code
+- imported runtime bindings that are compile-time-evaluable
 - earlier and imported declaration surfaces such as constructors, typeclass
   methods, and FFI declarations
 
 Those names become available to later forms in the same module, and to
-importing modules.
+importing modules where appropriate.
 
 ## Macros Capture Their Definition-Time Helpers
 
@@ -385,8 +432,8 @@ Use the compile-time `error` function when a macro detects invalid input:
 
 ```lisp
 (mac expect-one (&rest xs)
-  (if (eq (length xs) 1)
-    (car xs)
+  (if (eq (syntax-length xs) 1)
+    (syntax-car xs)
     (error "expected exactly one item")))
 ```
 
@@ -407,11 +454,12 @@ Example:
 ```lisp
 (module BUILDERS)
 
+(fun double-int ((x %INT)) %INT
+  (add x x))
+
 (eval-when (:compile-toplevel)
-  (let ((emit-double-print
-          (lam (expr)
-            `(print (int-to-str (add ,expr ,expr))))))
-    emit-double-print))
+  (fun emit-double-print ((expr %SYNTAX)) %SYNTAX
+    `(print (int-to-str ,(syntax-int (double-int (syntax-int-value expr)))))))
 ```
 
 `MACROS.pll`:

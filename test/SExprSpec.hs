@@ -126,6 +126,12 @@ spec = do
         SExpr.SType (Loc.Located _ (SExpr.SAtom "INT")) -> pure ()
         _ -> expectationFailure (show r)
 
+    it "%SYNTAX" $ do
+      r <- either fail pure $ parseOne "%SYNTAX"
+      case r of
+        SExpr.SType (Loc.Located _ (SExpr.SAtom "SYNTAX")) -> pure ()
+        _ -> expectationFailure (show r)
+
     it "%(List %INT)" $ do
       r <- either fail pure $ parseOne "%(List %INT)"
       case r of

@@ -32,8 +32,7 @@ import qualified Pllisp.TypeCheck as TC
 
 data MacroClause = MacroClause
   { mcParams :: [MacroParam]
-  , mcTypedBody :: Maybe TC.TRExpr
-  , mcTemplate :: SExpr.SExpr
+  , mcTypedBody :: TC.TRExpr
   , mcEnv :: MI.Env
   } deriving (Show)
 
@@ -75,39 +74,46 @@ primitiveOrigin = "%PRIMITIVE"
 
 compileTimeBuiltins :: TC.Context
 compileTimeBuiltins = M.fromList
-  [ ("CAR", datumFun [Ty.TyDatum] Ty.TyDatum)
-  , ("CDR", datumFun [Ty.TyDatum] Ty.TyDatum)
-  , ("CONS", datumFun [Ty.TyDatum, Ty.TyDatum] Ty.TyDatum)
-  , ("LENGTH", datumFun [Ty.TyDatum] Ty.TyInt)
-  , ("NULL?", datumFun [Ty.TyDatum] Ty.TyBool)
-  , ("SYMBOL?", datumFun [Ty.TyDatum] Ty.TyBool)
-  , ("LIST?", datumFun [Ty.TyDatum] Ty.TyBool)
-  , ("STRING?", datumFun [Ty.TyDatum] Ty.TyBool)
-  , ("NUMBER?", datumFun [Ty.TyDatum] Ty.TyBool)
-  , ("BOOL?", datumFun [Ty.TyDatum] Ty.TyBool)
-  , ("TYPE?", datumFun [Ty.TyDatum] Ty.TyBool)
-  , ("SYM-TO-STR", datumFun [Ty.TyDatum] Ty.TyStr)
-  , ("STR-TO-SYM", datumFun [Ty.TyStr] Ty.TyDatum)
-  , ("USYM-TO-STR", datumFun [Ty.TyDatum] Ty.TyStr)
-  , ("STR-TO-USYM", datumFun [Ty.TyStr] Ty.TyDatum)
-  , ("GENSYM", datumFun [] Ty.TyDatum)
+  [ ("SYNTAX-CAR", syntaxFun [Ty.TySyntax] Ty.TySyntax)
+  , ("SYNTAX-CDR", syntaxFun [Ty.TySyntax] Ty.TySyntax)
+  , ("SYNTAX-LENGTH", syntaxFun [Ty.TySyntax] Ty.TyInt)
+  , ("SYNTAX-NULL?", syntaxFun [Ty.TySyntax] Ty.TyBool)
+  , ("SYNTAX-SYMBOL?", syntaxFun [Ty.TySyntax] Ty.TyBool)
+  , ("SYNTAX-LIST?", syntaxFun [Ty.TySyntax] Ty.TyBool)
+  , ("SYNTAX-STRING?", syntaxFun [Ty.TySyntax] Ty.TyBool)
+  , ("SYNTAX-NUMBER?", syntaxFun [Ty.TySyntax] Ty.TyBool)
+  , ("SYNTAX-BOOL?", syntaxFun [Ty.TySyntax] Ty.TyBool)
+  , ("SYNTAX-TYPE?", syntaxFun [Ty.TySyntax] Ty.TyBool)
+  , ("GENSYM", syntaxFun [] Ty.TySyntax)
   , ("EQ", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0, Ty.TyVar 0] Ty.TyBool))
   , ("ERROR", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyStr] (Ty.TyVar 0)))
-  , ("__CT-LIFT", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0] Ty.TyDatum))
-  , ("__CT-ATOM", datumFun [Ty.TyStr] Ty.TyDatum)
-  , ("__CT-INT", datumFun [Ty.TyInt] Ty.TyDatum)
-  , ("__CT-FLT", datumFun [Ty.TyFlt] Ty.TyDatum)
-  , ("__CT-STR", datumFun [Ty.TyStr] Ty.TyDatum)
-  , ("__CT-BOOL", datumFun [Ty.TyBool] Ty.TyDatum)
-  , ("__CT-USYM", datumFun [Ty.TyStr] Ty.TyDatum)
-  , ("__CT-RX", datumFun [Ty.TyStr, Ty.TyStr] Ty.TyDatum)
-  , ("__CT-TYPE", datumFun [Ty.TyDatum] Ty.TyDatum)
-  , ("__CT-NIL", TC.Forall S.empty Ty.TyDatum)
-  , ("__CT-CONS", datumFun [Ty.TyDatum, Ty.TyDatum] Ty.TyDatum)
-  , ("__CT-APPEND", datumFun [Ty.TyDatum, Ty.TyDatum] Ty.TyDatum)
+  , ("SYNTAX-LIFT", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0] Ty.TySyntax))
+  , ("SYNTAX-SYMBOL", syntaxFun [Ty.TyStr] Ty.TySyntax)
+  , ("SYNTAX-INT", syntaxFun [Ty.TyInt] Ty.TySyntax)
+  , ("SYNTAX-FLOAT", syntaxFun [Ty.TyFlt] Ty.TySyntax)
+  , ("SYNTAX-STRING", syntaxFun [Ty.TyStr] Ty.TySyntax)
+  , ("SYNTAX-BOOL", syntaxFun [Ty.TyBool] Ty.TySyntax)
+  , ("SYNTAX-USYM", syntaxFun [Ty.TyStr] Ty.TySyntax)
+  , ("SYNTAX-RX", syntaxFun [Ty.TyStr, Ty.TyStr] Ty.TySyntax)
+  , ("SYNTAX-TYPE", syntaxFun [Ty.TySyntax] Ty.TySyntax)
+  , ("SYNTAX-EMPTY", TC.Forall S.empty Ty.TySyntax)
+  , ("SYNTAX-CONS", syntaxFun [Ty.TySyntax, Ty.TySyntax] Ty.TySyntax)
+  , ("SYNTAX-APPEND", syntaxFun [Ty.TySyntax, Ty.TySyntax] Ty.TySyntax)
+  , ("SYNTAX-INT-VALUE", syntaxFun [Ty.TySyntax] Ty.TyInt)
+  , ("SYNTAX-FLOAT-VALUE", syntaxFun [Ty.TySyntax] Ty.TyFlt)
+  , ("SYNTAX-STRING-VALUE", syntaxFun [Ty.TySyntax] Ty.TyStr)
+  , ("SYNTAX-SYMBOL-NAME", syntaxFun [Ty.TySyntax] Ty.TyStr)
+  , ("SYNTAX-USYM-NAME", syntaxFun [Ty.TySyntax] Ty.TyStr)
+  , ("RX-COMPILE", syntaxFun [Ty.TyStr] Ty.TyRx)
+  , ("RX-MATCH", syntaxFun [Ty.TyRx, Ty.TyStr] Ty.TyBool)
+  , ("RX-FIND", syntaxFun [Ty.TyRx, Ty.TyStr] Ty.TyStr)
+  , ("RX-SUB", syntaxFun [Ty.TyRx, Ty.TyStr, Ty.TyStr] Ty.TyStr)
+  , ("RX-GSUB", syntaxFun [Ty.TyRx, Ty.TyStr, Ty.TyStr] Ty.TyStr)
+  , ("RX-SPLIT", syntaxFun [Ty.TyRx, Ty.TyStr] (Ty.TyCon "LIST" [Ty.TyStr]))
+  , ("RX-CAPTURES", syntaxFun [Ty.TyRx, Ty.TyStr] (Ty.TyCon "LIST" [Ty.TyStr]))
   ]
   where
-    datumFun args ret = TC.Forall S.empty (Ty.TyFun args ret)
+    syntaxFun args ret = TC.Forall S.empty (Ty.TyFun args ret)
 
 primitiveState :: CompileState
 primitiveState =
@@ -156,15 +162,24 @@ finalizeModuleState modName st expanded = do
   let resolveScope = M.keysSet (csRtCtx st)
   resolved <- firstLeft renderResolveErrs (Resolve.resolveWith resolveScope M.empty exprs)
   (typed, fullEnvs) <- firstLeft renderTypeErrs (TC.typecheckWith (csRtEnvs st) (csRtCtx st) resolved)
-  env' <- firstLeft id (MI.runInterpM (MI.loadTypedTopLevelForms (csEnv st) typed))
   let exports = collectSurfaceExports fullEnvs typed
-      ctVisibleExports = M.difference (collectDeclarationExports fullEnvs typed) (csCtCtx st)
-      ctEnv = mergeVisibleEnv (csEnv st) env' ctVisibleExports
-      localExports = M.difference exports (csRtCtx st)
-      origins' = M.union (M.fromList [(name, modName) | name <- M.keys localExports]) (csEnvOrigins st)
-  pure st
-    { csEnv = ctEnv
-    , csCtCtx = M.union ctVisibleExports (csCtCtx st)
+      declExports = collectDeclarationExports fullEnvs typed
+      visibleRuntimeNames = S.fromList (concatMap compileVisibleRuntimeBindingNames expanded)
+      shouldStrip name =
+        S.member name visibleRuntimeNames
+          && M.lookup name (csEnvOrigins st) /= Just primitiveOrigin
+      replayBase =
+        st
+          { csEnv = M.filterWithKey (\name _ -> not (shouldStrip name)) (csEnv st)
+          , csCtCtx = M.filterWithKey (\name _ -> not (shouldStrip name)) (csCtCtx st)
+          , csEnvOrigins = M.filterWithKey (\name _ -> not (shouldStrip name)) (csEnvOrigins st)
+          }
+  rebuilt <- State.evalStateT (foldM replayRuntimeSurface replayBase expanded) 0
+  let localExports = M.difference exports (csRtCtx st)
+      originNames = S.toList visibleRuntimeNames ++ M.keys localExports
+      origins' = M.union (M.fromList [(name, modName) | name <- originNames]) (csEnvOrigins rebuilt)
+  pure rebuilt
+    { csCtCtx = M.union declExports (csCtCtx rebuilt)
     , csCtEnvs = TC.mergeTCEnvs (csCtEnvs st) fullEnvs
     , csRtCtx = M.union exports (csRtCtx st)
     , csRtEnvs = fullEnvs
@@ -173,6 +188,9 @@ finalizeModuleState modName st expanded = do
   where
     renderResolveErrs errs = unlines (map Resolve.errMsg errs)
     renderTypeErrs errs = unlines (map TC.teMsg errs)
+    replayRuntimeSurface cur sx
+      | isCompileVisibleRuntimeForm sx = registerRuntimeDeclForm modName cur sx
+      | otherwise = pure cur
 
 firstLeft :: (e -> e') -> Either e a -> Either e' a
 firstLeft f = either (Left . f) Right
@@ -320,7 +338,7 @@ processTopLevel modName st sx = case Loc.locVal sx of
     processEvalWhen modName st phaseSx bodyForms
   _ -> do
     expanded <- expandExpr (csMacros st) 0 sx
-    st' <- if isImmediateRuntimeDecl expanded
+    st' <- if isCompileVisibleRuntimeForm expanded
       then registerRuntimeDeclForm modName st expanded
       else pure st
     pure (st', [expanded])
@@ -349,7 +367,7 @@ processEvalWhenBody modName doCompile doEmit st sx = case Loc.locVal sx of
   _ -> do
     expanded <- expandExpr (csMacros st) 0 sx
     st' <- if doCompile then compileTopLevelForm modName st expanded else pure st
-    st'' <- if doEmit && isImmediateRuntimeDecl expanded
+    st'' <- if doEmit && not doCompile && isCompileVisibleRuntimeForm expanded
       then registerRuntimeDeclForm modName st' expanded
       else pure st'
     pure (st'', if doEmit then [expanded] else [])
@@ -360,7 +378,7 @@ compileTopLevelForm modName st sx = do
   let resolveScope = M.keysSet (csCtCtx st)
   resolved <- liftEither (firstLeft renderResolveErrs (Resolve.resolveWith resolveScope M.empty [expr]))
   (typed, fullEnvs) <- liftEither (firstLeft renderTypeErrs (TC.typecheckWith (csCtEnvs st) (csCtCtx st) resolved))
-  env' <- liftEither (firstLeft id (MI.runInterpM (MI.loadTypedTopLevelForms (csEnv st) typed)))
+  env' <- liftEither (firstLeft id (MI.runInterpM (MI.loadTypedTopLevelBindings (csEnv st) typed)))
   let exports = collectSurfaceExports fullEnvs typed
       localExports = M.difference exports (csCtCtx st)
       names = M.keys localExports
@@ -381,24 +399,189 @@ registerRuntimeDeclForm modName st sx = do
   let resolveScope = M.keysSet (csRtCtx st)
   resolved <- liftEither (firstLeft renderResolveErrs (Resolve.resolveWith resolveScope M.empty [expr]))
   (typed, fullEnvs) <- liftEither (firstLeft renderTypeErrs (TC.typecheckWith (csRtEnvs st) (csRtCtx st) resolved))
-  env' <- liftEither (firstLeft id (MI.runInterpM (MI.loadTypedTopLevelForms (csEnv st) typed)))
   let exports = collectSurfaceExports fullEnvs typed
-      ctVisibleExports = M.difference (collectDeclarationExports fullEnvs typed) (csCtCtx st)
-      ctEnv = mergeVisibleEnv (csEnv st) env' ctVisibleExports
-      localExports = M.difference exports (csRtCtx st)
-      names = M.keys localExports
-      origins' = foldl (\acc name -> M.insert name modName acc) (csEnvOrigins st) names
-  pure st
-    { csEnv = ctEnv
-    , csCtCtx = M.union ctVisibleExports (csCtCtx st)
-    , csCtEnvs = TC.mergeTCEnvs (csCtEnvs st) fullEnvs
-    , csRtCtx = M.union exports (csRtCtx st)
-    , csRtEnvs = fullEnvs
-    , csEnvOrigins = origins'
-    }
+      rtState =
+        st
+          { csRtCtx = M.union exports (csRtCtx st)
+          , csRtEnvs = fullEnvs
+          }
+  case typed of
+    [Loc.Located _ (Ty.Typed _ (TC.TRLet binds _))]
+      | isCompileVisibleRuntimeLet sx -> do
+          env' <- registerRuntimeBindings st binds
+          let env'' = sanitizeVisibleBindings st exports env'
+          let localExports = M.difference exports (csRtCtx st)
+              names = M.keys localExports
+              origins' = foldl (\acc name -> M.insert name modName acc) (csEnvOrigins st) names
+          pure rtState
+            { csEnv = env''
+            , csCtCtx = M.union exports (csCtCtx st)
+            , csCtEnvs = TC.mergeTCEnvs (csCtEnvs st) fullEnvs
+            , csEnvOrigins = origins'
+            }
+    _ -> case firstLeft id (MI.runInterpM (MI.loadTypedTopLevelForms (csEnv st) typed)) of
+      Right env' -> do
+        let ctEnv = sanitizeVisibleBindings st exports (mergeVisibleEnv (csEnv st) env' exports)
+            localExports = M.difference exports (csRtCtx st)
+            names = M.keys localExports
+            origins' = foldl (\acc name -> M.insert name modName acc) (csEnvOrigins st) names
+        pure rtState
+          { csEnv = ctEnv
+          , csCtCtx = M.union exports (csCtCtx st)
+          , csCtEnvs = TC.mergeTCEnvs (csCtEnvs st) fullEnvs
+          , csEnvOrigins = origins'
+          }
+      Left err
+        | isCompileVisibleRuntimeLet sx ->
+            pure rtState
+        | otherwise ->
+            liftEither (Left err)
   where
     renderResolveErrs errs = unlines (map Resolve.errMsg errs)
     renderTypeErrs errs = unlines (map TC.teMsg errs)
+
+registerRuntimeBindings :: CompileState -> [(CST.Symbol, t, TC.TRExpr)] -> ExpandM MI.Env
+registerRuntimeBindings st binds = go (csEnv st) M.empty binds
+  where
+    go env _ [] = pure env
+    go env local ((name, _, rhs) : rest) =
+      case analyzeCtExpr st local rhs of
+        Left cause -> do
+          let reason = unavailableReason name cause
+              (env', local') = installUnavailable name reason env local
+          go env' local' rest
+        Right () ->
+          case firstLeft id (MI.runInterpM (MI.evalTyped env rhs)) of
+            Right val -> do
+              case valueUnavailable st val of
+                Just cause -> do
+                  let reason = unavailableReason name cause
+                      (env', local') = installUnavailable name reason env local
+                  go env' local' rest
+                Nothing -> do
+                  let env' = M.insert name val env
+                      local' = M.insert name Nothing local
+                  go env' local' rest
+            Left cause -> do
+              let reason = unavailableReason name cause
+                  (env', local') = installUnavailable name reason env local
+              go env' local' rest
+
+    unavailableReason name cause =
+      compileTimeUnavailable name cause
+
+    installUnavailable name reason env local =
+      case primitiveFallback name of
+        Just primVal ->
+          (M.insert name primVal env, M.insert name Nothing local)
+        _ ->
+          ( M.insert name (MI.MUnavailable name reason) env
+          , M.insert name (Just reason) local
+          )
+
+    primitiveFallback name = M.lookup name MI.defaultEnv
+
+type LocalAvailability = M.Map T.Text (Maybe String)
+
+sanitizeVisibleBindings :: CompileState -> TC.Context -> MI.Env -> MI.Env
+sanitizeVisibleBindings st visible env =
+  foldl sanitizeOne env (M.keys visible)
+  where
+    sanitizeOne acc name =
+      case M.lookup name acc of
+        Just val ->
+          case valueUnavailable st val of
+            Just cause ->
+              case M.lookup name MI.defaultEnv of
+                Just primVal -> M.insert name primVal acc
+                Nothing ->
+                  M.insert name (MI.MUnavailable name (compileTimeUnavailable name cause)) acc
+            Nothing -> acc
+        Nothing -> acc
+
+compileTimeUnavailable :: T.Text -> String -> String
+compileTimeUnavailable name cause =
+  T.unpack name ++ " is not available at compile time"
+    ++ if null cause then "" else ": " ++ cause
+
+valueUnavailable :: CompileState -> MI.MVal -> Maybe String
+valueUnavailable outerSt (MI.MTypedClosure closureEnv params body) =
+  let closureSt =
+        outerSt
+          { csEnv = closureEnv
+          , csRtCtx = M.empty
+          }
+      local' = foldl (\acc param -> M.insert param Nothing acc) M.empty params
+  in either Just (const Nothing) (analyzeCtExpr closureSt local' body)
+valueUnavailable _ _ = Nothing
+
+analyzeCtExpr :: CompileState -> LocalAvailability -> TC.TRExpr -> Either String ()
+analyzeCtExpr st local (Loc.Located _ (Ty.Typed _ expr)) = case expr of
+  TC.TRLit _ -> Right ()
+  TC.TRBool _ -> Right ()
+  TC.TRUnit -> Right ()
+  TC.TRVar vb ->
+    analyzeCtName st local (Resolve.symName vb)
+  TC.TRLam params _ body ->
+    analyzeCtExpr st (foldl (\acc (name, _) -> M.insert name Nothing acc) local params) body
+  TC.TRLet binds body -> do
+    local' <- analyzeCtBinds st local binds
+    analyzeCtExpr st local' body
+  TC.TRIf cond thenBr elseBr -> do
+    analyzeCtExpr st local cond
+    analyzeCtExpr st local thenBr
+    analyzeCtExpr st local elseBr
+  TC.TRApp fn args -> do
+    analyzeCtExpr st local fn
+    mapM_ (analyzeCtExpr st local) args
+  TC.TRType _ _ _ -> Right ()
+  TC.TRCase scrutinee arms -> do
+    analyzeCtExpr st local scrutinee
+    mapM_ analyzeArm arms
+  TC.TRLoop params body ->
+    analyzeCtExpr st (foldl (\acc (name, _) -> M.insert name Nothing acc) local params) body
+  TC.TRRecur args ->
+    mapM_ (analyzeCtExpr st local) args
+  TC.TRFFI name _ _ ->
+    Left ("ffi not available at macro expansion time: " ++ T.unpack name)
+  TC.TRFFIStruct _ _ ->
+    Right ()
+  TC.TRFFIVar name _ _ ->
+    Left ("ffi not available at macro expansion time: " ++ T.unpack name)
+  TC.TRFFIEnum _ _ ->
+    Right ()
+  TC.TRFFICallback name _ _ ->
+    Left ("ffi not available at macro expansion time: " ++ T.unpack name)
+  where
+    analyzeArm (pat, body) =
+      analyzeCtExpr st (addPatBindings local pat) body
+
+analyzeCtBinds :: CompileState -> LocalAvailability -> [(CST.Symbol, t, TC.TRExpr)] -> Either String LocalAvailability
+analyzeCtBinds _ local [] = Right local
+analyzeCtBinds st local ((name, _, rhs) : rest) =
+  let local' = case analyzeCtExpr st local rhs of
+        Left cause -> M.insert name (Just (T.unpack name ++ " is not available at compile time: " ++ cause)) local
+        Right () -> M.insert name Nothing local
+  in analyzeCtBinds st local' rest
+
+analyzeCtName :: CompileState -> LocalAvailability -> T.Text -> Either String ()
+analyzeCtName st local name =
+  case M.lookup name local of
+    Just Nothing -> Right ()
+    Just (Just reason) -> Left reason
+    Nothing -> case M.lookup name (csEnv st) of
+      Just MI.MUnavailable {} -> case M.lookup name (csEnv st) of
+        Just (MI.MUnavailable _ reason) -> Left reason
+        _ -> Right ()
+      Just _ -> Right ()
+      Nothing ->
+        Left (T.unpack name ++ " is not available at compile time")
+
+addPatBindings :: LocalAvailability -> TC.TRPattern -> LocalAvailability
+addPatBindings local pat = case pat of
+  TC.TRPatVar name _ -> M.insert name Nothing local
+  TC.TRPatCon _ _ pats -> foldl addPatBindings local pats
+  _ -> local
 
 defineMacro :: T.Text -> CompileState -> [SExpr.SExpr] -> ExpandM CompileState
 defineMacro modName st macRest =
@@ -407,12 +590,15 @@ defineMacro modName st macRest =
     Right (name, params, template)
       | M.member name (csMacros st) ->
           throwExpandError ("duplicate macro definition: " ++ T.unpack name)
-      | otherwise -> do
-          let typedBody = either (const Nothing) Just (compileMacroBody st params template)
-          pure st
-            { csMacros = M.insert name (MacroClause params typedBody template (csEnv st)) (csMacros st)
-            , csMacroOrigins = M.insert name modName (csMacroOrigins st)
-            }
+      | otherwise ->
+          case compileMacroBody st params template of
+            Left compileErr ->
+              throwExpandError ("typed macro compilation failed for " ++ T.unpack name ++ ": " ++ compileErr)
+            Right typedBody ->
+              pure st
+                { csMacros = M.insert name (MacroClause params typedBody (csEnv st)) (csMacros st)
+                , csMacroOrigins = M.insert name modName (csMacroOrigins st)
+                }
 
 parseMacDef :: [SExpr.SExpr] -> Either String (T.Text, [MacroParam], SExpr.SExpr)
 parseMacDef [Loc.Located _ (SExpr.SAtom name), Loc.Located _ (SExpr.SList paramSxs), template] = do
@@ -477,11 +663,7 @@ applyMacro clause args name =
     Just bindings -> do
       let mvalBinds = M.map MI.sexprToVal bindings
           env = M.union mvalBinds (mcEnv clause)
-      result <- case mcTypedBody clause of
-        Just body ->
-          liftEither (firstLeft id (MI.runInterpM (MI.evalTyped env body)))
-        Nothing ->
-          MI.eval env (mcTemplate clause)
+      result <- liftEither (firstLeft id (MI.runInterpM (MI.evalTyped env (mcTypedBody clause))))
       case MI.valToSExpr result of
         Left err -> throwExpandError err
         Right sexpr -> pure sexpr
@@ -509,7 +691,7 @@ matchClause clause args = go (mcParams clause) args M.empty
 compileMacroBody :: CompileState -> [MacroParam] -> SExpr.SExpr -> Either String TC.TRExpr
 compileMacroBody st params template = do
   expr <- firstLeft SExpr.ceMsg (SExpr.toCompileExpr template)
-  let paramCtx = M.fromList [(name, TC.Forall S.empty Ty.TyDatum) | name <- macroParamNames params]
+  let paramCtx = M.fromList [(name, TC.Forall S.empty Ty.TySyntax) | name <- macroParamNames params]
       ctx = M.union paramCtx (csCtCtx st)
       resolveScope = M.keysSet ctx
   resolved <- firstLeft renderResolveErrs (Resolve.resolveWith resolveScope M.empty [expr])
@@ -566,6 +748,49 @@ isImmediateRuntimeDecl (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom t
     , "FFI-CALLBACK"
     ]
 isImmediateRuntimeDecl _ = False
+
+isCompileVisibleRuntimeForm :: SExpr.SExpr -> Bool
+isCompileVisibleRuntimeForm sx =
+  isImmediateRuntimeDecl sx || isCompileVisibleRuntimeLet sx
+
+compileVisibleRuntimeBindingNames :: SExpr.SExpr -> [T.Text]
+compileVisibleRuntimeBindingNames (Loc.Located _ (SExpr.SList
+  [ Loc.Located _ (SExpr.SAtom "LET")
+  , Loc.Located _ (SExpr.SList binds)
+  , body
+  ]))
+  | isCompileVisibleRuntimeLet (Loc.Located dummySpan (SExpr.SList
+      [ Loc.Located dummySpan (SExpr.SAtom "LET")
+      , Loc.Located dummySpan (SExpr.SList binds)
+      , body
+      ])) = foldr collect [] binds
+  | otherwise = []
+  where
+    collect (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom name), _])) acc =
+      name : acc
+    collect (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom name), Loc.Located _ (SExpr.SType _), _])) acc =
+      name : acc
+    collect _ acc = acc
+compileVisibleRuntimeBindingNames _ = []
+
+isCompileVisibleRuntimeLet :: SExpr.SExpr -> Bool
+isCompileVisibleRuntimeLet (Loc.Located _ (SExpr.SList
+  [ Loc.Located _ (SExpr.SAtom "LET")
+  , Loc.Located _ (SExpr.SList binds)
+  , body
+  ])) =
+    case Loc.locVal body of
+      SExpr.SAtom "UNIT" -> not (null (bindingNames binds))
+      SExpr.SAtom name -> name `elem` bindingNames binds
+      _ -> False
+  where
+    bindingNames = foldr collect []
+    collect (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom name), _])) acc =
+      name : acc
+    collect (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom name), Loc.Located _ (SExpr.SType _), _])) acc =
+      name : acc
+    collect _ acc = acc
+isCompileVisibleRuntimeLet _ = False
 
 expandLet :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
 expandLet macros depth sx kw [Loc.Located bindSp (SExpr.SList binds), body] = do

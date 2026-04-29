@@ -6,12 +6,10 @@ module Pllisp.MacroInterp
   ( MVal(..)
   , Env
   , InterpM
-  , eval
   , evalTyped
   , runInterpM
   , defaultEnv
-  , loadTopLevelForm
-  , loadTopLevelForms
+  , loadTypedTopLevelBindings
   , loadTypedTopLevelForms
   , sexprToVal
   , valToSExpr
@@ -28,6 +26,7 @@ import qualified Pllisp.SExpr  as SExpr
 import qualified Pllisp.SrcLoc as Loc
 import qualified Pllisp.Type as Ty
 import qualified Pllisp.TypeCheck as TC
+import Text.Regex.TDFA ((=~))
 
 -- CORE TYPES
 
@@ -44,9 +43,10 @@ data MVal
   | MQuasi MVal
   | MUnquote MVal
   | MSplice MVal
+  | MRef Int
   | MData T.Text [MVal]
   | MCtor T.Text Int [MVal]
-  | MClosure Env [T.Text] SExpr.SExpr
+  | MUnavailable T.Text String
   | MTypedClosure Env [T.Text] TC.TRExpr
   | MBuiltin T.Text ([MVal] -> InterpM MVal)
 
@@ -63,9 +63,10 @@ instance Show MVal where
   show (MQuasi v)  = "MQuasi " ++ show v
   show (MUnquote v) = "MUnquote " ++ show v
   show (MSplice v) = "MSplice " ++ show v
+  show (MRef n) = "MRef " ++ show n
   show (MData n xs) = "MData " ++ show n ++ " " ++ show xs
   show (MCtor n _ xs) = "MCtor " ++ show n ++ " " ++ show xs
-  show (MClosure _ ps _) = "MClosure <" ++ show ps ++ ">"
+  show (MUnavailable n msg) = "MUnavailable " ++ show n ++ " " ++ show msg
   show (MTypedClosure _ ps _) = "MTypedClosure <" ++ show ps ++ ">"
   show (MBuiltin n _)    = "MBuiltin " ++ show n
 
@@ -82,18 +83,25 @@ instance Eq MVal where
   MQuasi a  == MQuasi b  = a == b
   MUnquote a == MUnquote b = a == b
   MSplice a == MSplice b = a == b
+  MRef a    == MRef b    = a == b
   MData n xs == MData m ys = n == m && xs == ys
   _         == _         = False
 
 type Env = M.Map T.Text MVal
 
-type InterpM = State.StateT Int (Either String)
+data InterpState = InterpState
+  { isGensym :: Int
+  , isNextRef :: Int
+  , isRefs :: M.Map Int MVal
+  }
+
+type InterpM = State.StateT InterpState (Either String)
 
 throwError :: String -> InterpM a
 throwError = State.StateT . const . Left
 
 runInterpM :: InterpM a -> Either String a
-runInterpM m = State.evalStateT m 0
+runInterpM m = State.evalStateT m (InterpState 0 0 M.empty)
 
 -- CONVERSION: SExpr <-> MVal
 
@@ -138,149 +146,14 @@ valToSExpr val = case val of
   MSplice inner -> do
     inner' <- valToSExpr inner
     Right $ loc $ SExpr.SSplice inner'
+  MRef {} -> Left "cannot convert ref to syntax"
   MData {} -> Left "cannot convert data value to syntax"
   MCtor {} -> Left "cannot convert constructor to syntax"
-  MClosure {} -> Left "cannot convert closure to syntax"
+  MUnavailable _ msg -> Left msg
   MTypedClosure {} -> Left "cannot convert typed closure to syntax"
   MBuiltin {} -> Left "cannot convert builtin to syntax"
   where
     loc = Loc.Located dummySpan
-
--- EVALUATOR
-
-eval :: Env -> SExpr.SExpr -> InterpM MVal
-eval env (Loc.Located _ sf) = case sf of
-  -- Self-evaluating literals
-  SExpr.SInt n  -> pure $ MInt n
-  SExpr.SFlt f  -> pure $ MFlt f
-  SExpr.SStr t  -> pure $ MStr t
-  SExpr.SRx p f -> pure $ MRx p f
-  SExpr.SUSym t -> pure $ MUSym t
-
-  -- Atoms: special values or variable lookup
-  SExpr.SAtom "TRUE"  -> pure $ MBool True
-  SExpr.SAtom "FALSE" -> pure $ MBool False
-  SExpr.SAtom name    -> case M.lookup name env of
-    Just val -> pure val
-    Nothing  -> throwError $ "undefined variable: " ++ T.unpack name
-
-  -- Type annotations: preserve as syntax
-  SExpr.SType inner -> pure $ MType (sexprToVal inner)
-
-  -- Quasiquote: construct value
-  SExpr.SQuasi inner -> evalQuasi env inner
-
-  -- Unquote/splice outside quasiquote
-  SExpr.SUnquote _ -> throwError "unquote outside quasiquote"
-  SExpr.SSplice _  -> throwError "splice outside quasiquote"
-
-  -- Lists: special forms or application
-  SExpr.SList [] -> pure $ MList []
-  SExpr.SList (Loc.Located _ (SExpr.SAtom "QUOTE") : rest) -> evalQuote rest
-  SExpr.SList (Loc.Located _ (SExpr.SAtom "LET") : rest)   -> evalLet env rest
-  SExpr.SList (Loc.Located _ (SExpr.SAtom "LAM") : rest)    -> evalLam env rest
-  SExpr.SList (Loc.Located _ (SExpr.SAtom "IF") : rest)     -> evalIf env rest
-  SExpr.SList (Loc.Located _ (SExpr.SAtom "AND") : rest)    -> evalAnd env rest
-  SExpr.SList (Loc.Located _ (SExpr.SAtom "OR") : rest)     -> evalOr env rest
-  SExpr.SList (fn : args) -> do
-    fnVal  <- eval env fn
-    argVals <- mapM (eval env) args
-    apply fnVal argVals
-
--- SPECIAL FORMS
-
-evalQuote :: [SExpr.SExpr] -> InterpM MVal
-evalQuote [sx] = pure $ sexprToVal sx
-evalQuote _    = throwError "quote expects exactly one argument"
-
-evalLet :: Env -> [SExpr.SExpr] -> InterpM MVal
-evalLet env [Loc.Located _ (SExpr.SList bindings), body] = do
-  env' <- bindSequential env bindings
-  eval env' body
-evalLet _ _ = throwError "invalid let: expected (let ((name val)...) body)"
-
-bindSequential :: Env -> [SExpr.SExpr] -> InterpM Env
-bindSequential env [] = pure env
-bindSequential env (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom name), valExpr]) : rest) = do
-  val <- eval env valExpr
-  -- Make recursive lambdas work: patch closure env to include itself
-  let val' = case val of
-        MClosure cEnv params body ->
-          let cEnv' = M.insert name val' cEnv
-          in MClosure cEnv' params body
-        other -> other
-  bindSequential (M.insert name val' env) rest
-bindSequential _ _ = throwError "invalid let binding: expected (name value)"
-
-evalLam :: Env -> [SExpr.SExpr] -> InterpM MVal
-evalLam env [Loc.Located _ (SExpr.SList params), body] = do
-  paramNames <- mapM extractParamName params
-  pure $ MClosure env paramNames body
--- With return type annotation: (lam (params) %type body)
-evalLam env [Loc.Located _ (SExpr.SList params), Loc.Located _ (SExpr.SType _), body] = do
-  paramNames <- mapM extractParamName params
-  pure $ MClosure env paramNames body
-evalLam _ _ = throwError "invalid lambda: expected (lam (params...) body)"
-
-extractParamName :: SExpr.SExpr -> InterpM T.Text
-extractParamName (Loc.Located _ (SExpr.SAtom name)) = pure name
--- Typed param: (name %type)
-extractParamName (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom name) : _))) = pure name
-extractParamName _ = throwError "invalid lambda parameter"
-
-evalIf :: Env -> [SExpr.SExpr] -> InterpM MVal
-evalIf env [cond, thenBr, elseBr] = do
-  condVal <- eval env cond
-  if truthy condVal
-    then eval env thenBr
-    else eval env elseBr
-evalIf _ _ = throwError "invalid if: expected (if cond then else)"
-
-evalAnd :: Env -> [SExpr.SExpr] -> InterpM MVal
-evalAnd _ [] = pure $ MBool True
-evalAnd env [x] = eval env x
-evalAnd env (x : rest) = do
-  v <- eval env x
-  if truthy v then evalAnd env rest else pure $ MBool False
-
-evalOr :: Env -> [SExpr.SExpr] -> InterpM MVal
-evalOr _ [] = pure $ MBool False
-evalOr env [x] = eval env x
-evalOr env (x : rest) = do
-  v <- eval env x
-  if truthy v then pure v else evalOr env rest
-
--- QUASIQUOTE EVALUATION
-
-evalQuasi :: Env -> SExpr.SExpr -> InterpM MVal
-evalQuasi env (Loc.Located _ sf) = case sf of
-  SExpr.SUnquote inner -> eval env inner
-  SExpr.SList elems    -> MList <$> evalQuasiList env elems
-  SExpr.SAtom "TRUE"   -> pure $ MBool True
-  SExpr.SAtom "FALSE"  -> pure $ MBool False
-  SExpr.SAtom t        -> pure $ MAtom t
-  SExpr.SInt n         -> pure $ MInt n
-  SExpr.SFlt f         -> pure $ MFlt f
-  SExpr.SStr t         -> pure $ MStr t
-  SExpr.SRx p f        -> pure $ MRx p f
-  SExpr.SUSym t        -> pure $ MUSym t
-  SExpr.SType inner    -> pure $ MType (sexprToVal inner)
-  SExpr.SQuasi _       -> pure $ sexprToVal (Loc.Located dummySpan sf)
-  SExpr.SSplice _      -> throwError "splice outside list in quasiquote"
-
-evalQuasiList :: Env -> [SExpr.SExpr] -> InterpM [MVal]
-evalQuasiList _ [] = pure []
-evalQuasiList env (Loc.Located _ (SExpr.SSplice inner) : rest) = do
-  val <- eval env inner
-  case val of
-    MList xs -> do
-      rest' <- evalQuasiList env rest
-      pure (xs ++ rest')
-    _ -> throwError ",@ requires a list value"
-evalQuasiList env (x : rest) = do
-  v    <- evalQuasi env x
-  rest' <- evalQuasiList env rest
-  pure (v : rest')
 
 -- TYPED EVALUATOR
 
@@ -390,9 +263,6 @@ bindTypedSequential env [] = pure env
 bindTypedSequential env ((name, _, rhs) : rest) = do
   val <- evalTyped env rhs
   let val' = case val of
-        MClosure cEnv params body ->
-          let cEnv' = M.insert name val' cEnv
-          in MClosure cEnv' params body
         MTypedClosure cEnv params body ->
           let cEnv' = M.insert name val' cEnv
           in MTypedClosure cEnv' params body
@@ -404,6 +274,12 @@ loadTypedTopLevelForms env [] = pure env
 loadTypedTopLevelForms env (expr : rest) = do
   env' <- loadTypedTopLevelForm env expr
   loadTypedTopLevelForms env' rest
+
+loadTypedTopLevelBindings :: Env -> [TC.TRExpr] -> InterpM Env
+loadTypedTopLevelBindings env [] = pure env
+loadTypedTopLevelBindings env (expr : rest) = do
+  env' <- loadTypedTopLevelBinding env expr
+  loadTypedTopLevelBindings env' rest
 
 loadTypedTopLevelForm :: Env -> TC.TRExpr -> InterpM Env
 loadTypedTopLevelForm env trExpr@(Loc.Located _ (Ty.Typed _ expr)) = case expr of
@@ -425,6 +301,23 @@ loadTypedTopLevelForm env trExpr@(Loc.Located _ (Ty.Typed _ expr)) = case expr o
     _ <- evalTyped env trExpr
     pure env
 
+loadTypedTopLevelBinding :: Env -> TC.TRExpr -> InterpM Env
+loadTypedTopLevelBinding env (Loc.Located _ (Ty.Typed _ expr)) = case expr of
+  TC.TRType _ _ ctors ->
+    pure $ foldl registerCtor env ctors
+  TC.TRFFI name _ _ ->
+    pure $ M.insert name (ffiStub name) env
+  TC.TRFFIVar name _ _ ->
+    pure $ M.insert name (ffiStub name) env
+  TC.TRFFICallback name _ _ ->
+    pure $ M.insert name (ffiStub name) env
+  TC.TRFFIEnum _ variants ->
+    pure $ foldl (\acc (name, n) -> M.insert name (MInt n) acc) env variants
+  TC.TRLet binds _ ->
+    bindTypedSequential env binds
+  _ ->
+    pure env
+
 registerCtor :: Env -> CST.DataCon -> Env
 registerCtor env dc =
   M.insert (CST.dcName dc) ctor env
@@ -435,7 +328,7 @@ registerCtor env dc =
       | otherwise = MCtor (CST.dcName dc) arity []
 
 ffiStub :: T.Text -> MVal
-ffiStub name = MBuiltin name (\_ -> throwError ("ffi not available at macro expansion time: " ++ T.unpack name))
+ffiStub name = MUnavailable name ("ffi not available at macro expansion time: " ++ T.unpack name)
 
 litToVal :: CST.Literal -> MVal
 litToVal lit = case lit of
@@ -448,12 +341,6 @@ litToVal lit = case lit of
 -- FUNCTION APPLICATION
 
 apply :: MVal -> [MVal] -> InterpM MVal
-apply (MClosure closureEnv params body) args
-  | length params == length args = do
-      let env = M.union (M.fromList (zip params args)) closureEnv
-      eval env body
-  | otherwise = throwError $ "wrong number of arguments: expected "
-      ++ show (length params) ++ ", got " ++ show (length args)
 apply (MTypedClosure closureEnv params body) args
   | length params == length args = do
       let env = M.union (M.fromList (zip params args)) closureEnv
@@ -467,6 +354,7 @@ apply (MCtor name arity applied) args
       ++ show arity ++ ", got " ++ show (length combined)
   where
     combined = applied ++ args
+apply (MUnavailable _ msg) _ = throwError msg
 apply (MBuiltin _ f) args = f args
 apply val _ = throwError $ "not a function: " ++ showBrief val
 
@@ -487,44 +375,23 @@ truthy _           = True
 defaultEnv :: Env
 defaultEnv = primitiveEnv
 
-loadTopLevelForm :: Env -> SExpr.SExpr -> InterpM Env
-loadTopLevelForm env (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"), Loc.Located _ (SExpr.SList binds), body])) = do
-  env' <- bindSequential env binds
-  _ <- eval env' body
-  pure env'
-loadTopLevelForm env sx = do
-  _ <- eval env sx
-  pure env
-
-loadTopLevelForms :: Env -> [SExpr.SExpr] -> InterpM Env
-loadTopLevelForms env [] = pure env
-loadTopLevelForms env (sx : rest) = do
-  env' <- loadTopLevelForm env sx
-  loadTopLevelForms env' rest
-
 primitiveEnv :: Env
 primitiveEnv = M.fromList
-  [ ("__CT-NIL",        MList [])
-  , ("__CT-LIFT",       MBuiltin "__CT-LIFT" bCtLift)
-  , ("CAR",             MBuiltin "CAR" bCar)
-  , ("CDR",             MBuiltin "CDR" bCdr)
-  , ("CONS",            MBuiltin "CONS" bCons)
-  , ("LIST",            MBuiltin "LIST" bList)
-  , ("LENGTH",          MBuiltin "LENGTH" bLength)
-  , ("NULL?",           MBuiltin "NULL?" bNullQ)
-  , ("SYMBOL?",         MBuiltin "SYMBOL?" bSymbolQ)
-  , ("LIST?",           MBuiltin "LIST?" bListQ)
-  , ("STRING?",         MBuiltin "STRING?" bStringQ)
-  , ("NUMBER?",         MBuiltin "NUMBER?" bNumberQ)
-  , ("BOOL?",           MBuiltin "BOOL?" bBoolQ)
-  , ("TYPE?",           MBuiltin "TYPE?" bTypeQ)
+  [ ("SYNTAX-EMPTY",    MList [])
+  , ("SYNTAX-LIFT",     MBuiltin "SYNTAX-LIFT" bSyntaxLift)
+  , ("SYNTAX-CAR",      MBuiltin "SYNTAX-CAR" bCar)
+  , ("SYNTAX-CDR",      MBuiltin "SYNTAX-CDR" bCdr)
+  , ("SYNTAX-LENGTH",   MBuiltin "SYNTAX-LENGTH" bLength)
+  , ("SYNTAX-NULL?",    MBuiltin "SYNTAX-NULL?" bNullQ)
+  , ("SYNTAX-SYMBOL?",  MBuiltin "SYNTAX-SYMBOL?" bSymbolQ)
+  , ("SYNTAX-LIST?",    MBuiltin "SYNTAX-LIST?" bListQ)
+  , ("SYNTAX-STRING?",  MBuiltin "SYNTAX-STRING?" bStringQ)
+  , ("SYNTAX-NUMBER?",  MBuiltin "SYNTAX-NUMBER?" bNumberQ)
+  , ("SYNTAX-BOOL?",    MBuiltin "SYNTAX-BOOL?" bBoolQ)
+  , ("SYNTAX-TYPE?",    MBuiltin "SYNTAX-TYPE?" bTypeQ)
   , ("EQ",              MBuiltin "EQ" bEq)
   , ("NOT",             MBuiltin "NOT" bNot)
   , ("CONCAT",          MBuiltin "CONCAT" bConcat)
-  , ("SYM-TO-STR",      MBuiltin "SYM-TO-STR" bSymToStr)
-  , ("STR-TO-SYM",      MBuiltin "STR-TO-SYM" bStrToSym)
-  , ("USYM-TO-STR",     MBuiltin "USYM-TO-STR" bUSymToStr)
-  , ("STR-TO-USYM",     MBuiltin "STR-TO-USYM" bStrToUSym)
   , ("GENSYM",          MBuiltin "GENSYM" bGensym)
   , ("ERROR",           MBuiltin "ERROR" bError)
   , ("ADD",             MBuiltin "ADD" bAdd)
@@ -548,82 +415,94 @@ primitiveEnv = M.fromList
   , ("SUBSTR",          MBuiltin "SUBSTR" bSubstr)
   , ("INT-TO-FLT",      MBuiltin "INT-TO-FLT" bIntToFlt)
   , ("FLT-TO-INT",      MBuiltin "FLT-TO-INT" bFltToInt)
-  , ("__CT-ATOM",       MBuiltin "__CT-ATOM" bCtAtom)
-  , ("__CT-INT",        MBuiltin "__CT-INT" bCtInt)
-  , ("__CT-FLT",        MBuiltin "__CT-FLT" bCtFlt)
-  , ("__CT-STR",        MBuiltin "__CT-STR" bCtStr)
-  , ("__CT-BOOL",       MBuiltin "__CT-BOOL" bCtBool)
-  , ("__CT-USYM",       MBuiltin "__CT-USYM" bCtUSym)
-  , ("__CT-RX",         MBuiltin "__CT-RX" bCtRx)
-  , ("__CT-TYPE",       MBuiltin "__CT-TYPE" bCtType)
-  , ("__CT-CONS",       MBuiltin "__CT-CONS" bCons)
-  , ("__CT-APPEND",     MBuiltin "__CT-APPEND" bCtAppend)
+  , ("REF",             MBuiltin "REF" bRef)
+  , ("DEREF",           MBuiltin "DEREF" bDeref)
+  , ("SET!",            MBuiltin "SET!" bSetRef)
+  , ("RX-COMPILE",      MBuiltin "RX-COMPILE" bRxCompile)
+  , ("RX-MATCH",        MBuiltin "RX-MATCH" bRxMatch)
+  , ("RX-FIND",         MBuiltin "RX-FIND" bRxFind)
+  , ("RX-SUB",          MBuiltin "RX-SUB" bRxSub)
+  , ("RX-GSUB",         MBuiltin "RX-GSUB" bRxGSub)
+  , ("RX-SPLIT",        MBuiltin "RX-SPLIT" bRxSplit)
+  , ("RX-CAPTURES",     MBuiltin "RX-CAPTURES" bRxCaptures)
+  , ("SYNTAX-SYMBOL",   MBuiltin "SYNTAX-SYMBOL" bSyntaxSymbol)
+  , ("SYNTAX-INT",      MBuiltin "SYNTAX-INT" bSyntaxInt)
+  , ("SYNTAX-FLOAT",    MBuiltin "SYNTAX-FLOAT" bSyntaxFloat)
+  , ("SYNTAX-STRING",   MBuiltin "SYNTAX-STRING" bSyntaxString)
+  , ("SYNTAX-BOOL",     MBuiltin "SYNTAX-BOOL" bSyntaxBool)
+  , ("SYNTAX-USYM",     MBuiltin "SYNTAX-USYM" bSyntaxUSym)
+  , ("SYNTAX-RX",       MBuiltin "SYNTAX-RX" bSyntaxRx)
+  , ("SYNTAX-TYPE",     MBuiltin "SYNTAX-TYPE" bSyntaxType)
+  , ("SYNTAX-CONS",     MBuiltin "SYNTAX-CONS" bCons)
+  , ("SYNTAX-APPEND",   MBuiltin "SYNTAX-APPEND" bSyntaxAppend)
+  , ("SYNTAX-INT-VALUE", MBuiltin "SYNTAX-INT-VALUE" bSyntaxIntValue)
+  , ("SYNTAX-FLOAT-VALUE", MBuiltin "SYNTAX-FLOAT-VALUE" bSyntaxFltValue)
+  , ("SYNTAX-STRING-VALUE", MBuiltin "SYNTAX-STRING-VALUE" bSyntaxStrValue)
+  , ("SYNTAX-SYMBOL-NAME", MBuiltin "SYNTAX-SYMBOL-NAME" bSymToStr)
+  , ("SYNTAX-USYM-NAME", MBuiltin "SYNTAX-USYM-NAME" bUSymToStr)
   ]
 
--- BUILTINS: LIST OPERATIONS
+-- SYNTAX HELPERS: LIST OPERATIONS
 
 bCar :: [MVal] -> InterpM MVal
 bCar [MList (x:_)] = pure x
-bCar [MList []]     = throwError "car: empty list"
-bCar [_]            = throwError "car: not a list"
-bCar args           = throwError $ "car: expected 1 argument, got " ++ show (length args)
+bCar [MList []]     = throwError "syntax-car: empty list"
+bCar [_]            = throwError "syntax-car: not a list"
+bCar args           = throwError $ "syntax-car: expected 1 argument, got " ++ show (length args)
 
 bCdr :: [MVal] -> InterpM MVal
 bCdr [MList (_:xs)] = pure $ MList xs
-bCdr [MList []]      = throwError "cdr: empty list"
-bCdr [_]             = throwError "cdr: not a list"
-bCdr args            = throwError $ "cdr: expected 1 argument, got " ++ show (length args)
+bCdr [MList []]      = throwError "syntax-cdr: empty list"
+bCdr [_]             = throwError "syntax-cdr: not a list"
+bCdr args            = throwError $ "syntax-cdr: expected 1 argument, got " ++ show (length args)
 
 bCons :: [MVal] -> InterpM MVal
 bCons [x, MList xs] = pure $ MList (x : xs)
-bCons [_, _]         = throwError "cons: second argument must be a list"
-bCons args           = throwError $ "cons: expected 2 arguments, got " ++ show (length args)
-
-bList :: [MVal] -> InterpM MVal
-bList args = pure $ MList args
+bCons [_, _]         = throwError "syntax-cons: second argument must be a list"
+bCons args           = throwError $ "syntax-cons: expected 2 arguments, got " ++ show (length args)
 
 bLength :: [MVal] -> InterpM MVal
 bLength [MList xs] = pure $ MInt (fromIntegral (length xs))
-bLength [_]         = throwError "length: not a list"
-bLength args        = throwError $ "length: expected 1 argument, got " ++ show (length args)
+bLength [_]         = throwError "syntax-length: not a list"
+bLength args        = throwError $ "syntax-length: expected 1 argument, got " ++ show (length args)
 
--- BUILTINS: PREDICATES
+-- SYNTAX HELPERS: PREDICATES
 
 bNullQ :: [MVal] -> InterpM MVal
 bNullQ [MList []] = pure $ MBool True
 bNullQ [_]         = pure $ MBool False
-bNullQ args        = throwError $ "null?: expected 1 argument, got " ++ show (length args)
+bNullQ args        = throwError $ "syntax-null?: expected 1 argument, got " ++ show (length args)
 
 bSymbolQ :: [MVal] -> InterpM MVal
 bSymbolQ [MAtom _] = pure $ MBool True
 bSymbolQ [_]        = pure $ MBool False
-bSymbolQ args       = throwError $ "symbol?: expected 1 argument, got " ++ show (length args)
+bSymbolQ args       = throwError $ "syntax-symbol?: expected 1 argument, got " ++ show (length args)
 
 bListQ :: [MVal] -> InterpM MVal
 bListQ [MList _] = pure $ MBool True
 bListQ [_]        = pure $ MBool False
-bListQ args       = throwError $ "list?: expected 1 argument, got " ++ show (length args)
+bListQ args       = throwError $ "syntax-list?: expected 1 argument, got " ++ show (length args)
 
 bStringQ :: [MVal] -> InterpM MVal
 bStringQ [MStr _] = pure $ MBool True
 bStringQ [_]       = pure $ MBool False
-bStringQ args      = throwError $ "string?: expected 1 argument, got " ++ show (length args)
+bStringQ args      = throwError $ "syntax-string?: expected 1 argument, got " ++ show (length args)
 
 bNumberQ :: [MVal] -> InterpM MVal
 bNumberQ [MInt _] = pure $ MBool True
 bNumberQ [MFlt _] = pure $ MBool True
 bNumberQ [_]       = pure $ MBool False
-bNumberQ args      = throwError $ "number?: expected 1 argument, got " ++ show (length args)
+bNumberQ args      = throwError $ "syntax-number?: expected 1 argument, got " ++ show (length args)
 
 bBoolQ :: [MVal] -> InterpM MVal
 bBoolQ [MBool _] = pure $ MBool True
 bBoolQ [_]        = pure $ MBool False
-bBoolQ args       = throwError $ "bool?: expected 1 argument, got " ++ show (length args)
+bBoolQ args       = throwError $ "syntax-bool?: expected 1 argument, got " ++ show (length args)
 
 bTypeQ :: [MVal] -> InterpM MVal
 bTypeQ [MType _] = pure $ MBool True
 bTypeQ [_]        = pure $ MBool False
-bTypeQ args       = throwError $ "type?: expected 1 argument, got " ++ show (length args)
+bTypeQ args       = throwError $ "syntax-type?: expected 1 argument, got " ++ show (length args)
 
 -- BUILTINS: EQUALITY AND LOGIC
 
@@ -651,7 +530,7 @@ bNot [MBool b] = pure $ MBool (not b)
 bNot [v]       = pure $ MBool (not (truthy v))
 bNot args      = throwError $ "not: expected 1 argument, got " ++ show (length args)
 
--- BUILTINS: STRING / SYMBOL CONVERSION
+-- SYNTAX HELPERS: STRING / SYMBOL CONVERSION
 
 bConcat :: [MVal] -> InterpM MVal
 bConcat [MStr a, MStr b] = pure $ MStr (T.append a b)
@@ -660,23 +539,13 @@ bConcat args              = throwError $ "concat: expected 2 arguments, got " ++
 
 bSymToStr :: [MVal] -> InterpM MVal
 bSymToStr [MAtom t] = pure $ MStr t
-bSymToStr [_]        = throwError "symbol->string: not a symbol"
-bSymToStr args       = throwError $ "symbol->string: expected 1 argument, got " ++ show (length args)
-
-bStrToSym :: [MVal] -> InterpM MVal
-bStrToSym [MStr t] = pure $ MAtom t
-bStrToSym [_]       = throwError "string->symbol: not a string"
-bStrToSym args      = throwError $ "string->symbol: expected 1 argument, got " ++ show (length args)
+bSymToStr [_]        = throwError "syntax-symbol-name: not symbol syntax"
+bSymToStr args       = throwError $ "syntax-symbol-name: expected 1 argument, got " ++ show (length args)
 
 bUSymToStr :: [MVal] -> InterpM MVal
 bUSymToStr [MUSym t] = pure $ MStr t
-bUSymToStr [_]       = throwError "usym-to-str: not an uninterned symbol"
-bUSymToStr args      = throwError $ "usym-to-str: expected 1 argument, got " ++ show (length args)
-
-bStrToUSym :: [MVal] -> InterpM MVal
-bStrToUSym [MStr t] = pure $ MUSym t
-bStrToUSym [_]      = throwError "str-to-usym: not a string"
-bStrToUSym args     = throwError $ "str-to-usym: expected 1 argument, got " ++ show (length args)
+bUSymToStr [_]       = throwError "syntax-usym-name: not usym syntax"
+bUSymToStr args      = throwError $ "syntax-usym-name: expected 1 argument, got " ++ show (length args)
 
 -- BUILTINS: ARITHMETIC
 
@@ -786,74 +655,160 @@ bFltToInt [MFlt f] = pure $ MInt (truncate f)
 bFltToInt [_]      = throwError "flt-to-int: argument must be a float"
 bFltToInt args     = throwError $ "flt-to-int: expected 1 argument, got " ++ show (length args)
 
--- INTERNAL DATUM CONSTRUCTORS
+-- BUILTINS: REFS
 
-bCtLift :: [MVal] -> InterpM MVal
-bCtLift [MAtom t]    = pure (MAtom t)
-bCtLift [MStr t]     = pure (MStr t)
-bCtLift [MInt n]     = pure (MInt n)
-bCtLift [MFlt f]     = pure (MFlt f)
-bCtLift [MList xs]   = pure (MList xs)
-bCtLift [MBool b]    = pure (MBool b)
-bCtLift [MRx p f]    = pure (MRx p f)
-bCtLift [MUSym t]    = pure (MUSym t)
-bCtLift [MType v]    = pure (MType v)
-bCtLift [MQuasi v]   = pure (MQuasi v)
-bCtLift [MUnquote v] = pure (MUnquote v)
-bCtLift [MSplice v]  = pure (MSplice v)
-bCtLift [v]          = throwError $ "cannot lift value into syntax: " ++ showBrief v
-bCtLift args         = throwError $ "__ct-lift: expected 1 argument, got " ++ show (length args)
+bRef :: [MVal] -> InterpM MVal
+bRef [val] = do
+  st <- State.get
+  let refId = isNextRef st
+  State.put st { isNextRef = refId + 1, isRefs = M.insert refId val (isRefs st) }
+  pure (MRef refId)
+bRef args = throwError $ "ref: expected 1 argument, got " ++ show (length args)
 
-bCtAtom :: [MVal] -> InterpM MVal
-bCtAtom [MStr t] = pure $ MAtom t
-bCtAtom [_]      = throwError "__ct-atom: expected a string"
-bCtAtom args     = throwError $ "__ct-atom: expected 1 argument, got " ++ show (length args)
+bDeref :: [MVal] -> InterpM MVal
+bDeref [MRef refId] = do
+  refs <- isRefs <$> State.get
+  case M.lookup refId refs of
+    Just val -> pure val
+    Nothing -> throwError "deref: unknown ref"
+bDeref [_] = throwError "deref: argument must be a ref"
+bDeref args = throwError $ "deref: expected 1 argument, got " ++ show (length args)
 
-bCtInt :: [MVal] -> InterpM MVal
-bCtInt [MInt n] = pure $ MInt n
-bCtInt [_]      = throwError "__ct-int: expected an integer"
-bCtInt args     = throwError $ "__ct-int: expected 1 argument, got " ++ show (length args)
+bSetRef :: [MVal] -> InterpM MVal
+bSetRef [MRef refId, val] = do
+  st <- State.get
+  State.put st { isRefs = M.insert refId val (isRefs st) }
+  pure (MAtom "UNIT")
+bSetRef [_, _] = throwError "set!: first argument must be a ref"
+bSetRef args = throwError $ "set!: expected 2 arguments, got " ++ show (length args)
 
-bCtFlt :: [MVal] -> InterpM MVal
-bCtFlt [MFlt f] = pure $ MFlt f
-bCtFlt [_]      = throwError "__ct-flt: expected a float"
-bCtFlt args     = throwError $ "__ct-flt: expected 1 argument, got " ++ show (length args)
+-- BUILTINS: REGEX
 
-bCtStr :: [MVal] -> InterpM MVal
-bCtStr [MStr t] = pure $ MStr t
-bCtStr [_]      = throwError "__ct-str: expected a string"
-bCtStr args     = throwError $ "__ct-str: expected 1 argument, got " ++ show (length args)
+bRxCompile :: [MVal] -> InterpM MVal
+bRxCompile [MStr pat] = pure (MRx pat "")
+bRxCompile [_] = throwError "rx-compile: argument must be a string"
+bRxCompile args = throwError $ "rx-compile: expected 1 argument, got " ++ show (length args)
 
-bCtBool :: [MVal] -> InterpM MVal
-bCtBool [MBool b] = pure $ MBool b
-bCtBool [_]       = throwError "__ct-bool: expected a bool"
-bCtBool args      = throwError $ "__ct-bool: expected 1 argument, got " ++ show (length args)
+bRxMatch :: [MVal] -> InterpM MVal
+bRxMatch [MRx pat _, MStr input] =
+  pure (MBool (regexMatches pat input))
+bRxMatch [_, _] = throwError "rx-match: expected (regex string)"
+bRxMatch args = throwError $ "rx-match: expected 2 arguments, got " ++ show (length args)
 
-bCtUSym :: [MVal] -> InterpM MVal
-bCtUSym [MStr t] = pure $ MUSym t
-bCtUSym [_]      = throwError "__ct-usym: expected a string"
-bCtUSym args     = throwError $ "__ct-usym: expected 1 argument, got " ++ show (length args)
+bRxFind :: [MVal] -> InterpM MVal
+bRxFind [MRx pat _, MStr input] =
+  pure (MStr (maybe "" (\(m, _, _, _) -> m) (firstRegexMatch pat input)))
+bRxFind [_, _] = throwError "rx-find: expected (regex string)"
+bRxFind args = throwError $ "rx-find: expected 2 arguments, got " ++ show (length args)
 
-bCtRx :: [MVal] -> InterpM MVal
-bCtRx [MStr p, MStr f] = pure $ MRx p f
-bCtRx [_, _]           = throwError "__ct-rx: expected (string string)"
-bCtRx args             = throwError $ "__ct-rx: expected 2 arguments, got " ++ show (length args)
+bRxSub :: [MVal] -> InterpM MVal
+bRxSub [MRx pat _, MStr repl, MStr input] =
+  pure (MStr (regexSub False pat repl input))
+bRxSub [_, _, _] = throwError "rx-sub: expected (regex string string)"
+bRxSub args = throwError $ "rx-sub: expected 3 arguments, got " ++ show (length args)
 
-bCtType :: [MVal] -> InterpM MVal
-bCtType [v] = pure $ MType v
-bCtType args = throwError $ "__ct-type: expected 1 argument, got " ++ show (length args)
+bRxGSub :: [MVal] -> InterpM MVal
+bRxGSub [MRx pat _, MStr repl, MStr input] =
+  pure (MStr (regexSub True pat repl input))
+bRxGSub [_, _, _] = throwError "rx-gsub: expected (regex string string)"
+bRxGSub args = throwError $ "rx-gsub: expected 3 arguments, got " ++ show (length args)
 
-bCtAppend :: [MVal] -> InterpM MVal
-bCtAppend [MList xs, MList ys] = pure $ MList (xs ++ ys)
-bCtAppend [_, _]               = throwError "__ct-append: arguments must be lists"
-bCtAppend args                 = throwError $ "__ct-append: expected 2 arguments, got " ++ show (length args)
+bRxSplit :: [MVal] -> InterpM MVal
+bRxSplit [MRx pat _, MStr input] =
+  pure (MList (map MStr (regexSplit pat input)))
+bRxSplit [_, _] = throwError "rx-split: expected (regex string)"
+bRxSplit args = throwError $ "rx-split: expected 2 arguments, got " ++ show (length args)
+
+bRxCaptures :: [MVal] -> InterpM MVal
+bRxCaptures [MRx pat _, MStr input] =
+  pure (MList (map MStr (regexCaptures pat input)))
+bRxCaptures [_, _] = throwError "rx-captures: expected (regex string)"
+bRxCaptures args = throwError $ "rx-captures: expected 2 arguments, got " ++ show (length args)
+
+-- SYNTAX HELPERS
+
+bSyntaxLift :: [MVal] -> InterpM MVal
+bSyntaxLift [MAtom t]    = pure (MAtom t)
+bSyntaxLift [MStr t]     = pure (MStr t)
+bSyntaxLift [MInt n]     = pure (MInt n)
+bSyntaxLift [MFlt f]     = pure (MFlt f)
+bSyntaxLift [MList xs]   = pure (MList xs)
+bSyntaxLift [MBool b]    = pure (MBool b)
+bSyntaxLift [MRx p f]    = pure (MRx p f)
+bSyntaxLift [MUSym t]    = pure (MUSym t)
+bSyntaxLift [MType v]    = pure (MType v)
+bSyntaxLift [MQuasi v]   = pure (MQuasi v)
+bSyntaxLift [MUnquote v] = pure (MUnquote v)
+bSyntaxLift [MSplice v]  = pure (MSplice v)
+bSyntaxLift [v]          = throwError $ "cannot lift value into syntax: " ++ showBrief v
+bSyntaxLift args         = throwError $ "syntax-lift: expected 1 argument, got " ++ show (length args)
+
+bSyntaxSymbol :: [MVal] -> InterpM MVal
+bSyntaxSymbol [MStr t] = pure $ MAtom t
+bSyntaxSymbol [_]      = throwError "syntax-symbol: expected a string"
+bSyntaxSymbol args     = throwError $ "syntax-symbol: expected 1 argument, got " ++ show (length args)
+
+bSyntaxInt :: [MVal] -> InterpM MVal
+bSyntaxInt [MInt n] = pure $ MInt n
+bSyntaxInt [_]      = throwError "syntax-int: expected an integer"
+bSyntaxInt args     = throwError $ "syntax-int: expected 1 argument, got " ++ show (length args)
+
+bSyntaxFloat :: [MVal] -> InterpM MVal
+bSyntaxFloat [MFlt f] = pure $ MFlt f
+bSyntaxFloat [_]      = throwError "syntax-float: expected a float"
+bSyntaxFloat args     = throwError $ "syntax-float: expected 1 argument, got " ++ show (length args)
+
+bSyntaxString :: [MVal] -> InterpM MVal
+bSyntaxString [MStr t] = pure $ MStr t
+bSyntaxString [_]      = throwError "syntax-string: expected a string"
+bSyntaxString args     = throwError $ "syntax-string: expected 1 argument, got " ++ show (length args)
+
+bSyntaxBool :: [MVal] -> InterpM MVal
+bSyntaxBool [MBool b] = pure $ MBool b
+bSyntaxBool [_]       = throwError "syntax-bool: expected a bool"
+bSyntaxBool args      = throwError $ "syntax-bool: expected 1 argument, got " ++ show (length args)
+
+bSyntaxUSym :: [MVal] -> InterpM MVal
+bSyntaxUSym [MStr t] = pure $ MUSym t
+bSyntaxUSym [_]      = throwError "syntax-usym: expected a string"
+bSyntaxUSym args     = throwError $ "syntax-usym: expected 1 argument, got " ++ show (length args)
+
+bSyntaxRx :: [MVal] -> InterpM MVal
+bSyntaxRx [MStr p, MStr f] = pure $ MRx p f
+bSyntaxRx [_, _]           = throwError "syntax-rx: expected (string string)"
+bSyntaxRx args             = throwError $ "syntax-rx: expected 2 arguments, got " ++ show (length args)
+
+bSyntaxType :: [MVal] -> InterpM MVal
+bSyntaxType [v] = pure $ MType v
+bSyntaxType args = throwError $ "syntax-type: expected 1 argument, got " ++ show (length args)
+
+bSyntaxAppend :: [MVal] -> InterpM MVal
+bSyntaxAppend [MList xs, MList ys] = pure $ MList (xs ++ ys)
+bSyntaxAppend [_, _]               = throwError "syntax-append: arguments must be lists"
+bSyntaxAppend args                 = throwError $ "syntax-append: expected 2 arguments, got " ++ show (length args)
+
+bSyntaxIntValue :: [MVal] -> InterpM MVal
+bSyntaxIntValue [MInt n] = pure $ MInt n
+bSyntaxIntValue [_]      = throwError "syntax-int-value: expected integer syntax"
+bSyntaxIntValue args     = throwError $ "syntax-int-value: expected 1 argument, got " ++ show (length args)
+
+bSyntaxFltValue :: [MVal] -> InterpM MVal
+bSyntaxFltValue [MFlt f] = pure $ MFlt f
+bSyntaxFltValue [_]      = throwError "syntax-float-value: expected float syntax"
+bSyntaxFltValue args     = throwError $ "syntax-float-value: expected 1 argument, got " ++ show (length args)
+
+bSyntaxStrValue :: [MVal] -> InterpM MVal
+bSyntaxStrValue [MStr t] = pure $ MStr t
+bSyntaxStrValue [_]      = throwError "syntax-string-value: expected string syntax"
+bSyntaxStrValue args     = throwError $ "syntax-string-value: expected 1 argument, got " ++ show (length args)
 
 -- BUILTINS: GENSYM
 
 bGensym :: [MVal] -> InterpM MVal
 bGensym [] = do
-  n <- State.get
-  State.put (n + 1)
+  st <- State.get
+  let n = isGensym st
+  State.put st { isGensym = n + 1 }
   pure $ MAtom (T.pack ("__G" ++ show n))
 bGensym args = throwError $ "gensym: expected 0 arguments, got " ++ show (length args)
 
@@ -879,11 +834,63 @@ showBrief (MType _)    = "<type>"
 showBrief (MQuasi _)   = "<quasi>"
 showBrief (MUnquote _) = "<unquote>"
 showBrief (MSplice _)  = "<splice>"
+showBrief (MRef n)     = "<ref:" ++ show n ++ ">"
 showBrief (MData n _)  = T.unpack n
 showBrief (MCtor n _ _) = "<ctor:" ++ T.unpack n ++ ">"
-showBrief (MClosure {}) = "<closure>"
+showBrief (MUnavailable n _) = "<unavailable:" ++ T.unpack n ++ ">"
 showBrief (MTypedClosure {}) = "<typed-closure>"
 showBrief (MBuiltin n _) = "<builtin:" ++ T.unpack n ++ ">"
+
+regexMatches :: T.Text -> T.Text -> Bool
+regexMatches pat input =
+  T.unpack input =~ T.unpack pat
+
+firstRegexMatch :: T.Text -> T.Text -> Maybe (T.Text, [T.Text], T.Text, T.Text)
+firstRegexMatch pat input =
+  let (pre, match, post, groups) =
+        T.unpack input =~ T.unpack pat :: (String, String, String, [String])
+  in if null match
+       then Nothing
+       else Just (T.pack match, map T.pack groups, T.pack pre, T.pack post)
+
+regexCaptures :: T.Text -> T.Text -> [T.Text]
+regexCaptures pat input =
+  case firstRegexMatch pat input of
+    Just (_, groups, _, _) -> groups
+    Nothing -> []
+
+regexSub :: Bool -> T.Text -> T.Text -> T.Text -> T.Text
+regexSub global pat repl input =
+  go input
+  where
+    go txt = case firstRegexMatch pat txt of
+      Nothing -> txt
+      Just (_, groups, pre, post) ->
+        let replaced = expandReplacement repl groups
+            out = pre <> replaced
+        in if global
+             then out <> go post
+             else out <> post
+
+regexSplit :: T.Text -> T.Text -> [T.Text]
+regexSplit pat input =
+  go input
+  where
+    go txt = case firstRegexMatch pat txt of
+      Nothing -> [txt]
+      Just (_, _, pre, post) -> pre : go post
+
+expandReplacement :: T.Text -> [T.Text] -> T.Text
+expandReplacement repl groups =
+  T.pack (go (T.unpack repl))
+  where
+    go [] = []
+    go ('\\':d:rest)
+      | d >= '0' && d <= '9' =
+          let idx = fromEnum d - fromEnum '0'
+              grp = if idx >= 1 && idx <= length groups then T.unpack (groups !! (idx - 1)) else ""
+          in grp ++ go rest
+    go (c:rest) = c : go rest
 
 dummySpan :: Loc.Span
 dummySpan = Loc.Span (Loc.Pos "" 0 0) (Loc.Pos "" 0 0)

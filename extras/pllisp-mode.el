@@ -38,11 +38,17 @@
     "rx-match" "rx-find" "rx-sub" "rx-gsub"
     "rx-split" "rx-captures" "rx-compile"
     "truthy" "eq" "lt" "gt" "le" "ge" "str"
-    "car" "cdr" "cons" "list" "append" "reverse"
-    "length" "map" "filter" "foldl"
-    "null?" "symbol?" "list?" "string?" "number?"
-    "bool?" "type?"
-    "sym-to-str" "str-to-sym"
+    "append" "reverse" "map" "filter" "foldl"
+    "syntax-lift"
+    "syntax-symbol" "syntax-int" "syntax-float" "syntax-string"
+    "syntax-bool" "syntax-usym" "syntax-rx" "syntax-type"
+    "syntax-cons" "syntax-append"
+    "syntax-car" "syntax-cdr" "syntax-length"
+    "syntax-null?" "syntax-symbol?" "syntax-list?"
+    "syntax-string?" "syntax-number?" "syntax-bool?"
+    "syntax-type?"
+    "syntax-int-value" "syntax-float-value" "syntax-string-value"
+    "syntax-symbol-name" "syntax-usym-name"
     "gensym" "error")
   "Implicit function-like names from the language and PRELUDE.")
 
