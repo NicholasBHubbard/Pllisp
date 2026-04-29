@@ -8,12 +8,16 @@ import Data.List (isInfixOf)
 import qualified Data.Map.Strict as M
 import qualified Data.Set        as S
 import qualified Data.Text       as T
+import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Pllisp.CST      as CST
+import qualified Pllisp.MacroExpand as MacroExpand
+import qualified Pllisp.Module   as Mod
 import qualified Pllisp.Parser   as Parser
 import qualified Pllisp.Resolve  as Resolve
 import qualified Pllisp.SExpr    as SExpr
 import qualified Pllisp.SrcLoc   as Loc
+import qualified Pllisp.Stdlib   as Stdlib
 import qualified Pllisp.Type     as Ty
 import qualified Pllisp.TypeCheck as TC
 
@@ -518,24 +522,58 @@ spec = do
 dummySpan :: Loc.Span
 dummySpan = Loc.Span (Loc.Pos "<test>" 1 1) (Loc.Pos "<test>" 1 1)
 
+data PreludeSupport = PreludeSupport
+  { psScope :: S.Set CST.Symbol
+  , psCtx   :: M.Map CST.Symbol TC.Scheme
+  , psEnvs  :: TC.TCEnvs
+  }
+
+preludeSupport :: PreludeSupport
+preludeSupport = unsafePerformIO $ do
+  preludeSexprs <- Stdlib.loadPrelude
+  let expanded = case MacroExpand.expandWith [] preludeSexprs of
+        Left err -> error ("prelude macro error in test: " ++ err)
+        Right sexprs -> sexprs
+      prog = case SExpr.toProgram expanded of
+        Left err -> error ("prelude sexpr error in test: " ++ SExpr.ceMsg err)
+        Right parsed -> parsed
+  case Mod.desugarTopLevel (CST.progExprs prog) of
+    Left err -> error ("prelude desugar error in test: " ++ err)
+    Right exprs -> case Resolve.resolve S.empty exprs of
+      Left _ -> error "prelude resolve error in test"
+      Right resolved -> case TC.typecheckWith TC.emptyTCEnvs M.empty resolved of
+        Left errs -> error ("prelude typecheck error in test: " ++ show errs)
+        Right (typed, envs) ->
+          let exports = Mod.collectExports envs typed
+          in pure PreludeSupport
+               { psScope = M.keysSet exports
+               , psCtx = exports
+               , psEnvs = envs
+               }
+{-# NOINLINE preludeSupport #-}
+
 parseAndTypecheck :: T.Text -> Either [TC.TypeError] TC.TResolvedCST
 parseAndTypecheck = parseAndTypecheckWith S.empty M.empty
 
 parseAndTypecheckWith :: S.Set CST.Symbol -> M.Map CST.Symbol TC.Scheme -> T.Text -> Either [TC.TypeError] TC.TResolvedCST
 parseAndTypecheckWith importedNames importedCtx src = case Parser.parseProgram "<test>" src of
   Left _     -> error "parse error in test"
-  Right prog -> case Resolve.resolve importedNames (CST.progExprs prog) of
-    Left _       -> error "resolve error in test"
-    Right resolved -> TC.typecheck importedCtx resolved
+  Right prog -> case Resolve.resolve (S.union (psScope preludeSupport) importedNames) (CST.progExprs prog) of
+      Left _       -> error "resolve error in test"
+      Right resolved ->
+        fmap fst $
+          TC.typecheckWith (psEnvs preludeSupport) (M.union importedCtx (psCtx preludeSupport)) resolved
 
 parseAndTypecheckViaSExpr :: T.Text -> Either [TC.TypeError] TC.TResolvedCST
 parseAndTypecheckViaSExpr src = case Parser.parseSExprs "<test>" src of
   Left _ -> error "parse error in test"
   Right sexprs -> case SExpr.toProgram sexprs of
     Left err -> error ("sexpr error in test: " ++ SExpr.ceMsg err)
-    Right prog -> case Resolve.resolve S.empty (CST.progExprs prog) of
-      Left _ -> error "resolve error in test"
-      Right resolved -> TC.typecheck M.empty resolved
+    Right prog -> case Resolve.resolve (psScope preludeSupport) (CST.progExprs prog) of
+        Left _ -> error "resolve error in test"
+        Right resolved ->
+          fmap fst $
+            TC.typecheckWith (psEnvs preludeSupport) (psCtx preludeSupport) resolved
 
 topType :: TC.TResolvedCST -> Ty.Type
 topType [] = error "empty TResolvedCST"

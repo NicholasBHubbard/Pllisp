@@ -54,6 +54,14 @@ expandSrc src = do
 
 spec :: Spec
 spec = do
+  describe "default environment" $ do
+    it "loads higher-level list helpers from macro prelude code" $ do
+      let expectClosure name = case M.lookup name MI.defaultEnv of
+            Just MI.MClosure{} -> pure ()
+            Just other -> expectationFailure ("expected closure for " ++ T.unpack name ++ ", got " ++ show other)
+            Nothing -> expectationFailure ("missing " ++ T.unpack name)
+      mapM_ expectClosure ["APPEND", "REVERSE", "MAP", "FILTER", "FOLDL"]
+
   -- ---------------------------------------------------------------
   -- SELF-EVALUATING LITERALS
   -- ---------------------------------------------------------------

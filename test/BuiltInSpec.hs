@@ -13,33 +13,42 @@ import qualified Pllisp.Type as Ty
 spec :: Spec
 spec = do
   describe "builtInNames" $ do
-    it "has 54 entries" $
-      S.size BuiltIn.builtInNames `shouldBe` 54
+    it "matches the reduced primitive runtime surface" $
+      BuiltIn.builtInNames `shouldBe` S.fromList
+        [ "ADD", "SUB", "MUL", "DIV", "MOD"
+        , "ADDF", "SUBF", "MULF", "DIVF"
+        , "EQI", "LTI"
+        , "EQF", "LTF"
+        , "EQS", "LTS"
+        , "CONCAT", "STRLEN", "SUBSTR"
+        , "INT-TO-FLT", "FLT-TO-INT"
+        , "USYM-TO-STR", "STR-TO-USYM"
+        , "REF", "DEREF", "SET!"
+        ]
 
-    it "contains ADD, NOT, PRINT, FLT-TO-STR, EQF" $ do
-      S.member "ADD" BuiltIn.builtInNames `shouldBe` True
-      S.member "NOT" BuiltIn.builtInNames `shouldBe` True
-      S.member "PRINT" BuiltIn.builtInNames `shouldBe` True
-      S.member "FLT-TO-STR" BuiltIn.builtInNames `shouldBe` True
-      S.member "EQF" BuiltIn.builtInNames `shouldBe` True
-
-    it "contains REF, DEREF, SET!" $ do
-      S.member "REF" BuiltIn.builtInNames `shouldBe` True
-      S.member "DEREF" BuiltIn.builtInNames `shouldBe` True
-      S.member "SET!" BuiltIn.builtInNames `shouldBe` True
-
-    it "does not contain GC-COLLECT or GC-HEAP-SIZE" $ do
-      S.member "GC-COLLECT" BuiltIn.builtInNames `shouldBe` False
-      S.member "GC-HEAP-SIZE" BuiltIn.builtInNames `shouldBe` False
+    it "does not keep convenience runtime built-ins in scope" $ do
+      mapM_ (\name -> S.member name BuiltIn.builtInNames `shouldBe` False)
+        [ "NEG", "NEGF"
+        , "GTI", "LEI", "GEI"
+        , "GTF", "LEF", "GEF"
+        , "GTS", "LES", "GES"
+        , "AND", "OR", "NOT"
+        , "STR-CONTAINS"
+        , "PRINT", "READ-LINE", "IS-EOF"
+        , "ARGC", "ARGV"
+        , "INT-TO-STR", "FLT-TO-STR"
+        , "RX-MATCH", "RX-FIND", "RX-SUB", "RX-GSUB"
+        , "RX-SPLIT", "RX-CAPTURES", "RX-COMPILE"
+        , "GC-COLLECT", "GC-HEAP-SIZE"
+        ]
 
   describe "builtInTypes" $ do
     it "ADD :: Int -> Int -> Int" $
       M.lookup "ADD" BuiltIn.builtInTypes
         `shouldBe` Just (Ty.TyFun [Ty.TyInt, Ty.TyInt] Ty.TyInt)
 
-    it "NEG :: Int -> Int" $
-      M.lookup "NEG" BuiltIn.builtInTypes
-        `shouldBe` Just (Ty.TyFun [Ty.TyInt] Ty.TyInt)
+    it "NEG is not a primitive builtin anymore" $
+      M.lookup "NEG" BuiltIn.builtInTypes `shouldBe` Nothing
 
   describe "builtInSchemes" $ do
     it "monomorphic built-ins have empty forall" $ do

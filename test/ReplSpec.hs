@@ -78,6 +78,18 @@ spec = do
         , "(print greeting)"
         ] >>= (`shouldBe` "hello world")
 
+    it "prelude constructors persist across rounds" $
+      runRepl
+        [ "(let ((xs (Cons 1 (Cons 2 Empty)))) xs)"
+        , "(case xs ((Cons h _) (print (int-to-str h))))"
+        ] >>= (`shouldBe` "1")
+
+    it "prelude regex helpers persist across rounds" $
+      runRepl
+        [ "(let ((digits (rx-compile \"[0-9]+\"))) digits)"
+        , "(print (rx-find digits \"abc123def\"))"
+        ] >>= (`shouldBe` "123")
+
     it "closure captures prior-round value" $
       runRepl
         [ "(let ((base 100)) base)"
@@ -91,6 +103,8 @@ data ReplState = ReplState
   { rsScope    :: S.Set CST.Symbol
   , rsContext  :: TC.Context
   , rsGlobals  :: [(CST.Symbol, Ty.Type)]
+  , rsImportedMeta :: [LL.LLExpr]
+  , rsEnvs     :: TC.TCEnvs
   , rsPrevExprs :: [CST.Expr]  -- accumulated defs (TYPE, FFI, etc.) to replay
   }
 
@@ -98,9 +112,11 @@ data ReplState = ReplState
 runRepl :: [T.Text] -> IO String
 runRepl rounds = do
   preludeSexprs <- Stdlib.loadPrelude
-  stRef <- newIORef (ReplState S.empty M.empty [] [])
-  soFiles <- mapM (\(i, src) -> compileRound preludeSexprs stRef i src) (zip [0 :: Int ..] rounds)
-  let driverSrc = genDriver soFiles
+  (preludeSo, preludeState) <- compilePreludeRound preludeSexprs
+  stRef <- newIORef preludeState
+  soFiles <- mapM (\(i, src) -> compileRound preludeSexprs stRef i src) (zip [1 :: Int ..] rounds)
+  let allSoFiles = preludeSo : soFiles
+  let driverSrc = genDriver allSoFiles
   writeFile "/tmp/pll_repl_driver.c" driverSrc
   (ec1, _, err1) <- readProcessWithExitCode "clang"
     ["/tmp/pll_repl_driver.c", "-o", "/tmp/pll_repl_driver", "-ldl", "-lgc"] ""
@@ -126,17 +142,63 @@ compileRound preludeSexprs stRef roundNum src = do
       prog = case SExpr.toProgram expanded of
         Left e -> error ("sexpr error: " ++ SExpr.ceMsg e)
         Right p -> p
-      -- Include accumulated defs (TYPE declarations etc.) before this round's exprs
-  exprs <- case Mod.desugarTopLevel (rsPrevExprs st ++ CST.progExprs prog) of
+  (soFile, st') <- compileExprs st roundNum (rsPrevExprs st ++ CST.progExprs prog)
+  let newDefs = filter isDefExpr (CST.progExprs prog)
+  writeIORef stRef st' { rsPrevExprs = rsPrevExprs st ++ newDefs }
+  pure soFile
+
+compilePreludeRound :: [SExpr.SExpr] -> IO (FilePath, ReplState)
+compilePreludeRound preludeSexprs = do
+  let expanded = case MacroExpand.expandWith [] preludeSexprs of
+        Left err -> error ("prelude macro error: " ++ err)
+        Right sexprs -> sexprs
+      prog = case SExpr.toProgram expanded of
+        Left err -> error ("prelude sexpr error: " ++ SExpr.ceMsg err)
+        Right parsed -> parsed
+      initialState = ReplState S.empty M.empty [] [] TC.emptyTCEnvs []
+  exprs <- case Mod.desugarTopLevel (CST.progExprs prog) of
+    Left err -> error ("prelude desugar error: " ++ err)
+    Right desugared -> pure desugared
+  case Resolve.resolve S.empty exprs of
+    Left errs -> error ("prelude resolve error: " ++ show errs)
+    Right resolved -> case TC.typecheckWith TC.emptyTCEnvs M.empty resolved of
+      Left errs -> error ("prelude typecheck error: " ++ show errs)
+      Right (typed, envs) -> do
+        let llProg = LL.lambdaLift (CC.closureConvert typed)
+            ir = Codegen.codegenRepl 0 [] [] llProg
+            soFile = "/tmp/pll_repl_0.so"
+            llFile = "/tmp/pll_repl_0.ll"
+            bridgeFile = "/tmp/pll_repl_bridge.c"
+            exports = Mod.collectExports envs typed
+            globals = Codegen.collectReplGlobals (LL.llExprs llProg)
+            state = initialState
+              { rsScope = M.keysSet exports
+              , rsContext = exports
+              , rsGlobals = globals
+              , rsImportedMeta = LL.llExprs llProg
+              , rsEnvs = envs
+              }
+        T.IO.writeFile llFile ir
+        T.IO.writeFile bridgeFile Ty.ffiBridgeC
+        (ec, _, err') <- readProcessWithExitCode "clang"
+          [llFile, bridgeFile, "-shared", "-fPIC", "-o", soFile,
+           "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+        case ec of
+          ExitFailure _ -> error ("clang prelude .so failed:\n" ++ err' ++ "\nIR:\n" ++ T.unpack ir)
+          ExitSuccess -> pure (soFile, state)
+
+compileExprs :: ReplState -> Int -> CST.CST -> IO (FilePath, ReplState)
+compileExprs st roundNum sourceExprs = do
+  exprs <- case Mod.desugarTopLevel sourceExprs of
     Left e -> error ("desugar error: " ++ e)
     Right e -> pure e
   case Resolve.resolve (rsScope st) exprs of
     Left e -> error ("resolve error: " ++ show e)
-    Right resolved -> case TC.typecheck (rsContext st) resolved of
+    Right resolved -> case TC.typecheckWith (rsEnvs st) (rsContext st) resolved of
       Left e -> error ("typecheck error: " ++ show e)
-      Right typed -> do
+      Right (typed, roundEnvs) -> do
         let llProg = LL.lambdaLift (CC.closureConvert typed)
-            ir = Codegen.codegenRepl roundNum (rsGlobals st) llProg
+            ir = Codegen.codegenRepl roundNum (rsGlobals st) (rsImportedMeta st) llProg
             soFile = "/tmp/pll_repl_" ++ show roundNum ++ ".so"
             llFile = "/tmp/pll_repl_" ++ show roundNum ++ ".ll"
             bridgeFile = "/tmp/pll_repl_bridge.c"
@@ -148,22 +210,18 @@ compileRound preludeSexprs stRef roundNum src = do
         case ec of
           ExitFailure _ -> error ("clang .so failed:\n" ++ err' ++ "\nIR:\n" ++ T.unpack ir)
           ExitSuccess -> do
-            -- Update state with new globals and defs
             let allNewGlobals = Codegen.collectReplGlobals (LL.llExprs llProg)
                 existingNames = S.fromList (map fst (rsGlobals st))
                 newGlobals = filter (\(n, _) -> not (S.member n existingNames)) allNewGlobals
                 newNames = S.fromList (map fst newGlobals)
-                -- Build schemes for new globals (monomorphic)
                 newSchemes = M.fromList [(n, TC.Forall S.empty t) | (n, t) <- newGlobals]
-                -- Accumulate TYPE/FFI defs for future rounds
-                newDefs = filter isDefExpr (CST.progExprs prog)
-            writeIORef stRef st
-              { rsScope = S.union (rsScope st) newNames
-              , rsContext = M.union newSchemes (rsContext st)
-              , rsGlobals = rsGlobals st ++ newGlobals
-              , rsPrevExprs = rsPrevExprs st ++ newDefs
-              }
-            pure soFile
+                nextState = st
+                  { rsScope = S.union (rsScope st) newNames
+                  , rsContext = M.union newSchemes (rsContext st)
+                  , rsGlobals = rsGlobals st ++ newGlobals
+                  , rsEnvs = TC.mergeTCEnvs (rsEnvs st) roundEnvs
+                  }
+            pure (soFile, nextState)
 
 -- | Check if a CST expression is a definition that should be replayed in future rounds
 isDefExpr :: CST.Expr -> Bool

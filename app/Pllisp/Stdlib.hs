@@ -1,4 +1,9 @@
-module Pllisp.Stdlib (loadPrelude, getStdlibDir, getStdlibDirNear) where
+module Pllisp.Stdlib
+  ( loadPrelude
+  , loadMacroPrelude
+  , getStdlibDir
+  , getStdlibDirNear
+  ) where
 
 import qualified Pllisp.SExpr  as SExpr
 import qualified Pllisp.Parser as Parser
@@ -11,33 +16,40 @@ import Paths_pllisp (getDataFileName)
 
 loadPrelude :: IO [SExpr.SExpr]
 loadPrelude = do
-  fp <- getPreludeFile []
+  fp <- getStdlibFile "PRELUDE.pll" []
   src <- T.IO.readFile fp
   case Parser.parseSExprs "<prelude>" src of
     Left _    -> error "BUG: prelude failed to parse"
+    Right sexprs -> pure sexprs
+
+loadMacroPrelude :: IO [SExpr.SExpr]
+loadMacroPrelude = do
+  fp <- getStdlibFile "MACRO-PRELUDE.pll" []
+  src <- T.IO.readFile fp
+  case Parser.parseSExprs "<macro-prelude>" src of
+    Left _ -> error "BUG: macro prelude failed to parse"
     Right sexprs -> pure sexprs
 
 getStdlibDir :: IO FilePath
 getStdlibDir = getStdlibDirNear []
 
 getStdlibDirNear :: [FilePath] -> IO FilePath
-getStdlibDirNear hints = takeDirectory <$> getPreludeFile hints
+getStdlibDirNear hints = takeDirectory <$> getStdlibFile "PRELUDE.pll" hints
 
-getPreludeFile :: [FilePath] -> IO FilePath
-getPreludeFile hints = do
-  primary <- getDataFileName "PRELUDE.pll"
+getStdlibFile :: FilePath -> [FilePath] -> IO FilePath
+getStdlibFile fileName hints = do
+  primary <- getDataFileName fileName
   cwd <- getCurrentDirectory
   let candidates =
         nub $
           primary :
           concatMap candidatePaths (concatMap ancestors (hints ++ [cwd]))
   firstExisting candidates primary
-
-candidatePaths :: FilePath -> [FilePath]
-candidatePaths dir =
-  [ dir </> "PRELUDE.pll"
-  , dir </> "stdlib" </> "PRELUDE.pll"
-  ]
+  where
+    candidatePaths dir =
+      [ dir </> fileName
+      , dir </> "stdlib" </> fileName
+      ]
 
 ancestors :: FilePath -> [FilePath]
 ancestors dir

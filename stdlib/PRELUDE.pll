@@ -55,6 +55,35 @@
   `(let ((,name ,expr))
      (unless (truthy ,name) ,body)))
 
+(mac and (&rest args)
+  (if (eq (length args) 0)
+    true
+    (if (eq (length args) 1)
+      (car args)
+      `(if ,(car args) (and ,@(cdr args)) false))))
+
+(mac or (&rest args)
+  (if (eq (length args) 0)
+    false
+    (if (eq (length args) 1)
+      (car args)
+      `(if ,(car args) true (or ,@(cdr args))))))
+
+(ffi pll-print (%STR) %VOID)
+(ffi pll-read-line (%INT) %PTR)
+(ffi pll-is-eof (%INT) %INT)
+(ffi pll-argc (%INT) %INT)
+(ffi pll-argv (%INT) %PTR)
+(ffi pll-int-to-str (%INT) %PTR)
+(ffi pll-flt-to-str (%FLT) %PTR)
+(ffi pll-rx-match (%PTR %STR) %I32)
+(ffi pll-rx-find (%PTR %STR) %PTR)
+(ffi pll-rx-sub (%PTR %STR %STR) %PTR)
+(ffi pll-rx-gsub (%PTR %STR %STR) %PTR)
+(ffi pll-rx-split (%PTR %STR) %PTR)
+(ffi pll-rx-captures (%PTR %STR) %PTR)
+(ffi pll-rx-compile (%STR) %PTR)
+
 ### TRUTHY
 
 (cls TRUTHY () (a) (truthy %a %BOOL))
@@ -63,13 +92,16 @@
   (truthy (lam ((x %BOOL)) x)))
 
 (inst TRUTHY %INT
-  (truthy (lam ((x %INT)) (not (eqi x 0)))))
+  (truthy (lam ((x %INT))
+    (if (eqi x 0) false true))))
 
 (inst TRUTHY %FLT
-  (truthy (lam ((x %FLT)) (not (eqf x 0.0)))))
+  (truthy (lam ((x %FLT))
+    (if (eqf x 0.0) false true))))
 
 (inst TRUTHY %STR
-  (truthy (lam ((x %STR)) (not (eqs x "")))))
+  (truthy (lam ((x %STR))
+    (if (eqs x "") false true))))
 
 (inst TRUTHY %(Maybe a)
   (truthy (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))
@@ -94,7 +126,8 @@
   (eq (lam ((a %STR) (b %STR)) (eqs a b))))
 
 (inst EQ %BOOL
-  (eq (lam ((a %BOOL) (b %BOOL)) (if a b (not b)))))
+  (eq (lam ((a %BOOL) (b %BOOL))
+    (if a b (if b false true)))))
 
 ### ORD
 
@@ -106,21 +139,21 @@
 
 (inst ORD %INT
   (lt (lam ((a %INT) (b %INT)) (lti a b)))
-  (gt (lam ((a %INT) (b %INT)) (gti a b)))
-  (le (lam ((a %INT) (b %INT)) (lei a b)))
-  (ge (lam ((a %INT) (b %INT)) (gei a b))))
+  (gt (lam ((a %INT) (b %INT)) (lti b a)))
+  (le (lam ((a %INT) (b %INT)) (if (lti a b) true (eqi a b))))
+  (ge (lam ((a %INT) (b %INT)) (if (lti b a) true (eqi a b)))))
 
 (inst ORD %FLT
   (lt (lam ((a %FLT) (b %FLT)) (ltf a b)))
-  (gt (lam ((a %FLT) (b %FLT)) (gtf a b)))
-  (le (lam ((a %FLT) (b %FLT)) (lef a b)))
-  (ge (lam ((a %FLT) (b %FLT)) (gef a b))))
+  (gt (lam ((a %FLT) (b %FLT)) (ltf b a)))
+  (le (lam ((a %FLT) (b %FLT)) (if (ltf a b) true (eqf a b))))
+  (ge (lam ((a %FLT) (b %FLT)) (if (ltf b a) true (eqf a b)))))
 
 (inst ORD %STR
   (lt (lam ((a %STR) (b %STR)) (lts a b)))
-  (gt (lam ((a %STR) (b %STR)) (gts a b)))
-  (le (lam ((a %STR) (b %STR)) (les a b)))
-  (ge (lam ((a %STR) (b %STR)) (ges a b))))
+  (gt (lam ((a %STR) (b %STR)) (lts b a)))
+  (le (lam ((a %STR) (b %STR)) (if (lts a b) true (eqs a b))))
+  (ge (lam ((a %STR) (b %STR)) (if (lts b a) true (eqs a b)))))
 
 ### STRINGY
 
@@ -130,13 +163,138 @@
   (str (lam ((x %BOOL)) (if x "true" "false"))))
 
 (inst STRINGY %INT
-  (str (lam ((x %INT)) (int-to-str x))))
+  (str (lam ((x %INT)) %STR
+    (if true (pll-int-to-str x) ""))))
 
 (inst STRINGY %FLT
-  (str (lam ((x %FLT)) (flt-to-str x))))
+  (str (lam ((x %FLT)) %STR
+    (if true (pll-flt-to-str x) ""))))
 
 (inst STRINGY %STR
   (str (lam ((x %STR)) x)))
 
 (inst STRINGY %USYM
   (str (lam ((x %USYM)) (usym-to-str x))))
+
+(let ((not (lam ((x %BOOL)) %BOOL
+  (if x false true))))
+  not)
+
+(let ((neg (lam ((x %INT)) %INT
+  (sub 0 x))))
+  neg)
+
+(let ((negf (lam ((x %FLT)) %FLT
+  (subf 0.0 x))))
+  negf)
+
+(let ((gti (lam ((a %INT) (b %INT)) %BOOL
+  (lti b a))))
+  gti)
+
+(let ((lei (lam ((a %INT) (b %INT)) %BOOL
+  (if (lti a b) true (eqi a b)))))
+  lei)
+
+(let ((gei (lam ((a %INT) (b %INT)) %BOOL
+  (if (lti b a) true (eqi a b)))))
+  gei)
+
+(let ((gtf (lam ((a %FLT) (b %FLT)) %BOOL
+  (ltf b a))))
+  gtf)
+
+(let ((lef (lam ((a %FLT) (b %FLT)) %BOOL
+  (if (ltf a b) true (eqf a b)))))
+  lef)
+
+(let ((gef (lam ((a %FLT) (b %FLT)) %BOOL
+  (if (ltf b a) true (eqf a b)))))
+  gef)
+
+(let ((gts (lam ((a %STR) (b %STR)) %BOOL
+  (lts b a))))
+  gts)
+
+(let ((les (lam ((a %STR) (b %STR)) %BOOL
+  (if (lts a b) true (eqs a b)))))
+  les)
+
+(let ((ges (lam ((a %STR) (b %STR)) %BOOL
+  (if (lts b a) true (eqs a b)))))
+  ges)
+
+(let ((str-contains (lam ((haystack %STR) (needle %STR)) %BOOL
+  (let ((needle-len (strlen needle))
+        (hay-len (strlen haystack)))
+    (if (eqi needle-len 0)
+      true
+      (if (lti hay-len needle-len)
+        false
+        (let ((go (lam ((i %INT)) %BOOL
+          (if (lti hay-len (add i needle-len))
+            false
+            (if (eqs (substr haystack i needle-len) needle)
+              true
+              (go (add i 1)))))))
+          (go 0))))))))
+  str-contains)
+
+(let ((print (lam ((s %STR))
+  (pll-print s))))
+  print)
+
+(let ((read-line (lam ((u %UNIT)) %STR
+  (let ((_ u))
+    (if true (pll-read-line 0) "")))))
+  read-line)
+
+(let ((is-eof (lam ((u %UNIT)) %BOOL
+  (let ((_ u))
+    (if (eqi (pll-is-eof 0) 0) false true)))))
+  is-eof)
+
+(let ((argc (lam ((u %UNIT)) %INT
+  (let ((_ u))
+    (pll-argc 0)))))
+  argc)
+
+(let ((argv (lam ((i %INT)) %STR
+  (if true (pll-argv i) ""))))
+  argv)
+
+(let ((int-to-str (lam ((x %INT)) %STR
+  (if true (pll-int-to-str x) ""))))
+  int-to-str)
+
+(let ((flt-to-str (lam ((x %FLT)) %STR
+  (if true (pll-flt-to-str x) ""))))
+  flt-to-str)
+
+(let ((rx-match (lam ((re %RX) (subj %STR)) %BOOL
+  (if (eqi (pll-rx-match re subj) 0) false true))))
+  rx-match)
+
+(let ((rx-find (lam ((re %RX) (subj %STR)) %STR
+  (if true (pll-rx-find re subj) ""))))
+  rx-find)
+
+(let ((rx-sub (lam ((re %RX) (repl %STR) (subj %STR)) %STR
+  (if true (pll-rx-sub re repl subj) ""))))
+  rx-sub)
+
+(let ((rx-gsub (lam ((re %RX) (repl %STR) (subj %STR)) %STR
+  (if true (pll-rx-gsub re repl subj) ""))))
+  rx-gsub)
+
+(let ((rx-split (lam ((re %RX) (subj %STR)) %(List %STR)
+  (if true (pll-rx-split re subj) Empty))))
+  rx-split)
+
+(let ((rx-captures (lam ((re %RX) (subj %STR)) %(List %STR)
+  (if true (pll-rx-captures re subj) Empty))))
+  rx-captures)
+
+(let ((rx-compile (lam ((src %STR)) %RX
+  (if true (pll-rx-compile src) //))))
+  rx-compile)

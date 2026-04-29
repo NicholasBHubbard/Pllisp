@@ -78,19 +78,21 @@ codegen prog = evalState go initState
         ++ [ fmtConstants ]
         ++ strDecls
         ++ [ "" ]
+        ++ [ runtimeHelperDefs ]
         ++ [ rxHelperDefs ]
         ++ defTexts
         ++ [ mainText ]
 
 -- REPL CODEGEN
 
-codegenRepl :: Int -> [(CST.Symbol, Ty.Type)] -> LL.LLProgram -> T.Text
-codegenRepl roundNum priorGlobals prog = evalState go initState
+codegenRepl :: Int -> [(CST.Symbol, Ty.Type)] -> [LL.LLExpr] -> LL.LLProgram -> T.Text
+codegenRepl roundNum priorGlobals importedMeta prog = evalState go initState
   where
-    ctors     = collectCtors (LL.llExprs prog)
-    ffis      = collectFFI (LL.llExprs prog)
-    structs   = collectFFIStructs (LL.llExprs prog)
-    callbacks = collectCallbacks (LL.llExprs prog)
+    metaExprs  = importedMeta ++ LL.llExprs prog
+    ctors     = collectCtors metaExprs
+    ffis      = collectFFI metaExprs
+    structs   = collectFFIStructs metaExprs
+    callbacks = collectCallbacks metaExprs
     defMap    = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
     initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis structs callbacks
     ffiList = filter (not . isBuiltinExtern . fst) (M.toList ffis)
@@ -125,6 +127,7 @@ codegenRepl roundNum priorGlobals prog = evalState go initState
         ++ priorDecls
         ++ globalDecls
         ++ [ "" ]
+        ++ [ runtimeHelperDefs ]
         ++ [ rxHelperDefs ]
         ++ defTexts
         ++ [ entryText ]
@@ -280,6 +283,10 @@ builtinExterns = S.fromList
   , "PCRE2_COMPILE_8", "PCRE2_MATCH_DATA_CREATE_FROM_PATTERN_8"
   , "PCRE2_MATCH_8", "PCRE2_GET_OVECTOR_POINTER_8", "PCRE2_GET_OVECTOR_COUNT_8"
   , "PCRE2_MATCH_DATA_FREE_8", "PCRE2_CODE_FREE_8", "PCRE2_SUBSTITUTE_8"
+  , "PLL-PRINT", "PLL-READ-LINE", "PLL-IS-EOF", "PLL-ARGC", "PLL-ARGV"
+  , "PLL-INT-TO-STR", "PLL-FLT-TO-STR"
+  , "PLL-RX-MATCH", "PLL-RX-FIND", "PLL-RX-SUB", "PLL-RX-GSUB"
+  , "PLL-RX-SPLIT", "PLL-RX-CAPTURES", "PLL-RX-COMPILE"
   , "PLL_FFI_CALL", "PLL_FFI_CALL_VAR"
   , "PLL_MAKE_CALLBACK", "PLL_TEST_APPLY_INT"
   , "PLL_POINT_SUM", "PLL_POINT_SCALE"
@@ -432,7 +439,11 @@ lookupVar name = do
       ctors <- gets csCtors
       case M.lookup name ctors of
         Just ci | null (ciArgs ci) -> genCtorAlloc ci []
-        _ -> error ("Codegen: unbound variable: " <> T.unpack name)
+        _ -> do
+          ffis <- gets csFFI
+          case M.lookup name ffis of
+            Just _ -> pure ("@" <> sanitize (T.toLower name))
+            Nothing -> error ("Codegen: unbound variable: " <> T.unpack name)
 
 tshow :: Show a => a -> T.Text
 tshow = T.pack . show
@@ -1207,60 +1218,24 @@ genBuiltIn name args _resTy = case name of
   "MUL" -> intBinOp "mul" args
   "DIV" -> intBinOp "sdiv" args
   "MOD" -> intBinOp "srem" args
-  "NEG" -> do
-    let (_, op) = head args
-    r <- fresh
-    emit (r <> " = sub i64 0, " <> op)
-    pure r
 
   -- Float arithmetic
   "ADDF" -> fltBinOp "fadd" args
   "SUBF" -> fltBinOp "fsub" args
   "MULF" -> fltBinOp "fmul" args
   "DIVF" -> fltBinOp "fdiv" args
-  "NEGF" -> do
-    let (_, op) = head args
-    r <- fresh
-    emit (r <> " = fsub double 0.0, " <> op)
-    pure r
 
   -- Int comparison
   "EQI" -> intCmp "eq" args
   "LTI" -> intCmp "slt" args
-  "GTI" -> intCmp "sgt" args
-  "LEI" -> intCmp "sle" args
-  "GEI" -> intCmp "sge" args
 
   -- Float comparison
   "EQF" -> fltCmp "oeq" args
   "LTF" -> fltCmp "olt" args
-  "GTF" -> fltCmp "ogt" args
-  "LEF" -> fltCmp "ole" args
-  "GEF" -> fltCmp "oge" args
-
-  -- Boolean
-  "AND" -> do
-    let [(_, a), (_, b)] = args
-    r <- fresh
-    emit (r <> " = and i1 " <> a <> ", " <> b)
-    pure r
-  "OR" -> do
-    let [(_, a), (_, b)] = args
-    r <- fresh
-    emit (r <> " = or i1 " <> a <> ", " <> b)
-    pure r
-  "NOT" -> do
-    let [(_, op)] = args
-    r <- fresh
-    emit (r <> " = xor i1 " <> op <> ", 1")
-    pure r
 
   -- String comparison
   "EQS" -> strCmp "eq" args
   "LTS" -> strCmp "slt" args
-  "GTS" -> strCmp "sgt" args
-  "LES" -> strCmp "sle" args
-  "GES" -> strCmp "sge" args
 
   -- String operations
   "CONCAT" -> do
@@ -1303,88 +1278,6 @@ genBuiltIn name args _resTy = case name of
     emit ("store i8 0, ptr " <> termPtr)
     pure buf
 
-  "STR-CONTAINS" -> do
-    let [(_, haystack), (_, needle)] = args
-    result <- fresh
-    emit (result <> " = call ptr @strstr(ptr " <> haystack <> ", ptr " <> needle <> ")")
-    r <- fresh
-    emit (r <> " = icmp ne ptr " <> result <> ", null")
-    pure r
-
-  -- IO
-  "PRINT" -> do
-    let [(_, s)] = args
-    d <- fresh
-    emit (d <> " = call i32 @puts(ptr " <> s <> ")")
-    pure "0"
-
-  "READ-LINE" -> do
-    buf <- fresh
-    emit (buf <> " = call ptr @GC_malloc(i64 1024)")
-    stdinVal <- fresh
-    emit (stdinVal <> " = load ptr, ptr @stdin")
-    d <- fresh
-    emit (d <> " = call ptr @fgets(ptr " <> buf <> ", i32 1024, ptr " <> stdinVal <> ")")
-    isNull <- fresh
-    emit (isNull <> " = icmp eq ptr " <> d <> ", null")
-    eofLbl <- freshLabel "readline.eof"
-    okLbl <- freshLabel "readline.ok"
-    doneLbl <- freshLabel "readline.done"
-    emit ("br i1 " <> isNull <> ", label %" <> eofLbl <> ", label %" <> okLbl)
-    emitLabel eofLbl
-    emit ("store i8 0, ptr " <> buf)
-    emit ("br label %" <> doneLbl)
-    emitLabel okLbl
-    len <- fresh
-    emit (len <> " = call i64 @strlen(ptr " <> buf <> ")")
-    hasChars <- fresh
-    emit (hasChars <> " = icmp sgt i64 " <> len <> ", 0")
-    stripLbl <- freshLabel "readline.strip"
-    emit ("br i1 " <> hasChars <> ", label %" <> stripLbl <> ", label %" <> doneLbl)
-    emitLabel stripLbl
-    lenM1 <- fresh
-    emit (lenM1 <> " = sub i64 " <> len <> ", 1")
-    lastPtr <- fresh
-    emit (lastPtr <> " = getelementptr i8, ptr " <> buf <> ", i64 " <> lenM1)
-    lastChar <- fresh
-    emit (lastChar <> " = load i8, ptr " <> lastPtr)
-    isNl <- fresh
-    emit (isNl <> " = icmp eq i8 " <> lastChar <> ", 10")
-    nlLbl <- freshLabel "readline.nl"
-    emit ("br i1 " <> isNl <> ", label %" <> nlLbl <> ", label %" <> doneLbl)
-    emitLabel nlLbl
-    emit ("store i8 0, ptr " <> lastPtr)
-    emit ("br label %" <> doneLbl)
-    emitLabel doneLbl
-    pure buf
-
-  "IS-EOF" -> do
-    stdinVal <- fresh
-    emit (stdinVal <> " = load ptr, ptr @stdin")
-    r <- fresh
-    emit (r <> " = call i32 @feof(ptr " <> stdinVal <> ")")
-    result <- fresh
-    emit (result <> " = icmp ne i32 " <> r <> ", 0")
-    pure result
-
-  -- CLI
-  "ARGC" -> do
-    r <- fresh
-    emit (r <> " = load i32, ptr @__argc")
-    result <- fresh
-    emit (result <> " = sext i32 " <> r <> " to i64")
-    pure result
-
-  "ARGV" -> do
-    let [(_, idx)] = args
-    argvPtr <- fresh
-    emit (argvPtr <> " = load ptr, ptr @__argv")
-    elemPtr <- fresh
-    emit (elemPtr <> " = getelementptr ptr, ptr " <> argvPtr <> ", i64 " <> idx)
-    r <- fresh
-    emit (r <> " = load ptr, ptr " <> elemPtr)
-    pure r
-
   -- Conversion
   "INT-TO-FLT" -> do
     let [(_, op)] = args
@@ -1398,24 +1291,6 @@ genBuiltIn name args _resTy = case name of
     emit (r <> " = fptosi double " <> op <> " to i64")
     pure r
 
-  "INT-TO-STR" -> do
-    let [(_, op)] = args
-    buf <- fresh
-    emit (buf <> " = call ptr @GC_malloc(i64 21)")
-    d <- fresh
-    emit (d <> " = call i32 (ptr, i64, ptr, ...) @snprintf(ptr " <> buf
-      <> ", i64 21, ptr @fmt.int, i64 " <> op <> ")")
-    pure buf
-
-  "FLT-TO-STR" -> do
-    let [(_, op)] = args
-    buf <- fresh
-    emit (buf <> " = call ptr @GC_malloc(i64 32)")
-    d <- fresh
-    emit (d <> " = call i32 (ptr, i64, ptr, ...) @snprintf(ptr " <> buf
-      <> ", i64 32, ptr @fmt.flt, double " <> op <> ")")
-    pure buf
-
   "USYM-TO-STR" -> do
     let [(_, op)] = args
     pure op
@@ -1423,57 +1298,6 @@ genBuiltIn name args _resTy = case name of
   "STR-TO-USYM" -> do
     let [(_, op)] = args
     pure op
-
-  -- Rx
-  "RX-MATCH" -> do
-    let [(_, pat), (_, subj)] = args
-    r <- fresh
-    emit (r <> " = call i32 @pll_rx_match(ptr " <> pat <> ", ptr " <> subj <> ")")
-    result <- fresh
-    emit (result <> " = icmp ne i32 " <> r <> ", 0")
-    pure result
-
-  "RX-FIND" -> do
-    let [(_, pat), (_, subj)] = args
-    r <- fresh
-    emit (r <> " = call ptr @pll_rx_find(ptr " <> pat <> ", ptr " <> subj <> ")")
-    pure r
-
-  "RX-SUB" -> do
-    let [(_, pat), (_, repl), (_, subj)] = args
-    r <- fresh
-    emit (r <> " = call ptr @pll_rx_sub(ptr " <> pat <> ", ptr " <> repl <> ", ptr " <> subj <> ")")
-    pure r
-
-  "RX-GSUB" -> do
-    let [(_, pat), (_, repl), (_, subj)] = args
-    r <- fresh
-    emit (r <> " = call ptr @pll_rx_gsub(ptr " <> pat <> ", ptr " <> repl <> ", ptr " <> subj <> ")")
-    pure r
-
-  "RX-SPLIT" -> do
-    let [(_, pat), (_, subj)] = args
-    r <- fresh
-    emit (r <> " = call ptr @pll_rx_split(ptr " <> pat <> ", ptr " <> subj <> ")")
-    pure r
-
-  "RX-CAPTURES" -> do
-    let [(_, pat), (_, subj)] = args
-    r <- fresh
-    emit (r <> " = call ptr @pll_rx_captures(ptr " <> pat <> ", ptr " <> subj <> ")")
-    pure r
-
-  "RX-COMPILE" -> do
-    let [(_, s)] = args
-    errcode <- fresh
-    emit (errcode <> " = alloca i32")
-    erroff <- fresh
-    emit (erroff <> " = alloca i64")
-    compiled <- fresh
-    emit (compiled <> " = call ptr @pcre2_compile_8(ptr " <> s
-      <> ", i64 -1, i32 0"
-      <> ", ptr " <> errcode <> ", ptr " <> erroff <> ", ptr null)")
-    pure compiled
 
   -- Mutable refs
   "REF" -> do
@@ -1527,6 +1351,88 @@ strCmp p [(_, s1), (_, s2)] = do
   emit (r <> " = icmp " <> p <> " i32 " <> cmpR <> ", 0")
   pure r
 strCmp _ _ = error "strCmp: expected 2 args"
+
+runtimeHelperDefs :: T.Text
+runtimeHelperDefs = T.unlines
+  [ "define void @pll_print(ptr %s) {"
+  , "entry:"
+  , "  %_d = call i32 @puts(ptr %s)"
+  , "  ret void"
+  , "}"
+  , ""
+  , "define ptr @pll_read_line(i64 %_ignored) {"
+  , "entry:"
+  , "  %buf = call ptr @GC_malloc(i64 1024)"
+  , "  %stdin.val = load ptr, ptr @stdin"
+  , "  %line = call ptr @fgets(ptr %buf, i32 1024, ptr %stdin.val)"
+  , "  %isnull = icmp eq ptr %line, null"
+  , "  br i1 %isnull, label %eof, label %ok"
+  , "eof:"
+  , "  store i8 0, ptr %buf"
+  , "  br label %done"
+  , "ok:"
+  , "  %len = call i64 @strlen(ptr %buf)"
+  , "  %haschars = icmp sgt i64 %len, 0"
+  , "  br i1 %haschars, label %strip, label %done"
+  , "strip:"
+  , "  %lenm1 = sub i64 %len, 1"
+  , "  %lastptr = getelementptr i8, ptr %buf, i64 %lenm1"
+  , "  %lastchar = load i8, ptr %lastptr"
+  , "  %isnl = icmp eq i8 %lastchar, 10"
+  , "  br i1 %isnl, label %newline, label %done"
+  , "newline:"
+  , "  store i8 0, ptr %lastptr"
+  , "  br label %done"
+  , "done:"
+  , "  ret ptr %buf"
+  , "}"
+  , ""
+  , "define i64 @pll_is_eof(i64 %_ignored) {"
+  , "entry:"
+  , "  %stdin.val = load ptr, ptr @stdin"
+  , "  %eof = call i32 @feof(ptr %stdin.val)"
+  , "  %done = icmp ne i32 %eof, 0"
+  , "  %ret = zext i1 %done to i64"
+  , "  ret i64 %ret"
+  , "}"
+  , ""
+  , "define i64 @pll_argc(i64 %_ignored) {"
+  , "entry:"
+  , "  %argc.i32 = load i32, ptr @__argc"
+  , "  %argc = sext i32 %argc.i32 to i64"
+  , "  ret i64 %argc"
+  , "}"
+  , ""
+  , "define ptr @pll_argv(i64 %idx) {"
+  , "entry:"
+  , "  %argv.ptr = load ptr, ptr @__argv"
+  , "  %elem.ptr = getelementptr ptr, ptr %argv.ptr, i64 %idx"
+  , "  %arg = load ptr, ptr %elem.ptr"
+  , "  ret ptr %arg"
+  , "}"
+  , ""
+  , "define ptr @pll_int_to_str(i64 %n) {"
+  , "entry:"
+  , "  %buf = call ptr @GC_malloc(i64 21)"
+  , "  %_d = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 21, ptr @fmt.int, i64 %n)"
+  , "  ret ptr %buf"
+  , "}"
+  , ""
+  , "define ptr @pll_flt_to_str(double %x) {"
+  , "entry:"
+  , "  %buf = call ptr @GC_malloc(i64 32)"
+  , "  %_d = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 32, ptr @fmt.flt, double %x)"
+  , "  ret ptr %buf"
+  , "}"
+  , ""
+  , "define ptr @pll_rx_compile(ptr %src) {"
+  , "entry:"
+  , "  %errcode = alloca i32"
+  , "  %erroff = alloca i64"
+  , "  %compiled = call ptr @pcre2_compile_8(ptr %src, i64 -1, i32 0, ptr %errcode, ptr %erroff, ptr null)"
+  , "  ret ptr %compiled"
+  , "}"
+  ]
 
 -- RX HELPER FUNCTIONS (embedded LLVM IR)
 -- These implement the 6 rx built-ins using PCRE2, defined as functions

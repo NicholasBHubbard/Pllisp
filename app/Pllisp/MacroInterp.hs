@@ -17,9 +17,11 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 
 import qualified Control.Monad.State.Strict as State
+import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Pllisp.SExpr  as SExpr
 import qualified Pllisp.SrcLoc as Loc
+import qualified Pllisp.Stdlib as Stdlib
 
 -- CORE TYPES
 
@@ -273,13 +275,32 @@ truthy _           = True
 -- DEFAULT ENVIRONMENT
 
 defaultEnv :: Env
-defaultEnv = M.fromList
+defaultEnv = unsafePerformIO loadDefaultEnv
+{-# NOINLINE defaultEnv #-}
+
+loadDefaultEnv :: IO Env
+loadDefaultEnv = do
+  macroPrelude <- Stdlib.loadMacroPrelude
+  case runInterpM (extendEnv primitiveEnv macroPrelude) of
+    Left err -> error ("BUG: macro prelude failed to load: " ++ err)
+    Right env -> pure env
+
+extendEnv :: Env -> [SExpr.SExpr] -> InterpM Env
+extendEnv env [] = pure env
+extendEnv env (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"), Loc.Located _ (SExpr.SList binds), body]) : rest) = do
+  env' <- bindSequential env binds
+  _ <- eval env' body
+  extendEnv env' rest
+extendEnv env (sx : rest) = do
+  _ <- eval env sx
+  extendEnv env rest
+
+primitiveEnv :: Env
+primitiveEnv = M.fromList
   [ ("CAR",             MBuiltin "CAR" bCar)
   , ("CDR",             MBuiltin "CDR" bCdr)
   , ("CONS",            MBuiltin "CONS" bCons)
   , ("LIST",            MBuiltin "LIST" bList)
-  , ("APPEND",          MBuiltin "APPEND" bAppend)
-  , ("REVERSE",         MBuiltin "REVERSE" bReverse)
   , ("LENGTH",          MBuiltin "LENGTH" bLength)
   , ("NULL?",           MBuiltin "NULL?" bNullQ)
   , ("SYMBOL?",         MBuiltin "SYMBOL?" bSymbolQ)
@@ -290,9 +311,6 @@ defaultEnv = M.fromList
   , ("TYPE?",           MBuiltin "TYPE?" bTypeQ)
   , ("EQ",              MBuiltin "EQ" bEq)
   , ("NOT",             MBuiltin "NOT" bNot)
-  , ("MAP",             MBuiltin "MAP" bMap)
-  , ("FILTER",          MBuiltin "FILTER" bFilter)
-  , ("FOLDL",           MBuiltin "FOLDL" bFoldl)
   , ("CONCAT",          MBuiltin "CONCAT" bConcat)
   , ("SYM-TO-STR",      MBuiltin "SYM-TO-STR" bSymToStr)
   , ("STR-TO-SYM",      MBuiltin "STR-TO-SYM" bStrToSym)
@@ -328,16 +346,6 @@ bCons args           = throwError $ "cons: expected 2 arguments, got " ++ show (
 
 bList :: [MVal] -> InterpM MVal
 bList args = pure $ MList args
-
-bAppend :: [MVal] -> InterpM MVal
-bAppend [MList a, MList b] = pure $ MList (a ++ b)
-bAppend [_, _]              = throwError "append: arguments must be lists"
-bAppend args                = throwError $ "append: expected 2 arguments, got " ++ show (length args)
-
-bReverse :: [MVal] -> InterpM MVal
-bReverse [MList xs] = pure $ MList (reverse xs)
-bReverse [_]         = throwError "reverse: not a list"
-bReverse args        = throwError $ "reverse: expected 1 argument, got " ++ show (length args)
 
 bLength :: [MVal] -> InterpM MVal
 bLength [MList xs] = pure $ MInt (fromIntegral (length xs))
@@ -403,34 +411,6 @@ bNot :: [MVal] -> InterpM MVal
 bNot [MBool b] = pure $ MBool (not b)
 bNot [v]       = pure $ MBool (not (truthy v))
 bNot args      = throwError $ "not: expected 1 argument, got " ++ show (length args)
-
--- BUILTINS: HIGHER-ORDER FUNCTIONS
-
-bMap :: [MVal] -> InterpM MVal
-bMap [fn, MList xs] = MList <$> mapM (\x -> apply fn [x]) xs
-bMap [_, _]          = throwError "map: second argument must be a list"
-bMap args            = throwError $ "map: expected 2 arguments, got " ++ show (length args)
-
-bFilter :: [MVal] -> InterpM MVal
-bFilter [fn, MList xs] = MList <$> filterM (\x -> truthy <$> apply fn [x]) xs
-  where
-    filterM _ [] = pure []
-    filterM p (y:ys) = do
-      keep <- p y
-      rest <- filterM p ys
-      pure $ if keep then y : rest else rest
-bFilter [_, _] = throwError "filter: second argument must be a list"
-bFilter args   = throwError $ "filter: expected 2 arguments, got " ++ show (length args)
-
-bFoldl :: [MVal] -> InterpM MVal
-bFoldl [fn, acc, MList xs] = go acc xs
-  where
-    go a []     = pure a
-    go a (y:ys) = do
-      a' <- apply fn [a, y]
-      go a' ys
-bFoldl [_, _, _] = throwError "foldl: third argument must be a list"
-bFoldl args      = throwError $ "foldl: expected 3 arguments, got " ++ show (length args)
 
 -- BUILTINS: STRING / SYMBOL CONVERSION
 

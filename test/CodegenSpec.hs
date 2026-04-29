@@ -60,6 +60,18 @@ spec = do
     it "or tf"  $ run "(print (int-to-str (if (or true false)   1 0)))" >>= (`shouldBe` "1")
     it "or ff"  $ run "(print (int-to-str (if (or false false)  1 0)))" >>= (`shouldBe` "0")
     it "not"    $ run "(print (int-to-str (if (not false) 1 0)))"       >>= (`shouldBe` "1")
+    it "and short-circuits" $
+      run (T.unlines
+        [ "(let ((r (ref 0)))"
+        , "  (let ((_ (and false (let ((_ (set! r 1))) true))))"
+        , "    (print (int-to-str (deref r)))))"
+        ]) >>= (`shouldBe` "0")
+    it "or short-circuits" $
+      run (T.unlines
+        [ "(let ((r (ref 0)))"
+        , "  (let ((_ (or true (let ((_ (set! r 1))) false))))"
+        , "    (print (int-to-str (deref r)))))"
+        ]) >>= (`shouldBe` "0")
 
   describe "strings" $ do
     it "prints string literal"  $ run "(print \"hello\")"                      >>= (`shouldBe` "hello")
