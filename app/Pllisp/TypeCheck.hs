@@ -1205,17 +1205,22 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
         case M.lookup ctorName structFields of
           Just allFields -> do
             let resultTy = Ty.TyCon ctorName []
-            constrain sp scrutTy resultTy
-            let allFieldTys = map (Ty.cTypeToPllisp . snd) allFields
+                allFieldTys = map (Ty.cTypeToPllisp . snd) allFields
                 fieldTy = allFieldTys !! fieldIdx
-                pats = [if i == fieldIdx
-                        then TRPatVar fieldName ft
-                        else TRPatWild ft
-                       | (i, ft) <- zip [0..] allFieldTys]
-                pat = TRPatCon ctorName scrutTy pats
-                binding = Res.VarBinding 0 fieldName
-                body = Loc.Located sp (Ty.Typed fieldTy (TRVar binding))
-            pure $ Ty.Typed fieldTy (TRCase scrutExpr [(pat, body)])
+            case fieldOwnerMismatchMsg fieldName resultTy scrutTy of
+              Just msg -> do
+                _ <- recordError sp msg
+                pure $ Ty.Typed fieldTy TRUnit
+              Nothing -> do
+                constrain sp scrutTy resultTy
+                let pats = [if i == fieldIdx
+                            then TRPatVar fieldName ft
+                            else TRPatWild ft
+                           | (i, ft) <- zip [0..] allFieldTys]
+                    pat = TRPatCon ctorName scrutTy pats
+                    binding = Res.VarBinding 0 fieldName
+                    body = Loc.Located sp (Ty.Typed fieldTy (TRVar binding))
+                pure $ Ty.Typed fieldTy (TRCase scrutExpr [(pat, body)])
           Nothing -> do
             -- Regular ADT field access
             ctx <- askCtx
@@ -1225,21 +1230,26 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
             let (argTys, resultTy) = case ctorTy of
                   Ty.TyFun as r -> (as, r)
                   t             -> ([], t)
-            constrain sp scrutTy resultTy
             if fieldIdx >= length argTys || numFields /= length argTys
               then do
                 t <- recordError sp ("field index out of bounds for " ++ T.unpack fieldName)
                 pure $ Ty.Typed t TRUnit
               else do
                 let fieldTy = argTys !! fieldIdx
-                    pats = [if i == fieldIdx
-                            then TRPatVar fieldName ft
-                            else TRPatWild ft
-                           | (i, ft) <- zip [0..] argTys]
-                    pat = TRPatCon ctorName scrutTy pats
-                    binding = Res.VarBinding 0 fieldName
-                    body = Loc.Located sp (Ty.Typed fieldTy (TRVar binding))
-                pure $ Ty.Typed fieldTy (TRCase scrutExpr [(pat, body)])
+                case fieldOwnerMismatchMsg fieldName resultTy scrutTy of
+                  Just msg -> do
+                    _ <- recordError sp msg
+                    pure $ Ty.Typed fieldTy TRUnit
+                  Nothing -> do
+                    constrain sp scrutTy resultTy
+                    let pats = [if i == fieldIdx
+                                then TRPatVar fieldName ft
+                                else TRPatWild ft
+                               | (i, ft) <- zip [0..] argTys]
+                        pat = TRPatCon ctorName scrutTy pats
+                        binding = Res.VarBinding 0 fieldName
+                        body = Loc.Located sp (Ty.Typed fieldTy (TRVar binding))
+                    pure $ Ty.Typed fieldTy (TRCase scrutExpr [(pat, body)])
   Res.RCase scrutinee arms -> do
     scrutExpr <- infer scrutinee
     let scrutTy = typeOf scrutExpr
@@ -1266,6 +1276,33 @@ recordError :: Loc.Span -> String -> Infer Ty.Type
 recordError sp msg = do
   RWS.tell ([], [TypeError sp msg])
   fresh
+
+fieldOwnerMismatchMsg :: CST.Symbol -> Ty.Type -> Ty.Type -> Maybe String
+fieldOwnerMismatchMsg fieldName expectedTy actualTy
+  | sameTypeHead expectedTy actualTy = Nothing
+  | hasKnownHead expectedTy && hasKnownHead actualTy =
+      Just ("field '" ++ T.unpack fieldName ++ "' belongs to "
+        ++ T.unpack (Ty.renderType expectedTy)
+        ++ ", but expression has type "
+        ++ T.unpack (Ty.renderType actualTy))
+  | otherwise = Nothing
+  where
+    sameTypeHead t1 t2 = typeHead t1 == typeHead t2
+
+    hasKnownHead = maybe False (const True) . typeHead
+
+    typeHead ty = case ty of
+      Ty.TyInt      -> Just "INT"
+      Ty.TyFlt      -> Just "FLT"
+      Ty.TyStr      -> Just "STR"
+      Ty.TyBool     -> Just "BOOL"
+      Ty.TyUnit     -> Just "UNIT"
+      Ty.TyRx       -> Just "RX"
+      Ty.TyUSym     -> Just "USYM"
+      Ty.TyFun _ _  -> Just "->"
+      Ty.TyCon s _  -> Just s
+      Ty.TyApp f _  -> typeHead f
+      Ty.TyVar _    -> Nothing
 
 paramType :: CST.TSymbol -> Infer Ty.Type
 paramType tsym = case CST.symType tsym of

@@ -12,6 +12,7 @@ import qualified Data.Text       as T
 import qualified Pllisp.CST      as CST
 import qualified Pllisp.Parser   as Parser
 import qualified Pllisp.Resolve  as Resolve
+import qualified Pllisp.SExpr    as SExpr
 import qualified Pllisp.SrcLoc   as Loc
 import qualified Pllisp.Type     as Ty
 import qualified Pllisp.TypeCheck as TC
@@ -57,6 +58,23 @@ spec = do
       case parseAndTypecheck "(type P () (Pair %INT %INT)) (let ((x (Pair 1 2))) (case x ((Pair z) z)))" of
         Right _ -> expectationFailure "expected type error"
         Left errs -> length errs `shouldSatisfy` (>= 1)
+
+    it "reports a field-owner mismatch clearly" $ do
+      let src = T.unlines
+            [ "(type Person ()"
+            , "  (Person (name %STR) (age %INT)))"
+            , ""
+            , "(type Pet ()"
+            , "  (Pet (kind %STR)))"
+            , ""
+            , "(let ((animal (Pet \"cat\")))"
+            , "  (.age animal))"
+            ]
+      case parseAndTypecheckViaSExpr src of
+        Right _ -> expectationFailure "expected type error"
+        Left errs ->
+          map TC.teMsg errs `shouldSatisfy`
+            any (isInfixOf "field 'AGE' belongs to %PERSON, but expression has type %PET")
 
   describe "valid programs" $ do
     it "typechecks arithmetic expressions" $ do
@@ -509,6 +527,15 @@ parseAndTypecheckWith importedNames importedCtx src = case Parser.parseProgram "
   Right prog -> case Resolve.resolve importedNames (CST.progExprs prog) of
     Left _       -> error "resolve error in test"
     Right resolved -> TC.typecheck importedCtx resolved
+
+parseAndTypecheckViaSExpr :: T.Text -> Either [TC.TypeError] TC.TResolvedCST
+parseAndTypecheckViaSExpr src = case Parser.parseSExprs "<test>" src of
+  Left _ -> error "parse error in test"
+  Right sexprs -> case SExpr.toProgram sexprs of
+    Left err -> error ("sexpr error in test: " ++ SExpr.ceMsg err)
+    Right prog -> case Resolve.resolve S.empty (CST.progExprs prog) of
+      Left _ -> error "resolve error in test"
+      Right resolved -> TC.typecheck M.empty resolved
 
 topType :: TC.TResolvedCST -> Ty.Type
 topType [] = error "empty TResolvedCST"

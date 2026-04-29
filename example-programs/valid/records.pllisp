@@ -1,0 +1,15 @@
+# Record types with field access and nesting
+(type Person ()
+  (Person (name %STR) (age %INT)))
+
+(type Box (a)
+  (Box (val a)))
+
+(let ((person-name (Person "Alice" 30)))
+  (print (.name person-name)))
+
+(let ((person-age (Person "Alice" 30)))
+  (print (int-to-str (.age person-age))))
+
+(let ((boxed (Box (Box 42))))
+  (print (int-to-str (.val (.val boxed)))))

@@ -1,0 +1,9 @@
+# AGE exists, but not on Pet
+(type Person ()
+  (Person (name %STR) (age %INT)))
+
+(type Pet ()
+  (Pet (kind %STR)))
+
+(let ((animal (Pet "cat")))
+  (print (int-to-str (.age animal))))
