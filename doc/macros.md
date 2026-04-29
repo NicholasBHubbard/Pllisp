@@ -169,10 +169,14 @@ Called like:
 
 ## Procedural Macro Bodies
 
-A macro body is evaluated as compile-time pllisp code.
+A macro body can work in two styles:
 
-That means a macro can compute, branch, recurse, inspect lists of syntax, and
-build new syntax programmatically:
+- syntax-oriented code that directly inspects and rewrites syntax values
+- ordinary compile-time helper code defined elsewhere and called from the macro
+
+The first style is the classic procedural-macro style. A macro can compute,
+branch, recurse, inspect lists of syntax, and build new syntax
+programmatically:
 
 ```lisp
 (mac count-args (&rest xs)
@@ -184,6 +188,19 @@ or:
 ```lisp
 (mac first-of (&rest xs)
   (car xs))
+```
+
+For larger compile-time logic, the better style is to put the logic in
+`eval-when (:compile-toplevel ...)` helper bindings and keep the `mac` body
+small:
+
+```lisp
+(eval-when (:compile-toplevel)
+  (fun emit-default ()
+    `(add 20 22)))
+
+(mac answer ()
+  (emit-default))
 ```
 
 The result still has to be syntax. If a macro body returns something that
@@ -207,8 +224,8 @@ Important distinction:
 
 - these are compile-time functions over macro values and syntax values
 - they are not ordinary runtime function calls
-- macro bodies do not invoke runtime macros like `fun` directly as compile-time
-  functions
+- if you want ordinary typed compile-time helper code, define it in
+  `eval-when (:compile-toplevel ...)` and call it from the macro
 
 For example:
 
@@ -242,7 +259,7 @@ is the clearer style.
 
 Forms in `:compile-toplevel` are evaluated during macro expansion.
 
-This is how you define helper functions for later macros:
+This is how you define typed helper functions for later macros:
 
 ```lisp
 (eval-when (:compile-toplevel)
@@ -251,6 +268,29 @@ This is how you define helper functions for later macros:
 
 (mac double (x)
   (emit-double x))
+```
+
+Those helper forms are checked as ordinary pllisp code. They can use language
+features like:
+
+- `type` constructors and `case`
+- imported constructors and typeclass methods
+- earlier declaration forms in the same file
+
+For example:
+
+```lisp
+(type Flag () (Flag))
+
+(eval-when (:compile-toplevel)
+  (let ((default Flag))
+    default)
+  (fun emit-flag ()
+    (case default
+      ((Flag) `1))))
+
+(mac use-flag ()
+  (emit-flag))
 ```
 
 This is also how you define macros from inside `eval-when`:
@@ -299,6 +339,8 @@ At compile time, the useful persistent top-level forms are:
 
 - `mac` definitions
 - top-level `let` bindings inside `:compile-toplevel`
+- earlier and imported declaration surfaces such as constructors, typeclass
+  methods, and FFI declarations
 
 Those names become available to later forms in the same module, and to
 importing modules.

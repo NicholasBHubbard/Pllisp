@@ -4,6 +4,7 @@
 
 module Pllisp.SExpr where
 
+import Control.Monad (foldM)
 import qualified Data.Set as S
 import qualified Data.Text as T
 
@@ -101,6 +102,61 @@ toAtomName (Loc.Located _ (SAtom name)) = Right name
 toAtomName (Loc.Located sp _) = Left $ ConvertError sp "expected symbol"
 
 -- EXPRESSIONS
+
+toCompileExpr :: SExpr -> Either ConvertError CST.Expr
+toCompileExpr sx = compilePrepare sx >>= toExpr
+
+compilePrepare :: SExpr -> Either ConvertError SExpr
+compilePrepare (Loc.Located sp sexprF) = case sexprF of
+  SQuasi inner -> quasiPrepare inner
+  SUnquote _   -> Left $ ConvertError sp "unquote outside quasiquote"
+  SSplice _    -> Left $ ConvertError sp "splice outside quasiquote"
+  SList [Loc.Located _ (SAtom "QUOTE"), inner] ->
+    pure $ datumPrepare inner
+  SList xs ->
+    Loc.Located sp . SList <$> mapM compilePrepare xs
+  _ -> pure (Loc.Located sp sexprF)
+
+datumPrepare :: SExpr -> SExpr
+datumPrepare (Loc.Located sp sexprF) = case sexprF of
+  SAtom "TRUE"   -> mkCtCall sp "__CT-BOOL" [Loc.Located sp (SAtom "TRUE")]
+  SAtom "FALSE"  -> mkCtCall sp "__CT-BOOL" [Loc.Located sp (SAtom "FALSE")]
+  SAtom name     -> mkCtCall sp "__CT-ATOM" [Loc.Located sp (SStr name)]
+  SInt n         -> mkCtCall sp "__CT-INT" [Loc.Located sp (SInt n)]
+  SFlt f         -> mkCtCall sp "__CT-FLT" [Loc.Located sp (SFlt f)]
+  SStr t         -> mkCtCall sp "__CT-STR" [Loc.Located sp (SStr t)]
+  SRx p f        -> mkCtCall sp "__CT-RX" [Loc.Located sp (SStr p), Loc.Located sp (SStr f)]
+  SUSym t        -> mkCtCall sp "__CT-USYM" [Loc.Located sp (SStr t)]
+  SType inner    -> mkCtCall sp "__CT-TYPE" [datumPrepare inner]
+  SList xs       -> foldr consDatum (Loc.Located sp (SAtom "__CT-NIL")) xs
+  SQuasi inner   -> datumPrepare (Loc.Located sp (SList [Loc.Located sp (SAtom "%QUASI"), inner]))
+  SUnquote inner -> datumPrepare (Loc.Located sp (SList [Loc.Located sp (SAtom "%UNQUOTE"), inner]))
+  SSplice inner  -> datumPrepare (Loc.Located sp (SList [Loc.Located sp (SAtom "%SPLICE"), inner]))
+  where
+    consDatum x acc = mkCtCall sp "__CT-CONS" [datumPrepare x, acc]
+
+quasiPrepare :: SExpr -> Either ConvertError SExpr
+quasiPrepare sx@(Loc.Located sp sexprF) = case sexprF of
+  SUnquote inner -> compileLift sp inner
+  SList xs       -> foldM step (Loc.Located sp (SAtom "__CT-NIL")) (reverse xs)
+  SSplice _      -> Left $ ConvertError sp "splice outside list in quasiquote"
+  _              -> pure (datumPrepare sx)
+  where
+    step acc x = case Loc.locVal x of
+      SSplice inner -> do
+        inner' <- compilePrepare inner
+        pure $ mkCtCall sp "__CT-APPEND" [inner', acc]
+      _ -> do
+        x' <- quasiPrepare x
+        pure $ mkCtCall sp "__CT-CONS" [x', acc]
+
+compileLift :: Loc.Span -> SExpr -> Either ConvertError SExpr
+compileLift sp inner = do
+  inner' <- compilePrepare inner
+  pure $ mkCtCall sp "__CT-LIFT" [inner']
+
+mkCtCall :: Loc.Span -> T.Text -> [SExpr] -> SExpr
+mkCtCall sp name args = Loc.Located sp (SList (Loc.Located sp (SAtom name) : args))
 
 toExpr :: SExpr -> Either ConvertError CST.Expr
 toExpr (Loc.Located sp sexprF) = case sexprF of
@@ -219,11 +275,11 @@ rejectTrailingMarkers sp sexprs =
 
 -- | Parse a (param default) pair for %opt or &key.
 toDefaultParam :: Loc.Span -> String -> SExpr -> Either ConvertError (CST.TSymbol, CST.Expr)
-toDefaultParam sp label (Loc.Located _ (SList [name, val])) = do
+toDefaultParam _ _ (Loc.Located _ (SList [name, val])) = do
   tsym <- toTSymbol name
   val' <- toExpr val
   Right (tsym, val')
-toDefaultParam sp label (Loc.Located _ (SList [name, Loc.Located _ (SType ty), val])) = do
+toDefaultParam _ _ (Loc.Located _ (SList [name, Loc.Located _ (SType ty), val])) = do
   tsym <- case name of
     Loc.Located _ (SAtom n) -> do
       t <- toType ty
@@ -231,7 +287,7 @@ toDefaultParam sp label (Loc.Located _ (SList [name, Loc.Located _ (SType ty), v
     Loc.Located sp' _ -> Left $ ConvertError sp' "invalid parameter name"
   val' <- toExpr val
   Right (tsym, val')
-toDefaultParam sp label (Loc.Located sp' _) =
+toDefaultParam _ label (Loc.Located sp' _) =
   Left $ ConvertError sp' (label ++ " parameters must be (name default) pairs")
 
 -- LET
@@ -509,7 +565,7 @@ processKeyArgs sp (Loc.Located _ (SAtom "&KEY") : Loc.Located _ (SAtom name) : v
   let keyArg = Loc.Located sp (CST.ExprKeyArg name val')
   rest' <- processKeyArgs sp rest
   Right (keyArg : rest')
-processKeyArgs sp (Loc.Located sp' (SAtom "&KEY") : _) =
+processKeyArgs _ (Loc.Located sp' (SAtom "&KEY") : _) =
   Left $ ConvertError sp' "&key must be followed by a name and value"
 processKeyArgs sp (arg : rest) = do
   arg' <- toExpr arg

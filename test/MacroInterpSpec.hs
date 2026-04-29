@@ -58,6 +58,7 @@ spec = do
     it "includes higher-level list helpers from PRELUDE compile-time support" $ do
       let expectClosure name = case M.lookup name (MacroExpand.csEnv MacroExpand.defaultState) of
             Just MI.MClosure{} -> pure ()
+            Just MI.MTypedClosure{} -> pure ()
             Just other -> expectationFailure ("expected closure for " ++ T.unpack name ++ ", got " ++ show other)
             Nothing -> expectationFailure ("missing " ++ T.unpack name)
       mapM_ expectClosure ["APPEND", "REVERSE", "MAP", "FILTER", "FOLDL"]

@@ -1452,6 +1452,7 @@ unify _ Ty.TyBool Ty.TyBool = Right M.empty
 unify _ Ty.TyUnit Ty.TyUnit = Right M.empty
 unify _ Ty.TyRx Ty.TyRx = Right M.empty
 unify _ Ty.TyUSym Ty.TyUSym = Right M.empty
+unify _ Ty.TyDatum Ty.TyDatum = Right M.empty
 unify sp t1 t2 = Left [TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)]
 
 -- | Unify multiple type pairs, collecting all errors
@@ -1472,6 +1473,7 @@ unifyMany sp _ _ = Left [TypeError sp "type mismatch: different arities"]
 
 bind :: Loc.Span -> TyVar -> Ty.Type -> Either [TypeError] Subst
 bind sp tv t
+  | t == Ty.TyVar tv = Right M.empty
   | tv `S.member` tvs t = Left [TypeError sp ("infinite type " ++ show tv ++ " ~ " ++ show t)]
   | otherwise = Right $ M.singleton tv t
 

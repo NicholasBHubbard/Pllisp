@@ -62,14 +62,14 @@
 
 (mac and (&rest args)
   (if (eq (length args) 0)
-    true
+    `true
     (if (eq (length args) 1)
       (car args)
       `(if ,(car args) (and ,@(cdr args)) false))))
 
 (mac or (&rest args)
   (if (eq (length args) 0)
-    false
+    `false
     (if (eq (length args) 1)
       (car args)
       `(if ,(car args) true (or ,@(cdr args))))))
@@ -87,21 +87,21 @@
   (fun reverse (xs)
     (if (list? xs)
       (if (null? xs)
-        ()
-        (append (reverse (cdr xs)) (cons (car xs) ())))
+        (quote ())
+        (append (reverse (cdr xs)) (cons (car xs) (quote ()))))
       (error "reverse: not a list")))
 
   (fun map (fn xs)
     (if (list? xs)
       (if (null? xs)
-        ()
+        (quote ())
         (cons (fn (car xs)) (map fn (cdr xs))))
       (error "map: second argument must be a list")))
 
   (fun filter (fn xs)
     (if (list? xs)
       (if (null? xs)
-        ()
+        (quote ())
         (if (fn (car xs))
           (cons (car xs) (filter fn (cdr xs)))
           (filter fn (cdr xs))))

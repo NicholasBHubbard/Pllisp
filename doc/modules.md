@@ -130,6 +130,8 @@ Currently exported automatically at compile time:
 
 - top-level `mac` definitions
 - top-level `let` bindings inside `eval-when (:compile-toplevel ...)`
+- declaration surfaces needed by compile-time helper code, such as constructors,
+  typeclass methods, and FFI declarations
 
 That means a module can be a real macro library, not just a bag of runtime
 functions.
@@ -188,6 +190,39 @@ functions.
 That pattern is supported directly. Imported modules bring their compile-time
 state with them, including helper bindings used by later macros.
 
+### Macro Module Using Its Own Earlier Runtime Declarations
+
+Compile-time helper code can also use earlier declarations from the same module.
+
+`FLAGS.pll`:
+
+```lisp
+(module FLAGS)
+
+(type Flag () (Flag))
+
+(eval-when (:compile-toplevel)
+  (let ((default Flag))
+    default)
+  (fun emit-flag ()
+    (case default
+      ((Flag) `7))))
+
+(mac use-flag ()
+  (emit-flag))
+```
+
+`main.pllisp`:
+
+```lisp
+(import FLAGS)
+
+(print (int-to-str (use-flag)))
+```
+
+That works because the constructor `Flag` is part of the module’s compile-time
+declaration surface once the earlier `type` form has been seen.
+
 ### Transitive Macro Imports Work
 
 If module `A` exports a macro, and module `B` imports `A` and defines another
@@ -203,6 +238,8 @@ Important rules:
 - imported macros are called by bare name, not by qualified name
 - module aliases affect runtime qualified names, not macro call syntax
 - unqualified import lists control runtime names, not whether macros are loaded
+- ordinary runtime `let` exports are still runtime names; if you need a helper
+  binding for macro expansion, define it in `eval-when (:compile-toplevel ...)`
 
 So this works:
 

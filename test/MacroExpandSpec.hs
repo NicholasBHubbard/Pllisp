@@ -239,6 +239,73 @@ spec = do
         Left e  -> e `shouldContain` "invalid eval-when phase list"
         Right _ -> expectationFailure "expected invalid eval-when phase list error"
 
+    it "allows compile-time helpers to use ordinary ADTs and case analysis" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(eval-when (:compile-toplevel)"
+          , "  (let ((default (Just 42)))"
+          , "    default)"
+          , "  (fun emit-default ()"
+          , "    (case default"
+          , "      ((Just x) `,x)"
+          , "      (_ `0))))"
+          , "(mac use-default () (emit-default))"
+          , "(use-default)"
+          ])
+      r `shouldBe` [SExpr.SInt 42]
+
+    it "allows later compile-time helpers to use earlier runtime type declarations" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(type Flag () (Flag))"
+          , "(eval-when (:compile-toplevel)"
+          , "  (let ((default Flag))"
+          , "    default)"
+          , "  (fun emit-flag ()"
+          , "    (case default"
+          , "      ((Flag) `1))))"
+          , "(mac use-flag () (emit-flag))"
+          , "(use-flag)"
+          ])
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "TYPE")
+            , l (SExpr.SAtom "FLAG")
+            , l (SExpr.SList [])
+            , l (SExpr.SList [l (SExpr.SAtom "FLAG")])
+            ]
+        , SExpr.SInt 1
+        ]
+
+    it "rejects type errors in compile-time helpers" $ do
+      case expandSrc
+        (T.unlines
+          [ "(eval-when (:compile-toplevel)"
+          , "  (let ((bad (add 1 \"oops\")))"
+          , "    bad))"
+          ]) of
+        Left e  -> e `shouldContain` "cannot unify"
+        Right _ -> expectationFailure "expected compile-time type error"
+
+    it "allows macro bodies themselves to use typed compile-time ADTs" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(type Flag () (Flag))"
+          , "(mac use-flag ()"
+          , "  (case Flag"
+          , "    ((Flag) `1)))"
+          , "(use-flag)"
+          ])
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "TYPE")
+            , l (SExpr.SAtom "FLAG")
+            , l (SExpr.SList [])
+            , l (SExpr.SList [l (SExpr.SAtom "FLAG")])
+            ]
+        , SExpr.SInt 1
+        ]
+
   describe "extractMacroDefs" $ do
     it "extracts mac forms from mixed sexprs" $ do
       sexprs <- either (fail . show) pure $ parseSexprs

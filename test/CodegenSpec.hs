@@ -1021,6 +1021,40 @@ spec = do
             ]
       runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "42")
 
+    it "imported macro libraries can use typed compile-time helpers with ADTs" $ do
+      let modLib = T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (let ((default (Just 42)))"
+            , "    default)"
+            , "  (fun emit-default ()"
+            , "    (case default"
+            , "      ((Just x) `,x)"
+            , "      (_ `0))))"
+            , "(mac use-default () (emit-default))"
+            ]
+          mainSrc = T.unlines
+            [ "(import LIB)"
+            , "(print (int-to-str (use-default)))"
+            ]
+      runWithModules [("LIB", modLib)] mainSrc >>= (`shouldBe` "42")
+
+    it "imported macro libraries can use their own earlier runtime type declarations" $ do
+      let modLib = T.unlines
+            [ "(type Flag () (Flag))"
+            , "(eval-when (:compile-toplevel)"
+            , "  (let ((default Flag))"
+            , "    default)"
+            , "  (fun emit-flag ()"
+            , "    (case default"
+            , "      ((Flag) `7))))"
+            , "(mac use-flag () (emit-flag))"
+            ]
+          mainSrc = T.unlines
+            [ "(import LIB)"
+            , "(print (int-to-str (use-flag)))"
+            ]
+      runWithModules [("LIB", modLib)] mainSrc >>= (`shouldBe` "7")
+
     it "transitively imported macros remain available during recursive expansion" $ do
       let modBase = "(mac double (x) `(add ,x ,x))"
           modLib = T.unlines
@@ -2385,9 +2419,12 @@ multiModulePipeline modules mainSrc = do
                  case MacroExpand.expandModuleWith modName baseState sexprs of
                    Left e -> Left ("macro " ++ T.unpack modName ++ ": " ++ e)
                    Right result ->
-                     Right ( M.insert modName (MacroExpand.mrExpanded result) expandedMap
-                           , M.insert modName (MacroExpand.mrState result) compileStates
-                           )
+                     case MacroExpand.finalizeModuleState modName (MacroExpand.mrState result) (MacroExpand.mrExpanded result) of
+                       Left e -> Left ("runtime surface " ++ T.unpack modName ++ ": " ++ e)
+                       Right finalized ->
+                         Right ( M.insert modName (MacroExpand.mrExpanded result) expandedMap
+                               , M.insert modName finalized compileStates
+                               )
 
     compileOneMod expandedMap compileStates _modMap (accExports, accTyped, accEnvs) modName =
       let isPrelude = modName == "PRELUDE"

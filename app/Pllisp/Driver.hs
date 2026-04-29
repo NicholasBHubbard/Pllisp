@@ -220,9 +220,12 @@ expandModules moduleInfos = go M.empty M.empty
                  case MacroExpand.expandModuleWith modName baseState (miSexprs info) of
                    Left err -> Left ("macro error in " ++ T.unpack modName ++ ": " ++ err)
                    Right result ->
-                     go (M.insert modName (MacroExpand.mrExpanded result) expandedMap)
-                        (M.insert modName (MacroExpand.mrState result) compileStates)
-                        rest
+                     case MacroExpand.finalizeModuleState modName (MacroExpand.mrState result) (MacroExpand.mrExpanded result) of
+                       Left err -> Left ("runtime surface error in " ++ T.unpack modName ++ ": " ++ err)
+                       Right finalized ->
+                         go (M.insert modName (MacroExpand.mrExpanded result) expandedMap)
+                            (M.insert modName finalized compileStates)
+                            rest
 
 compileBaseState
   :: Bool

@@ -174,11 +174,14 @@ compilePreludeRound preludeSexprs = do
   let expandedResult = case MacroExpand.expandModuleWith "PRELUDE" MacroExpand.primitiveState preludeSexprs of
         Left err -> error ("prelude macro error: " ++ err)
         Right r -> r
+      preludeState = case MacroExpand.finalizeModuleState "PRELUDE" (MacroExpand.mrState expandedResult) (MacroExpand.mrExpanded expandedResult) of
+        Left err -> error ("prelude runtime surface error: " ++ err)
+        Right st -> st
       expanded = MacroExpand.mrExpanded expandedResult
       prog = case SExpr.toProgram expanded of
         Left err -> error ("prelude sexpr error: " ++ SExpr.ceMsg err)
         Right parsed -> parsed
-      initialState = ReplState S.empty M.empty [] [] TC.emptyTCEnvs (MacroExpand.mrState expandedResult) []
+      initialState = ReplState S.empty M.empty [] [] TC.emptyTCEnvs preludeState []
   exprs <- case Mod.desugarTopLevel (CST.progExprs prog) of
     Left err -> error ("prelude desugar error: " ++ err)
     Right desugared -> pure desugared
