@@ -11,12 +11,13 @@ import System.Directory
   , getCurrentDirectory
   , getTemporaryDirectory
   , doesFileExist
+  , copyFile
   , removePathForcibly
   , setCurrentDirectory
   )
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode(..))
-import System.FilePath ((</>), takeDirectory, dropExtension)
+import System.FilePath ((</>), takeDirectory, dropExtension, takeFileName)
 import qualified Data.Text.IO as T.IO
 
 import qualified Pllisp.Driver as Driver
@@ -57,6 +58,46 @@ spec = do
     it "rejects top-level redefinitions of PRELUDE macro names" $
       withTempSource "redefine-prelude-macro.pll" "(let ((fun 1)) fun)" $ \fp ->
         Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
+    it "rejects duplicate imported compile-time helpers" $
+      withTempModuleProject
+        [ ("A.pll", unlines
+            [ "(module A)"
+            , "(eval-when (:compile-toplevel)"
+            , "  (let ((emit-double (lam (x) `(add ,x ,x))))"
+            , "    emit-double))"
+            ])
+        , ("B.pll", unlines
+            [ "(module B)"
+            , "(eval-when (:compile-toplevel)"
+            , "  (let ((emit-double (lam (x) `(mul ,x 2))))"
+            , "    emit-double))"
+            ])
+        ]
+        (unlines
+          [ "(import A)"
+          , "(import B)"
+          , "unit"
+          ])
+        $ \fp -> Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
+    it "rejects duplicate imported macros" $
+      withTempModuleProject
+        [ ("A.pll", unlines
+            [ "(module A)"
+            , "(mac double (x) `(add ,x ,x))"
+            ])
+        , ("B.pll", unlines
+            [ "(module B)"
+            , "(mac double (x) `(mul ,x 2))"
+            ])
+        ]
+        (unlines
+          [ "(import A)"
+          , "(import B)"
+          , "(print (int-to-str (double 21)))"
+          ])
+        $ \fp -> Driver.runFiles [fp] `shouldReturn` ExitFailure 1
 
 withRepoRoot :: IO a -> IO a
 withRepoRoot action = do
@@ -101,3 +142,27 @@ withTempSource name src action = do
       let runDir = base </> dropExtension name
       createDirectoryIfMissing True runDir
       pure runDir
+
+withTempModuleProject :: [(FilePath, String)] -> String -> (FilePath -> IO a) -> IO a
+withTempModuleProject files mainSrc action = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "pllisp-driver-spec"
+  createDirectoryIfMissing True dir
+  bracket (makeRunDir dir) removePathForcibly $ \runDir -> do
+    preloadStdlib runDir
+    mapM_ (\(name, src) -> T.IO.writeFile (runDir </> name) (T.pack src)) files
+    let mainPath = runDir </> "main.pllisp"
+    T.IO.writeFile mainPath (T.pack mainSrc)
+    action mainPath
+  where
+    makeRunDir base = do
+      let runDir = base </> "modules"
+      createDirectoryIfMissing True runDir
+      pure runDir
+
+preloadStdlib :: FilePath -> IO ()
+preloadStdlib runDir = do
+  cwd <- getCurrentDirectory
+  repoRoot <- findRepoRoot cwd
+  let preludePath = repoRoot </> "stdlib" </> "PRELUDE.pll"
+  copyFile preludePath (runDir </> takeFileName preludePath)

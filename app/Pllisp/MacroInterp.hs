@@ -9,6 +9,8 @@ module Pllisp.MacroInterp
   , eval
   , runInterpM
   , defaultEnv
+  , loadTopLevelForm
+  , loadTopLevelForms
   , sexprToVal
   , valToSExpr
   ) where
@@ -17,11 +19,9 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 
 import qualified Control.Monad.State.Strict as State
-import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Pllisp.SExpr  as SExpr
 import qualified Pllisp.SrcLoc as Loc
-import qualified Pllisp.Stdlib as Stdlib
 
 -- CORE TYPES
 
@@ -275,25 +275,22 @@ truthy _           = True
 -- DEFAULT ENVIRONMENT
 
 defaultEnv :: Env
-defaultEnv = unsafePerformIO loadDefaultEnv
-{-# NOINLINE defaultEnv #-}
+defaultEnv = primitiveEnv
 
-loadDefaultEnv :: IO Env
-loadDefaultEnv = do
-  macroPrelude <- Stdlib.loadMacroPrelude
-  case runInterpM (extendEnv primitiveEnv macroPrelude) of
-    Left err -> error ("BUG: macro prelude failed to load: " ++ err)
-    Right env -> pure env
-
-extendEnv :: Env -> [SExpr.SExpr] -> InterpM Env
-extendEnv env [] = pure env
-extendEnv env (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"), Loc.Located _ (SExpr.SList binds), body]) : rest) = do
+loadTopLevelForm :: Env -> SExpr.SExpr -> InterpM Env
+loadTopLevelForm env (Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"), Loc.Located _ (SExpr.SList binds), body])) = do
   env' <- bindSequential env binds
   _ <- eval env' body
-  extendEnv env' rest
-extendEnv env (sx : rest) = do
+  pure env'
+loadTopLevelForm env sx = do
   _ <- eval env sx
-  extendEnv env rest
+  pure env
+
+loadTopLevelForms :: Env -> [SExpr.SExpr] -> InterpM Env
+loadTopLevelForms env [] = pure env
+loadTopLevelForms env (sx : rest) = do
+  env' <- loadTopLevelForm env sx
+  loadTopLevelForms env' rest
 
 primitiveEnv :: Env
 primitiveEnv = M.fromList

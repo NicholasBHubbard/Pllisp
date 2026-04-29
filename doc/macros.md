@@ -1,7 +1,11 @@
 # Macros
 
-Pllisp has a Common Lisp-style procedural macro system. Macros operate on
-syntax and produce new syntax.
+Pllisp macros transform syntax into new syntax before the surrounding program
+is processed as ordinary code.
+
+They are procedural, not just template substitutions. A macro body runs in a
+compile-time environment, can inspect and build syntax, and returns the syntax
+that replaces the macro call.
 
 ## When to Use a Macro
 
@@ -9,53 +13,108 @@ Use a macro when you want to:
 
 - introduce a new surface syntax pattern
 - avoid repeating a structural code pattern
-- bind user-written syntax pieces directly instead of evaluated values
+- control evaluation of user-written code
+- generate code from syntax, not from already evaluated values
 
-Use an ordinary function when evaluated arguments are enough.
+Use an ordinary function when plain arguments and ordinary return values are
+enough.
 
-## Defining Macros
+## Basic Macro Definition
 
-```
+```lisp
 (mac unless (cond body)
   `(if_ ,cond unit ,body))
 ```
 
-The syntax is:
+General form:
 
-```
+```lisp
 (mac name (params...) body)
 ```
 
-The result of the macro body replaces the macro call in the surrounding code.
+Example use:
 
-Macros are usually defined at top level.
+```lisp
+(unless false
+  (print "ran"))
+```
+
+The macro call is replaced with the syntax returned by the body.
+
+## Macros Are Top-Level Declarations
+
+`mac` is a top-level form. In practice, that means:
+
+- define macros at the file top level
+- or define them inside a top-level `eval-when`
+- do not expect nested `mac` forms inside normal runtime expressions to work
+
+For example:
+
+```lisp
+(mac double (x)
+  `(add ,x ,x))
+
+(print (int-to-str (double 21)))
+```
+
+## Same-File Order Matters
+
+Macros in the same file are available only after their definition has been
+seen.
+
+This works:
+
+```lisp
+(mac double (x)
+  `(add ,x ,x))
+
+(print (int-to-str (double 21)))
+```
+
+This does not:
+
+```lisp
+(print (int-to-str (double 21)))
+
+(mac double (x)
+  `(add ,x ,x))
+```
+
+That is deliberate. Pllisp no longer scans the whole file up front and makes
+all later macros magically visible earlier.
+
+Imported macro modules are different: imports are collected before expansion,
+so imported macros are available throughout the file even if the `import` form
+appears later.
 
 ## Quasiquote, Unquote, and Splicing
 
-Most macros are written with quasiquote:
+Most macros use quasiquote:
 
-```
+```lisp
 (mac progn (&rest args)
   (if (eq (length args) 1)
     (car args)
-    `(let ((_ ,(car args))) (progn ,@(cdr args)))))
+    `(let ((_ ,(car args)))
+       (progn ,@(cdr args)))))
 ```
 
 Key pieces:
 
-- `` `... `` — build syntax
-- `,x` — insert one computed syntax value
-- `,@xs` — splice a list of syntax values into the surrounding list
+- `` `... `` builds syntax
+- `,x` inserts one computed syntax value
+- `,@xs` splices a list of syntax values into the surrounding list
 
-This macro turns:
+Calling:
 
-```
+```lisp
 (progn a b c)
 ```
 
-into code shaped like:
+expands to code shaped like:
 
-```
+```lisp
 (let ((_ a))
   (let ((_ b))
     c))
@@ -63,135 +122,287 @@ into code shaped like:
 
 ## Quote
 
-`quote` is available inside macro definitions and returns literal syntax
-without evaluating it:
+`quote` returns literal syntax without evaluating it:
 
-```
-(mac make-list (&rest xs)
-  (let ((build (lam (items)
-    (if (null? items)
-      (quote Empty)
-      `(Cons ,(car items) ,(build (cdr items)))))))
-    (build xs)))
+```lisp
+(mac literal-empty-list ()
+  (quote ()))
 ```
 
 Treat `quote`, quasiquote, unquote, and unquote-splicing as macro-writing
-tools, not general runtime features.
+tools.
 
 ## Macro Parameters
 
 ### Positional Parameters
 
-```
+```lisp
 (mac pair (a b)
   `(Cons ,a (Cons ,b Empty)))
 ```
 
 ### Rest Parameters
 
-Rest parameters collect all remaining syntax arguments into a list:
+`&rest` collects the remaining syntax arguments into a list:
 
-```
+```lisp
 (mac my-list (&rest xs)
   `(list ,@xs))
 ```
 
 ### Destructuring Parameters
 
-You can match simple list structure directly in the parameter list:
+You can destructure simple list-shaped syntax directly in the parameter list:
 
-```
+```lisp
 (mac when-bind ((name expr) body)
   `(let ((,name ,expr))
      (when ,name ,body)))
 ```
 
-That macro is called like:
+Called like:
 
-```
+```lisp
 (when-bind (x maybe-value)
   (print x))
 ```
 
-## Macro-Time vs Runtime
+## Procedural Macro Bodies
 
-Macro code runs in a separate macro evaluation environment with its own
-builtins.
+A macro body is evaluated as compile-time pllisp code.
+
+That means a macro can compute, branch, recurse, inspect lists of syntax, and
+build new syntax programmatically:
+
+```lisp
+(mac count-args (&rest xs)
+  `(int-to-str ,(length xs)))
+```
+
+or:
+
+```lisp
+(mac first-of (&rest xs)
+  (car xs))
+```
+
+The result still has to be syntax. If a macro body returns something that
+cannot be converted back into syntax, expansion fails.
+
+## The Compile-Time Environment
+
+Macro bodies do not run in the normal runtime environment. They run in a
+separate compile-time value environment.
+
+Available there by default:
+
+- primitive compile-time functions like `car`, `cdr`, `cons`, `list`,
+  `length`, `null?`, `eq`, `add`, `sub`, `mul`, `lt`, `gt`, `concat`,
+  `sym-to-str`, `str-to-sym`, `usym-to-str`, `str-to-usym`, `gensym`, and
+  `error`
+- compile-time helper functions loaded from `PRELUDE`, such as `append`,
+  `reverse`, `map`, `filter`, and `foldl`
+
+Important distinction:
+
+- these are compile-time functions over macro values and syntax values
+- they are not ordinary runtime function calls
+- macro bodies do not invoke runtime macros like `fun` directly as compile-time
+  functions
 
 For example:
 
-```
-# Macro-time: eq compares syntax values
-(mac is-zero (x)
-  (if (eq x 0) `true `false))
-
-# Runtime: eqi compares integer values
-(if (eqi n 0) "zero" "nonzero")
+```lisp
+(mac quote-all (&rest xs)
+  (map (lam (x) `(quote ,x)) xs))
 ```
 
-Inside a macro body:
+## `eval-when`
 
-- `eq` works on syntax values
-- `car`, `cdr`, `map`, `filter`, and `foldl` work on syntax lists
-- `add`, `sub`, `mul`, `lt`, and `gt` work on macro-time integers
+Use `eval-when` when a module needs compile-time helper definitions or macros
+that should become available to later forms.
 
-Those are macro-time tools. They are not the same functions as runtime
-program code.
+General form:
 
-## `gensym` and Hygiene
-
-Use `gensym` when a macro needs a fresh temporary name:
-
+```lisp
+(eval-when (phases...)
+  form...)
 ```
+
+Supported phases:
+
+- `:compile-toplevel`
+- `:load-toplevel`
+- `:execute`
+
+Unquoted names such as `compile-toplevel` also work, but the `:name` spelling
+is the clearer style.
+
+### `:compile-toplevel`
+
+Forms in `:compile-toplevel` are evaluated during macro expansion.
+
+This is how you define helper functions for later macros:
+
+```lisp
+(eval-when (:compile-toplevel)
+  (let ((emit-double (lam (x) `(add ,x ,x))))
+    emit-double))
+
+(mac double (x)
+  (emit-double x))
+```
+
+This is also how you define macros from inside `eval-when`:
+
+```lisp
+(eval-when (:compile-toplevel)
+  (mac double (x)
+    `(add ,x ,x)))
+```
+
+### `:load-toplevel` and `:execute`
+
+Forms in `:load-toplevel` or `:execute` are emitted into the program as normal
+top-level code.
+
+Example:
+
+```lisp
+(eval-when (:execute)
+  (print "hello"))
+```
+
+### Combined Phases
+
+You can combine phases:
+
+```lisp
+(eval-when (:compile-toplevel :execute)
+  (let ((emit-double (lam (x) `(add ,x ,x))))
+    emit-double)
+  (print "runtime side"))
+```
+
+That example does two separate things:
+
+- defines `emit-double` for later macro expansion
+- also emits its body forms as normal top-level code because `:execute` is
+  present
+
+If you only want compile-time helper definitions, use `:compile-toplevel`
+alone.
+
+### What Actually Persists
+
+At compile time, the useful persistent top-level forms are:
+
+- `mac` definitions
+- top-level `let` bindings inside `:compile-toplevel`
+
+Those names become available to later forms in the same module, and to
+importing modules.
+
+## Macros Capture Their Definition-Time Helpers
+
+When you define a macro, it captures the compile-time helper environment that
+exists at that point.
+
+So this is the sane pattern:
+
+```lisp
+(eval-when (:compile-toplevel)
+  (let ((emit-double (lam (x) `(add ,x ,x))))
+    emit-double))
+
+(mac double (x)
+  (emit-double x))
+```
+
+Do not assume a macro will automatically pick up helper definitions that only
+appear later in the file.
+
+## Hygiene and `gensym`
+
+Pllisp macros are not hygienic by default. If a macro introduces a temporary
+name, that name can capture or collide with user code unless you generate a
+fresh one.
+
+Use `gensym` for hidden temporaries:
+
+```lisp
 (mac with-tmp (expr body)
   (let ((tmp (gensym)))
     `(let ((,tmp ,expr))
        ,body)))
 ```
 
-That avoids accidental capture of a caller’s existing variable name.
-
 ## Failing Deliberately
 
-Use the macro-time `error` builtin when a macro detects bad input:
+Use the compile-time `error` function when a macro detects invalid input:
 
-```
-(mac expect-one (xs)
+```lisp
+(mac expect-one (&rest xs)
   (if (eq (length xs) 1)
     (car xs)
     (error "expected exactly one item")))
 ```
 
-## Macro-Time Builtins
+The expansion stops with a macro error.
 
-| Function | Description |
-|----------|-------------|
-| `car`, `cdr` | Head / tail of list |
-| `cons`, `list`, `append`, `reverse` | List construction |
-| `length` | List length |
-| `map`, `filter`, `foldl` | List transforms |
-| `null?`, `symbol?`, `list?`, `string?`, `number?`, `bool?`, `type?` | Predicates |
-| `eq`, `not` | Equality, negation |
-| `add`, `sub`, `mul`, `lt`, `gt` | Integer arithmetic and comparison |
-| `concat` | String concatenation |
-| `sym-to-str`, `str-to-sym` | Symbol/string conversion |
-| `usym-to-str`, `str-to-usym` | Uninterned symbol conversion |
-| `gensym` | Generate a unique symbol |
-| `error` | Abort expansion with an error |
+## Macros in Modules
 
-## Practical Patterns
+Macros work across modules without any special machinery. A module can export:
 
-- use macros for syntax, not for ordinary computation
-- keep expansions small and readable
-- use quasiquote by default
-- use `gensym` when introducing hidden temporaries
-- push actual work into normal functions when possible
+- top-level `mac` definitions
+- compile-time helper bindings created by top-level
+  `eval-when (:compile-toplevel)` `let` forms
+
+Example:
+
+`BUILDERS.pll`:
+
+```lisp
+(module BUILDERS)
+
+(eval-when (:compile-toplevel)
+  (let ((emit-double-print
+          (lam (expr)
+            `(print (int-to-str (add ,expr ,expr))))))
+    emit-double-print))
+```
+
+`MACROS.pll`:
+
+```lisp
+(module MACROS)
+(import BUILDERS)
+
+(mac show-double (expr)
+  (emit-double-print expr))
+```
+
+`main.pllisp`:
+
+```lisp
+(import MACROS)
+
+(show-double 21)
+```
+
+That is a real supported pattern, not a workaround.
 
 ## Current Limits
 
+- macros are top-level declarations
+- same-file macro definitions are order-sensitive
 - multi-clause macro definitions are not supported
-- macro-writing tools like quasiquote and `quote` are for macro definitions,
-  not general runtime code
+- imported macro names and imported compile-time helper names share one
+  compile-time namespace, so duplicate names across imports are errors
+- module aliases do not namespace macro calls
+
+For the module-level rules around macro imports, aliases, and collisions, see
+[Modules](modules.md#macros-and-compile-time-imports).
 
 For PRELUDE macros such as `fun`, `progn`, `if_`, `when`, and `cond`, see
 [Standard Library](stdlib.md#macros).

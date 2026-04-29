@@ -1,0 +1,3 @@
+(import MACROS)
+
+(show-double 21)

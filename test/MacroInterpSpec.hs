@@ -24,12 +24,12 @@ parseSExpr src = case Parser.parseSExprs "<test>" src of
 
 -- | Evaluate source text in the default environment.
 evalSrc :: T.Text -> Either String MI.MVal
-evalSrc src = MI.runInterpM (MI.eval MI.defaultEnv (parseSExpr src))
+evalSrc src = MI.runInterpM (MI.eval (MacroExpand.csEnv MacroExpand.defaultState) (parseSExpr src))
 
 -- | Evaluate source text in a custom environment (merged with defaults).
 evalWith :: [(T.Text, MI.MVal)] -> T.Text -> Either String MI.MVal
 evalWith binds src =
-  let env = M.union (M.fromList binds) MI.defaultEnv
+  let env = M.union (M.fromList binds) (MacroExpand.csEnv MacroExpand.defaultState)
   in MI.runInterpM (MI.eval env (parseSExpr src))
 
 -- | Assert evaluation succeeds with expected value.
@@ -55,8 +55,8 @@ expandSrc src = do
 spec :: Spec
 spec = do
   describe "default environment" $ do
-    it "loads higher-level list helpers from macro prelude code" $ do
-      let expectClosure name = case M.lookup name MI.defaultEnv of
+    it "includes higher-level list helpers from PRELUDE compile-time support" $ do
+      let expectClosure name = case M.lookup name (MacroExpand.csEnv MacroExpand.defaultState) of
             Just MI.MClosure{} -> pure ()
             Just other -> expectationFailure ("expected closure for " ++ T.unpack name ++ ", got " ++ show other)
             Nothing -> expectationFailure ("missing " ++ T.unpack name)

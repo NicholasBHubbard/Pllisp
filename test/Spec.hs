@@ -4,6 +4,7 @@ import Test.Hspec
 
 import qualified BuiltInSpec
 import qualified DriverSpec
+import qualified EditorSpec
 import qualified ErrorSpec
 import qualified ExhaustCheckSpec
 import qualified ParserSpec
@@ -25,6 +26,7 @@ main :: IO ()
 main = hspec $ do
   describe "Type"      TypeSpec.spec
   describe "BuiltIn"   BuiltInSpec.spec
+  describe "Editor"    EditorSpec.spec
   describe "Driver"    DriverSpec.spec
   describe "Parser"    ParserSpec.spec
   describe "SExpr"     SExprSpec.spec

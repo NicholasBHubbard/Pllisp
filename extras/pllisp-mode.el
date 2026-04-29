@@ -8,34 +8,50 @@
 
 (defconst pllisp-special-forms
   '("lam" "let" "if" "case" "type" "cls" "inst"
-    "module" "import" "mac" "fun" "ffi" "ffi-struct"
-    "ffi-var" "ffi-enum" "ffi-callback" "progn")
+    "module" "import" "mac" "eval-when" "ffi" "ffi-struct"
+    "ffi-var" "ffi-enum" "ffi-callback")
   "Special forms and declaration keywords.")
 
+(defconst pllisp-prelude-macros
+  '("fun" "progn" "if_" "when" "unless" "cond"
+    "if-let" "when-let" "unless-let" "and" "or")
+  "Implicit PRELUDE macros.")
+
 (defconst pllisp-builtins
-  '("add" "sub" "mul" "div" "mod" "neg"
-    "addf" "subf" "mulf" "divf" "negf"
-    "eqi" "lti" "gti" "lei" "gei"
-    "eqf" "ltf" "gtf" "lef" "gef"
-    "eqs" "lts" "gts" "les" "ges"
-    "and" "or" "not"
-    "concat" "strlen" "substr" "str-contains"
+  '("add" "sub" "mul" "div" "mod"
+    "addf" "subf" "mulf" "divf"
+    "eqi" "lti"
+    "eqf" "ltf"
+    "eqs" "lts"
+    "concat" "strlen" "substr"
+    "int-to-flt" "flt-to-int"
+    "usym-to-str" "str-to-usym"
+    "ref" "deref" "set!"
+    "not" "neg" "negf"
+    "gti" "lei" "gei"
+    "gtf" "lef" "gef"
+    "gts" "les" "ges"
+    "str-contains"
     "print" "read-line" "is-eof"
     "argc" "argv"
-    "int-to-flt" "flt-to-int" "int-to-str" "flt-to-str"
-    "usym-to-str" "str-to-usym"
+    "int-to-str" "flt-to-str"
     "rx-match" "rx-find" "rx-sub" "rx-gsub"
     "rx-split" "rx-captures" "rx-compile"
-    "ref" "deref" "set!"
-    )
-  "Built-in functions.")
+    "truthy" "eq" "lt" "gt" "le" "ge" "str"
+    "car" "cdr" "cons" "list" "append" "reverse"
+    "length" "map" "filter" "foldl"
+    "null?" "symbol?" "list?" "string?" "number?"
+    "bool?" "type?"
+    "sym-to-str" "str-to-sym"
+    "gensym" "error")
+  "Implicit function-like names from the language and PRELUDE.")
 
 (defconst pllisp-constants
   '("true" "false" "unit")
   "Built-in constants.")
 
 (defconst pllisp-font-lock-keywords
-  (let ((special-re (concat "(" (regexp-opt pllisp-special-forms t) "\\_>"))
+  (let ((special-re (concat "(" (regexp-opt (append pllisp-special-forms pllisp-prelude-macros) t) "\\_>"))
         (builtin-re (concat "(" (regexp-opt pllisp-builtins t) "\\_>"))
         (constant-re (regexp-opt pllisp-constants 'words)))
     `(;; Special forms: keyword after open paren

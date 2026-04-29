@@ -531,7 +531,7 @@ data PreludeSupport = PreludeSupport
 preludeSupport :: PreludeSupport
 preludeSupport = unsafePerformIO $ do
   preludeSexprs <- Stdlib.loadPrelude
-  let expanded = case MacroExpand.expandWith [] preludeSexprs of
+  let expanded = case MacroExpand.expandWith MacroExpand.primitiveState preludeSexprs of
         Left err -> error ("prelude macro error in test: " ++ err)
         Right sexprs -> sexprs
       prog = case SExpr.toProgram expanded of

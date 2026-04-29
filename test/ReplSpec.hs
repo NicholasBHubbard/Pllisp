@@ -78,6 +78,23 @@ spec = do
         , "(print greeting)"
         ] >>= (`shouldBe` "hello world")
 
+    it "macro persists to next round" $
+      runRepl
+        [ "(mac double (x) `(add ,x ,x))"
+        , "(print (int-to-str (double 21)))"
+        ] >>= (`shouldBe` "42")
+
+    it "compile-time helper bindings persist across rounds" $
+      runRepl
+        [ T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (let ((emit-double (lam (x) `(add ,x ,x))))"
+            , "    emit-double))"
+            ]
+        , "(mac double (x) (emit-double x))"
+        , "(print (int-to-str (double 21)))"
+        ] >>= (`shouldBe` "42")
+
     it "prelude constructors persist across rounds" $
       runRepl
         [ "(let ((xs (Cons 1 (Cons 2 Empty)))) xs)"
@@ -105,6 +122,7 @@ data ReplState = ReplState
   , rsGlobals  :: [(CST.Symbol, Ty.Type)]
   , rsImportedMeta :: [LL.LLExpr]
   , rsEnvs     :: TC.TCEnvs
+  , rsCtState  :: MacroExpand.CompileState
   , rsPrevExprs :: [CST.Expr]  -- accumulated defs (TYPE, FFI, etc.) to replay
   }
 
@@ -114,7 +132,7 @@ runRepl rounds = do
   preludeSexprs <- Stdlib.loadPrelude
   (preludeSo, preludeState) <- compilePreludeRound preludeSexprs
   stRef <- newIORef preludeState
-  soFiles <- mapM (\(i, src) -> compileRound preludeSexprs stRef i src) (zip [1 :: Int ..] rounds)
+  soFiles <- mapM (\(i, src) -> compileRound stRef i src) (zip [1 :: Int ..] rounds)
   let allSoFiles = preludeSo : soFiles
   let driverSrc = genDriver allSoFiles
   writeFile "/tmp/pll_repl_driver.c" driverSrc
@@ -130,32 +148,37 @@ runRepl rounds = do
   where
     strip = reverse . dropWhile (== '\n') . reverse
 
-compileRound :: [SExpr.SExpr] -> IORef ReplState -> Int -> T.Text -> IO FilePath
-compileRound preludeSexprs stRef roundNum src = do
+compileRound :: IORef ReplState -> Int -> T.Text -> IO FilePath
+compileRound stRef roundNum src = do
   st <- readIORef stRef
   let sexprs = case Parser.parseSExprs "<repl>" src of
         Left e -> error ("parse error: " ++ show e)
         Right s -> s
-      expanded = case MacroExpand.expandWith preludeSexprs sexprs of
+      expandedResult = case MacroExpand.expandModuleWith "REPL" (rsCtState st) sexprs of
         Left e -> error ("macro error: " ++ e)
-        Right s -> s
+        Right r -> r
+      expanded = MacroExpand.mrExpanded expandedResult
       prog = case SExpr.toProgram expanded of
         Left e -> error ("sexpr error: " ++ SExpr.ceMsg e)
         Right p -> p
   (soFile, st') <- compileExprs st roundNum (rsPrevExprs st ++ CST.progExprs prog)
   let newDefs = filter isDefExpr (CST.progExprs prog)
-  writeIORef stRef st' { rsPrevExprs = rsPrevExprs st ++ newDefs }
+  writeIORef stRef st'
+    { rsCtState = MacroExpand.mrState expandedResult
+    , rsPrevExprs = rsPrevExprs st ++ newDefs
+    }
   pure soFile
 
 compilePreludeRound :: [SExpr.SExpr] -> IO (FilePath, ReplState)
 compilePreludeRound preludeSexprs = do
-  let expanded = case MacroExpand.expandWith [] preludeSexprs of
+  let expandedResult = case MacroExpand.expandModuleWith "PRELUDE" MacroExpand.primitiveState preludeSexprs of
         Left err -> error ("prelude macro error: " ++ err)
-        Right sexprs -> sexprs
+        Right r -> r
+      expanded = MacroExpand.mrExpanded expandedResult
       prog = case SExpr.toProgram expanded of
         Left err -> error ("prelude sexpr error: " ++ SExpr.ceMsg err)
         Right parsed -> parsed
-      initialState = ReplState S.empty M.empty [] [] TC.emptyTCEnvs []
+      initialState = ReplState S.empty M.empty [] [] TC.emptyTCEnvs (MacroExpand.mrState expandedResult) []
   exprs <- case Mod.desugarTopLevel (CST.progExprs prog) of
     Left err -> error ("prelude desugar error: " ++ err)
     Right desugared -> pure desugared

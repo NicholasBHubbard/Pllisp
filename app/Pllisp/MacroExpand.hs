@@ -1,23 +1,32 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- MODULE
+module Pllisp.MacroExpand
+  ( CompileState(..)
+  , ModuleResult(..)
+  , defaultState
+  , primitiveState
+  , mergeCompileStates
+  , expand
+  , expandWith
+  , expandModuleWith
+  , extractMacroDefs
+  ) where
 
-module Pllisp.MacroExpand (expand, expandWith, extractMacroDefs) where
-
-import qualified Data.Map.Strict as M
-import qualified Data.Text       as T
-
+import Control.Monad (foldM)
 import qualified Control.Monad.State.Strict as State
+import qualified Data.Map.Strict as M
+import qualified Data.Text as T
+import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Pllisp.MacroInterp as MI
-import qualified Pllisp.SExpr       as SExpr
-import qualified Pllisp.SrcLoc      as Loc
-
--- CORE TYPES
+import qualified Pllisp.SExpr as SExpr
+import qualified Pllisp.SrcLoc as Loc
+import qualified Pllisp.Stdlib as Stdlib
 
 data MacroClause = MacroClause
-  { mcParams   :: [MacroParam]
+  { mcParams :: [MacroParam]
   , mcTemplate :: SExpr.SExpr
+  , mcEnv :: MI.Env
   } deriving (Show)
 
 data MacroParam
@@ -27,11 +36,59 @@ data MacroParam
   deriving (Show)
 
 type MacroTable = M.Map T.Text MacroClause
-type Bindings   = M.Map T.Text SExpr.SExpr
+type Bindings = M.Map T.Text SExpr.SExpr
 
--- ExpandM is the same monad as InterpM (StateT Int over Either String),
--- so MI.eval can be called directly and shares the gensym counter.
+data CompileState = CompileState
+  { csEnv :: MI.Env
+  , csMacros :: MacroTable
+  , csEnvOrigins :: M.Map T.Text T.Text
+  , csMacroOrigins :: M.Map T.Text T.Text
+  } deriving (Show)
+
+data ModuleResult = ModuleResult
+  { mrExpanded :: [SExpr.SExpr]
+  , mrState :: CompileState
+  } deriving (Show)
+
 type ExpandM = State.StateT Int (Either String)
+
+data EvalPhase
+  = PhaseCompileTop
+  | PhaseLoadTop
+  | PhaseExecute
+  deriving (Eq)
+
+primitiveOrigin :: T.Text
+primitiveOrigin = "%PRIMITIVE"
+
+primitiveState :: CompileState
+primitiveState =
+  CompileState
+    { csEnv = MI.defaultEnv
+    , csMacros = M.empty
+    , csEnvOrigins = M.fromList [(name, primitiveOrigin) | name <- M.keys MI.defaultEnv]
+    , csMacroOrigins = M.empty
+    }
+
+defaultState :: CompileState
+defaultState = unsafePerformIO loadDefaultState
+{-# NOINLINE defaultState #-}
+
+loadDefaultState :: IO CompileState
+loadDefaultState = do
+  prelude <- Stdlib.loadPrelude
+  case expandModuleWith "PRELUDE" primitiveState prelude of
+    Left err -> error ("BUG: failed to build compile-time PRELUDE: " ++ err)
+    Right result -> pure (mrState result)
+
+emptyState :: CompileState
+emptyState =
+  CompileState
+    { csEnv = M.empty
+    , csMacros = M.empty
+    , csEnvOrigins = M.empty
+    , csMacroOrigins = M.empty
+    }
 
 throwExpandError :: String -> ExpandM a
 throwExpandError = State.StateT . const . Left
@@ -39,40 +96,145 @@ throwExpandError = State.StateT . const . Left
 maxDepth :: Int
 maxDepth = 256
 
--- ENTRY POINT
-
 expand :: [SExpr.SExpr] -> Either String [SExpr.SExpr]
-expand = expandWith []
+expand = expandWith defaultState
 
--- | Expand with imported macro sexprs pre-seeded (not subject to duplicate check).
-expandWith :: [SExpr.SExpr] -> [SExpr.SExpr] -> Either String [SExpr.SExpr]
-expandWith importedMacros localSexprs = do
-  (baseTable, _) <- collectMacros M.empty importedMacros
-  (macros, rest) <- collectMacros baseTable localSexprs
-  State.evalStateT (mapM (expandExpr macros 0) rest) 0
+expandWith :: CompileState -> [SExpr.SExpr] -> Either String [SExpr.SExpr]
+expandWith base sexprs =
+  mrExpanded <$> expandModuleWith (moduleNameOrUser sexprs) base sexprs
 
--- COLLECT MACRO DEFINITIONS
+expandModuleWith :: T.Text -> CompileState -> [SExpr.SExpr] -> Either String ModuleResult
+expandModuleWith modName base sexprs =
+  State.evalStateT (go base [] sexprs) 0
+  where
+    go st out [] = pure $ ModuleResult (reverse out) st
+    go st out (sx : rest) = do
+      (st', emitted) <- processTopLevel modName st sx
+      go st' (reverse emitted ++ out) rest
 
--- Walk top-level sexprs, collect (mac ...) forms into the table,
--- return remaining non-macro sexprs.
-collectMacros :: MacroTable -> [SExpr.SExpr] -> Either String (MacroTable, [SExpr.SExpr])
-collectMacros table [] = Right (table, [])
-collectMacros table (sx : rest) = case Loc.locVal sx of
-  SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : macRest) ->
-    case parseMacDef macRest of
-      Right (name, clause)
-        | M.member name table ->
-            Left ("duplicate macro definition: " ++ T.unpack name)
-        | otherwise ->
-            collectMacros (M.insert name clause table) rest
-      Left err -> Left err
-  _ -> do (table', rest') <- collectMacros table rest
-          Right (table', sx : rest')
+mergeCompileStates :: [CompileState] -> Either String CompileState
+mergeCompileStates = foldM mergeOne emptyState
+  where
+    mergeOne acc st = do
+      acc1 <- foldM mergeEnvEntry acc (M.toList (csEnv st))
+      foldM mergeMacroEntry acc1 (M.toList (csMacros st))
 
-parseMacDef :: [SExpr.SExpr] -> Either String (T.Text, MacroClause)
+      where
+        mergeEnvEntry cur (name, val) =
+          case M.lookup name (csEnvOrigins st) of
+            Nothing -> pure cur
+            Just origin ->
+              case M.lookup name (csEnvOrigins cur) of
+                Nothing -> pure
+                  (cur
+                    { csEnv = M.insert name val (csEnv cur)
+                    , csEnvOrigins = M.insert name origin (csEnvOrigins cur)
+                    })
+                Just existingOrigin
+                  | existingOrigin == origin -> pure cur
+                  | otherwise ->
+                      Left ("compile-time helper collision: "
+                        ++ T.unpack name
+                        ++ " from "
+                        ++ T.unpack existingOrigin
+                        ++ " and "
+                        ++ T.unpack origin)
+
+        mergeMacroEntry cur (name, clause) =
+          case M.lookup name (csMacroOrigins st) of
+            Nothing -> pure cur
+            Just origin ->
+              case M.lookup name (csMacroOrigins cur) of
+                Nothing -> pure
+                  (cur
+                    { csMacros = M.insert name clause (csMacros cur)
+                    , csMacroOrigins = M.insert name origin (csMacroOrigins cur)
+                    })
+                Just existingOrigin
+                  | existingOrigin == origin -> pure cur
+                  | otherwise ->
+                      Left ("duplicate imported macro definition: "
+                        ++ T.unpack name
+                        ++ " from "
+                        ++ T.unpack existingOrigin
+                        ++ " and "
+                        ++ T.unpack origin)
+
+processTopLevel :: T.Text -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processTopLevel modName st sx = case Loc.locVal sx of
+  SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : macRest) -> do
+    st' <- defineMacro modName st macRest
+    pure (st', [])
+  SExpr.SList (Loc.Located _ (SExpr.SAtom "EVAL-WHEN") : phaseSx : bodyForms) ->
+    processEvalWhen modName st phaseSx bodyForms
+  _ -> do
+    expanded <- expandExpr (csMacros st) 0 sx
+    pure (st, [expanded])
+
+processEvalWhen :: T.Text -> CompileState -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
+processEvalWhen modName st phaseSx bodyForms = do
+  phases <- liftEither (parseEvalPhases phaseSx)
+  let doCompile = PhaseCompileTop `elem` phases
+      doEmit = PhaseLoadTop `elem` phases || PhaseExecute `elem` phases
+  go st [] doCompile doEmit bodyForms
+  where
+    go cur out _ _ [] = pure (cur, reverse out)
+    go cur out doCompile doEmit (form : rest) = do
+      (cur', emitted) <- processEvalWhenBody modName doCompile doEmit cur form
+      go cur' (reverse emitted ++ out) doCompile doEmit rest
+
+processEvalWhenBody :: T.Text -> Bool -> Bool -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processEvalWhenBody modName doCompile doEmit st sx = case Loc.locVal sx of
+  SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : macRest)
+    | doCompile -> do
+        st' <- defineMacro modName st macRest
+        pure (st', [])
+    | otherwise -> pure (st, [])
+  SExpr.SList (Loc.Located _ (SExpr.SAtom "EVAL-WHEN") : phaseSx : bodyForms) ->
+    processEvalWhen modName st phaseSx bodyForms
+  _ -> do
+    expanded <- expandExpr (csMacros st) 0 sx
+    st' <- if doCompile then compileTopLevelForm modName st expanded else pure st
+    pure (st', if doEmit then [expanded] else [])
+
+compileTopLevelForm :: T.Text -> CompileState -> SExpr.SExpr -> ExpandM CompileState
+compileTopLevelForm modName st sx = do
+  env' <- MI.loadTopLevelForm (csEnv st) sx
+  let names = topLevelBindingNames sx
+      origins' = foldl (\acc name -> M.insert name modName acc) (csEnvOrigins st) names
+  pure st { csEnv = env', csEnvOrigins = origins' }
+
+topLevelBindingNames :: SExpr.SExpr -> [T.Text]
+topLevelBindingNames (Loc.Located _ (SExpr.SList
+  [ Loc.Located _ (SExpr.SAtom "LET")
+  , Loc.Located _ (SExpr.SList binds)
+  , _
+  ])) = mapMaybeBinding binds
+topLevelBindingNames _ = []
+
+mapMaybeBinding :: [SExpr.SExpr] -> [T.Text]
+mapMaybeBinding [] = []
+mapMaybeBinding (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom name) : _)) : rest) =
+  name : mapMaybeBinding rest
+mapMaybeBinding (_ : rest) = mapMaybeBinding rest
+
+defineMacro :: T.Text -> CompileState -> [SExpr.SExpr] -> ExpandM CompileState
+defineMacro modName st macRest =
+  case parseMacDef macRest of
+    Left err -> throwExpandError err
+    Right (name, params, template)
+      | M.member name (csMacros st) ->
+          throwExpandError ("duplicate macro definition: " ++ T.unpack name)
+      | otherwise ->
+          pure st
+            { csMacros = M.insert name (MacroClause params template (csEnv st)) (csMacros st)
+            , csMacroOrigins = M.insert name modName (csMacroOrigins st)
+            }
+
+parseMacDef :: [SExpr.SExpr] -> Either String (T.Text, [MacroParam], SExpr.SExpr)
 parseMacDef [Loc.Located _ (SExpr.SAtom name), Loc.Located _ (SExpr.SList paramSxs), template] = do
   params <- parseParams paramSxs
-  Right (name, MacroClause params template)
+  Right (name, params, template)
 parseMacDef _ = Left "invalid mac definition"
 
 parseParams :: [SExpr.SExpr] -> Either String [MacroParam]
@@ -85,12 +247,22 @@ parseParams (Loc.Located _ (SExpr.SAtom name) : rest) = do
   rest' <- parseParams rest
   Right (ParamSingle name : rest')
 parseParams (Loc.Located _ (SExpr.SList subParams) : rest) = do
-  sub  <- parseParams subParams
+  sub <- parseParams subParams
   rest' <- parseParams rest
   Right (ParamDestructure sub : rest')
 parseParams _ = Left "invalid macro parameter"
 
--- EXPANSION
+parseEvalPhases :: SExpr.SExpr -> Either String [EvalPhase]
+parseEvalPhases (Loc.Located _ (SExpr.SList phases)) = mapM toPhase phases
+  where
+    toPhase (Loc.Located _ (SExpr.SUSym "COMPILE-TOPLEVEL")) = Right PhaseCompileTop
+    toPhase (Loc.Located _ (SExpr.SUSym "LOAD-TOPLEVEL")) = Right PhaseLoadTop
+    toPhase (Loc.Located _ (SExpr.SUSym "EXECUTE")) = Right PhaseExecute
+    toPhase (Loc.Located _ (SExpr.SAtom "COMPILE-TOPLEVEL")) = Right PhaseCompileTop
+    toPhase (Loc.Located _ (SExpr.SAtom "LOAD-TOPLEVEL")) = Right PhaseLoadTop
+    toPhase (Loc.Located _ (SExpr.SAtom "EXECUTE")) = Right PhaseExecute
+    toPhase _ = Left "invalid eval-when phase"
+parseEvalPhases _ = Left "invalid eval-when phase list"
 
 expandExpr :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
 expandExpr macros depth sx
@@ -121,7 +293,7 @@ applyMacro clause args name =
   case matchClause clause args of
     Just bindings -> do
       let mvalBinds = M.map MI.sexprToVal bindings
-          env = M.union mvalBinds MI.defaultEnv
+          env = M.union mvalBinds (mcEnv clause)
       result <- MI.eval env (mcTemplate clause)
       case MI.valToSExpr result of
         Left err -> throwExpandError err
@@ -130,13 +302,11 @@ applyMacro clause args name =
       throwExpandError ("macro " ++ T.unpack name
         ++ " does not accept " ++ show (length args) ++ " argument(s)")
 
--- CLAUSE MATCHING
-
 matchClause :: MacroClause -> [SExpr.SExpr] -> Maybe Bindings
 matchClause clause args = go (mcParams clause) args M.empty
   where
     go [] [] binds = Just binds
-    go [] _  _     = Nothing
+    go [] _ _ = Nothing
     go (ParamRest name : _) restArgs binds =
       Just (M.insert name (Loc.Located dummySpan (SExpr.SList restArgs)) binds)
     go (ParamSingle name : ps) (a : as) binds =
@@ -145,21 +315,21 @@ matchClause clause args = go (mcParams clause) args M.empty
       case Loc.locVal a of
         SExpr.SList subArgs -> case go subPs subArgs binds of
           Just binds' -> go ps as binds'
-          Nothing     -> Nothing
+          Nothing -> Nothing
         _ -> Nothing
     go _ _ _ = Nothing
 
--- MACRO EXTRACTION
-
--- | Extract (mac ...) forms from a list of SExprs.
--- Used to collect macro definitions from imported modules.
 extractMacroDefs :: [SExpr.SExpr] -> [SExpr.SExpr]
 extractMacroDefs = filter isMacDef
   where
     isMacDef (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : _))) = True
     isMacDef _ = False
 
--- HELPERS
+liftEither :: Either String a -> ExpandM a
+liftEither = either throwExpandError pure
+
+moduleNameOrUser :: [SExpr.SExpr] -> T.Text
+moduleNameOrUser sexprs = maybe "USER" id (SExpr.preScanModuleName sexprs)
 
 dummySpan :: Loc.Span
 dummySpan = Loc.Span (Loc.Pos "" 0 0) (Loc.Pos "" 0 0)
@@ -175,6 +345,7 @@ nonRecursiveForms =
   , "FFI-VAR"
   , "FFI-ENUM"
   , "FFI-CALLBACK"
+  , "EVAL-WHEN"
   ]
 
 expandLet :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
@@ -258,4 +429,4 @@ expandInstMethod _ _ method = pure method
 expandListElems :: MacroTable -> Int -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
 expandListElems macros depth sx elems = do
   elems' <- mapM (expandExpr macros depth) elems
-  pure (Loc.Located (Loc.locSpan sx) (SExpr.SList elems'))
+  pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList elems')

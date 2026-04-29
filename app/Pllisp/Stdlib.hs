@@ -1,6 +1,5 @@
 module Pllisp.Stdlib
   ( loadPrelude
-  , loadMacroPrelude
   , getStdlibDir
   , getStdlibDirNear
   ) where
@@ -20,14 +19,6 @@ loadPrelude = do
   src <- T.IO.readFile fp
   case Parser.parseSExprs "<prelude>" src of
     Left _    -> error "BUG: prelude failed to parse"
-    Right sexprs -> pure sexprs
-
-loadMacroPrelude :: IO [SExpr.SExpr]
-loadMacroPrelude = do
-  fp <- getStdlibFile "MACRO-PRELUDE.pll" []
-  src <- T.IO.readFile fp
-  case Parser.parseSExprs "<macro-prelude>" src of
-    Left _ -> error "BUG: macro prelude failed to parse"
     Right sexprs -> pure sexprs
 
 getStdlibDir :: IO FilePath

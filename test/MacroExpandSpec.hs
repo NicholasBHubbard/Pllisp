@@ -69,7 +69,7 @@ spec = do
 
     it "expands when macro" $ do
       r <- either fail pure $ expandSrc
-        "(mac when (test body) `(if ,test ,body unit)) (when true 42)"
+        "(mac my-when (test body) `(if ,test ,body unit)) (my-when true 42)"
       case r of
         [SExpr.SList [_, _, _, Loc.Located _ (SExpr.SAtom "UNIT")]] -> pure ()
         _ -> expectationFailure (show r)
@@ -83,12 +83,25 @@ spec = do
         Left e  -> e `shouldContain` "duplicate macro definition: FOO"
         Right _ -> expectationFailure "expected duplicate macro error"
 
+  describe "ordered top-level expansion" $ do
+    it "does not expand a macro before its definition" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(double 3)"
+                   , "(mac double (x) `(add ,x ,x))"
+                   ])
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "DOUBLE")
+            , l (SExpr.SInt 3)
+            ]
+        ]
+
   describe "recursive expansion" $ do
     it "re-expands macro calls in expansion output" $ do
       r <- either fail pure $ expandSrc
-        (T.unlines [ "(mac unless (test body) `(if ,test unit ,body))"
-                   , "(mac when (test body) `(unless (not ,test) ,body))"
-                   , "(when true 42)"
+        (T.unlines [ "(mac my-unless (test body) `(if ,test unit ,body))"
+                   , "(mac my-when (test body) `(my-unless (not ,test) ,body))"
+                   , "(my-when true 42)"
                    ])
       -- when → unless → if
       case r of
@@ -113,16 +126,118 @@ spec = do
       r `shouldBe` [SExpr.SInt 42, SExpr.SStr "hello", SExpr.SAtom "TRUE"]
 
     it "does not expand macro names in let binders" $ do
-      r <- either fail pure $ expandSrc "(mac fun () `unit) (let ((fun 1)) fun)"
+      r <- either fail pure $ expandSrc "(mac my-fun () `unit) (let ((my-fun 1)) my-fun)"
       r `shouldBe`
         [ SExpr.SList
             [ l (SExpr.SAtom "LET")
             , l (SExpr.SList
-                [ l (SExpr.SList [l (SExpr.SAtom "FUN"), l (SExpr.SInt 1)])
+                [ l (SExpr.SList [l (SExpr.SAtom "MY-FUN"), l (SExpr.SInt 1)])
                 ])
-            , l (SExpr.SAtom "FUN")
+            , l (SExpr.SAtom "MY-FUN")
             ]
         ]
+
+  describe "eval-when" $ do
+    it "uses compile-time helper bindings for later macros" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(eval-when (:compile-toplevel)"
+          , "  (let ((emit-double (lam (x) `(add ,x ,x))))"
+          , "    emit-double))"
+          , "(mac double (x) (emit-double x))"
+          , "(double 3)"
+          ])
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "ADD")
+            , l (SExpr.SInt 3)
+            , l (SExpr.SInt 3)
+            ]
+        ]
+
+    it "supports combined compile and execute phases" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(eval-when (:compile-toplevel :execute)"
+          , "  (let ((emit-double (lam (x) `(add ,x ,x))))"
+          , "    emit-double)"
+          , "  7)"
+          , "(mac double (x) (emit-double x))"
+          , "(double 3)"
+          ])
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "LET")
+            , l (SExpr.SList
+                [ l (SExpr.SList
+                    [ l (SExpr.SAtom "EMIT-DOUBLE")
+                    , l (SExpr.SList
+                        [ l (SExpr.SAtom "LAM")
+                        , l (SExpr.SList [l (SExpr.SAtom "X")])
+                        , l (SExpr.SQuasi
+                            (l (SExpr.SList
+                              [ l (SExpr.SAtom "ADD")
+                              , l (SExpr.SUnquote (l (SExpr.SAtom "X")))
+                              , l (SExpr.SUnquote (l (SExpr.SAtom "X")))
+                              ])))
+                        ])
+                    ])
+                ])
+            , l (SExpr.SAtom "EMIT-DOUBLE")
+            ]
+        , SExpr.SInt 7
+        , SExpr.SList
+            [ l (SExpr.SAtom "ADD")
+            , l (SExpr.SInt 3)
+            , l (SExpr.SInt 3)
+            ]
+        ]
+
+    it "makes macros defined in compile-toplevel forms available later" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(eval-when (:compile-toplevel)"
+          , "  (mac double (x) `(add ,x ,x)))"
+          , "(double 5)"
+          ])
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "ADD")
+            , l (SExpr.SInt 5)
+            , l (SExpr.SInt 5)
+            ]
+        ]
+
+    it "does not emit compile-only forms" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines
+          [ "(eval-when (:compile-toplevel)"
+          , "  1"
+          , "  2)"
+          , "3"
+          ])
+      r `shouldBe` [SExpr.SInt 3]
+
+    it "emits execute-phase forms" $ do
+      r <- either fail pure $ expandSrc
+        "(eval-when (:execute) (add 1 2))"
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "ADD")
+            , l (SExpr.SInt 1)
+            , l (SExpr.SInt 2)
+            ]
+        ]
+
+    it "rejects invalid phase names" $ do
+      case expandSrc "(eval-when (:bogus) 1)" of
+        Left e  -> e `shouldContain` "invalid eval-when phase"
+        Right _ -> expectationFailure "expected invalid eval-when phase error"
+
+    it "rejects non-list phase specifications" $ do
+      case expandSrc "(eval-when :compile-toplevel 1)" of
+        Left e  -> e `shouldContain` "invalid eval-when phase list"
+        Right _ -> expectationFailure "expected invalid eval-when phase list error"
 
   describe "extractMacroDefs" $ do
     it "extracts mac forms from mixed sexprs" $ do
@@ -278,9 +393,9 @@ spec = do
 
     it "procedural macro interleaves with template macros" $ do
       r <- either fail pure $ expandSrc
-        (T.unlines [ "(mac when (cond body) `(if ,cond ,body unit))"
+        (T.unlines [ "(mac my-when (cond body) `(if ,cond ,body unit))"
                    , "(mac double (x) `(add ,x ,x))"
-                   , "(when true (double 5))"
+                   , "(my-when true (double 5))"
                    ])
       -- when expands to (if true (double 5) unit)
       -- then double expands to (add 5 5)
@@ -293,8 +408,8 @@ spec = do
 
     it "destructuring still works with interpreter" $ do
       r <- either fail pure $ expandSrc
-        (T.unlines [ "(mac cond ((test body)) `(if ,test ,body unit))"
-                   , "(cond (true 42))"
+        (T.unlines [ "(mac my-cond ((test body)) `(if ,test ,body unit))"
+                   , "(my-cond (true 42))"
                    ])
       case r of
         [SExpr.SList (Loc.Located _ (SExpr.SAtom "IF") : _)] -> pure ()

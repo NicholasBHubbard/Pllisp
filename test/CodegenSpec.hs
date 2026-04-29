@@ -4,7 +4,9 @@ module CodegenSpec (spec) where
 
 import Test.Hspec
 
+import Control.Monad (foldM)
 import qualified Data.Map.Strict as M
+import qualified Data.Set        as S
 import qualified Data.Text       as T
 import qualified Data.Text.IO as T.IO
 import Control.Exception (ErrorCall(..), try, evaluate)
@@ -973,6 +975,95 @@ spec = do
             ]
           mainSrc = "(my-do (print \"a\") (print \"b\") (print \"c\"))"
       runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "a\nb\nc")
+
+    it "imported macro library can use compile-time helper bindings" $ do
+      let modSrc = T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (let ((emit-double (lam (x) `(add ,x ,x))))"
+            , "    emit-double))"
+            , "(mac double (x) (emit-double x))"
+            ]
+          mainSrc = "(print (int-to-str (double 21)))"
+      runWithModule "MOD" modSrc [] mainSrc >>= (`shouldBe` "42")
+
+    it "aliased macro-providing modules still expose macros" $ do
+      let modSrc = "(mac double (x) `(add ,x ,x))"
+          mainSrc = T.unlines
+            [ "(import MOD M)"
+            , "(print (int-to-str (double 21)))"
+            ]
+      runWithModules [("MOD", modSrc)] mainSrc >>= (`shouldBe` "42")
+
+    it "selective imports still load macros from macro-providing modules" $ do
+      let modSrc = T.unlines
+            [ "(let ((square (lam ((x %INT)) (mul x x)))) unit)"
+            , "(mac double (x) `(add ,x ,x))"
+            ]
+          mainSrc = T.unlines
+            [ "(import MOD (square))"
+            , "(print (int-to-str (add (square 3) (double 21))))"
+            ]
+      runWithModules [("MOD", modSrc)] mainSrc >>= (`shouldBe` "51")
+
+    it "imported compile-time helper bindings are visible in importing macro modules" $ do
+      let modBase = T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (let ((emit-double (lam (x) `(add ,x ,x))))"
+            , "    emit-double))"
+            ]
+          modLib = T.unlines
+            [ "(import BASE)"
+            , "(mac double (x) (emit-double x))"
+            ]
+          mainSrc = T.unlines
+            [ "(import LIB)"
+            , "(print (int-to-str (double 21)))"
+            ]
+      runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "42")
+
+    it "transitively imported macros remain available during recursive expansion" $ do
+      let modBase = "(mac double (x) `(add ,x ,x))"
+          modLib = T.unlines
+            [ "(import BASE)"
+            , "(mac quadruple (x) `(double (double ,x)))"
+            ]
+          mainSrc = T.unlines
+            [ "(import LIB)"
+            , "(print (int-to-str (quadruple 21)))"
+            ]
+      runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "84")
+
+    it "rejects duplicate imported compile-time helpers" $
+      shouldFailToCompileModules
+        [ ("A", T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (let ((emit-double (lam (x) `(add ,x ,x))))"
+            , "    emit-double))"
+            ])
+        , ("B", T.unlines
+            [ "(eval-when (:compile-toplevel)"
+            , "  (let ((emit-double (lam (x) `(mul ,x 2))))"
+            , "    emit-double))"
+            ])
+        ]
+        (T.unlines
+          [ "(import A)"
+          , "(import B)"
+          , "unit"
+          ])
+        "compile-time helper collision"
+
+    it "rejects duplicate imported macros" $
+      shouldFailToCompileModules
+        [ ("A", "(mac double (x) `(add ,x ,x))")
+        , ("B", "(mac double (x) `(mul ,x 2))")
+        ]
+        (T.unlines
+          [ "(import A)"
+          , "(import B)"
+          , "(print (int-to-str (double 21)))"
+          ])
+        "duplicate imported macro definition"
 
   describe "recursive module imports" $ do
     it "chained imports" $ do
@@ -2228,12 +2319,19 @@ multiModulePipeline modules mainSrc = do
   order <- case Mod.dependencyOrder depMap of
     Left e  -> error ("dep order: " ++ e)
     Right o -> pure o
-  let (finalExports, finalTyped, finalMacros, finalEnvs) =
-        foldl (compileOneMod modMap) (M.empty, [], [], TC.emptyTCEnvs) order
+  (expandedMap, compileStates) <- case expandAllModules modMap order of
+    Left e -> error ("module macro: " ++ e)
+    Right r -> pure r
+  let (finalExports, finalTyped, finalEnvs) =
+        foldl (compileOneMod expandedMap compileStates modMap) (M.empty, [], TC.emptyTCEnvs) order
       mainSexprs = parseMod "MAIN" mainSrc
-      mainExpanded = case MacroExpand.expandWith finalMacros mainSexprs of
+      mainImports = CST.Import "PRELUDE" "PRELUDE" [] : SExpr.preScanImports mainSexprs
+      mainBaseState = case buildCompileBase False mainImports compileStates of
+        Left e -> error ("main compile base: " ++ e)
+        Right st -> st
+      mainExpanded = case MacroExpand.expandModuleWith "MAIN" mainBaseState mainSexprs of
         Left e  -> error ("main macro: " ++ e)
-        Right s -> s
+        Right r -> MacroExpand.mrExpanded r
       mainProg = case SExpr.toProgram mainExpanded of
         Left e  -> error ("main sexpr: " ++ SExpr.ceMsg e)
         Right p -> p
@@ -2256,21 +2354,55 @@ multiModulePipeline modules mainSrc = do
       Left e  -> error ("parse " ++ T.unpack name ++ ": " ++ show e)
       Right s -> s
 
-    compileOneMod modMap (accExports, accTyped, accMacros, accEnvs) modName =
-      let sexprs = modMap M.! modName
-          thisMacros = MacroExpand.extractMacroDefs sexprs
-          isPrelude = modName == "PRELUDE"
-          expanded = case MacroExpand.expandWith accMacros sexprs of
-            Left e  -> error ("macro " ++ T.unpack modName ++ ": " ++ e)
-            Right s -> s
+    buildCompileBase isPrelude imports compileStates
+      | isPrelude = Right MacroExpand.primitiveState
+      | otherwise = do
+          states <- mapM lookupState (map CST.impModule imports)
+          MacroExpand.mergeCompileStates states
+      where
+        lookupState name = case M.lookup name compileStates of
+          Just st -> Right st
+          Nothing -> Left ("missing compile-time state for " ++ T.unpack name)
+
+    expandAllModules modMap =
+      foldM expandOne (M.empty, M.empty)
+      where
+        expandOne (expandedMap, compileStates) modName =
+          let sexprs = modMap M.! modName
+              isPrelude = modName == "PRELUDE"
+              imports = if isPrelude then SExpr.preScanImports sexprs
+                        else CST.Import "PRELUDE" "PRELUDE" [] : SExpr.preScanImports sexprs
+          in case buildCompileBase isPrelude imports compileStates of
+               Left e -> Left e
+               Right baseState ->
+                 case MacroExpand.expandModuleWith modName baseState sexprs of
+                   Left e -> Left ("macro " ++ T.unpack modName ++ ": " ++ e)
+                   Right result ->
+                     Right ( M.insert modName (MacroExpand.mrExpanded result) expandedMap
+                           , M.insert modName (MacroExpand.mrState result) compileStates
+                           )
+
+    compileOneMod expandedMap compileStates _modMap (accExports, accTyped, accEnvs) modName =
+      let isPrelude = modName == "PRELUDE"
+          expanded = expandedMap M.! modName
           modProg = case SExpr.toProgram expanded of
             Left e  -> error ("sexpr " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg e)
             Right p -> p
           preludeExports = M.findWithDefault M.empty "PRELUDE" accExports
+          preludeMacroNames = case M.lookup "PRELUDE" compileStates of
+            Just st -> M.keysSet (MacroExpand.csMacros st)
+            Nothing -> S.empty
           cstImports = CST.progImports modProg
           allImports = if isPrelude then cstImports
                        else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
-          (rScope, tcCtx, nMap) = Mod.buildImportScope accExports allImports
+          protectedNames = if isPrelude then S.empty else M.keysSet preludeExports `S.union` preludeMacroNames
+          validated = case Mod.validateProgramNames protectedNames (CST.progExprs modProg) of
+            Left e -> error ("validate " ++ T.unpack modName ++ ": " ++ e)
+            Right () -> ()
+          collisionsChecked = case Mod.checkImportCollisions accExports allImports of
+            Left e -> error ("imports " ++ T.unpack modName ++ ": " ++ e)
+            Right () -> ()
+          (rScope, tcCtx, nMap) = validated `seq` collisionsChecked `seq` Mod.buildImportScope accExports allImports
           exprs = case Mod.desugarTopLevel (CST.progExprs modProg) of
             Left e  -> error ("desugar " ++ T.unpack modName ++ ": " ++ e)
             Right e -> e
@@ -2282,12 +2414,22 @@ multiModulePipeline modules mainSrc = do
           modExports = Mod.collectExports modEnvs typed
       in (M.insert modName modExports accExports,
           accTyped ++ [typed],
-          accMacros ++ thisMacros,
           modEnvs)
 
 shouldFailToCompile :: T.Text -> String -> IO ()
 shouldFailToCompile src msg = do
   result <- try (pipeline src >>= evaluate) :: IO (Either ErrorCall T.Text)
+  case result of
+    Left (ErrorCall e)
+      | msg `isInfixOf` e -> pure ()
+      | otherwise -> expectationFailure
+          ("expected error containing " ++ show msg ++ " but got:\n" ++ e)
+    Right _ -> expectationFailure
+      ("expected compilation to fail with: " ++ msg ++ " but it succeeded")
+
+shouldFailToCompileModules :: [(CST.Symbol, T.Text)] -> T.Text -> String -> IO ()
+shouldFailToCompileModules modules src msg = do
+  result <- try (multiModulePipeline modules src >>= evaluate) :: IO (Either ErrorCall T.Text)
   case result of
     Left (ErrorCall e)
       | msg `isInfixOf` e -> pure ()

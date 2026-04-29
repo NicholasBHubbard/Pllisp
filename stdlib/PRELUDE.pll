@@ -1,5 +1,9 @@
 (module PRELUDE)
 
+(mac fun (name params body)
+  `(let ((,name (lam ,params ,body)))
+    ,name))
+
 (type List (a)
   (Empty)
   (Cons a %(List a)))
@@ -17,10 +21,6 @@
 
 (type Unit ()
   (Unit))
-
-(mac fun (name params body)
-  `(let ((,name (lam ,params ,body)))
-    ,name))
 
 (mac progn (&rest args)
   (if (eq (length args) 1)
@@ -68,6 +68,51 @@
     (if (eq (length args) 1)
       (car args)
       `(if ,(car args) true (or ,@(cdr args))))))
+
+(eval-when (:compile-toplevel)
+  (let ((append (lam (xs ys)
+    (if (list? xs)
+      (if (list? ys)
+        (if (null? xs)
+          ys
+          (cons (car xs) (append (cdr xs) ys)))
+        (error "append: arguments must be lists"))
+      (error "append: arguments must be lists")))))
+    append)
+
+  (let ((reverse (lam (xs)
+    (if (list? xs)
+      (if (null? xs)
+        ()
+        (append (reverse (cdr xs)) (cons (car xs) ())))
+      (error "reverse: not a list")))))
+    reverse)
+
+  (let ((map (lam (fn xs)
+    (if (list? xs)
+      (if (null? xs)
+        ()
+        (cons (fn (car xs)) (map fn (cdr xs))))
+      (error "map: second argument must be a list")))))
+    map)
+
+  (let ((filter (lam (fn xs)
+    (if (list? xs)
+      (if (null? xs)
+        ()
+        (if (fn (car xs))
+          (cons (car xs) (filter fn (cdr xs)))
+          (filter fn (cdr xs))))
+      (error "filter: second argument must be a list")))))
+    filter)
+
+  (let ((foldl (lam (fn acc xs)
+    (if (list? xs)
+      (if (null? xs)
+        acc
+        (foldl fn (fn acc (car xs)) (cdr xs)))
+      (error "foldl: third argument must be a list")))))
+    foldl))
 
 (ffi pll-print (%STR) %VOID)
 (ffi pll-read-line (%INT) %PTR)
