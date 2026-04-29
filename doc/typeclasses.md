@@ -35,7 +35,7 @@ Each method signature lists argument types followed by the return type:
 
 Rules worth remembering:
 
-- class names are usually written in `UPPER CASE`
+- class names are usually written in `UPPERCASE`
 - a class needs at least one type variable
 - a class needs at least one method
 
