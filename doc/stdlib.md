@@ -1,13 +1,25 @@
 # Standard Library
 
-The `PRELUDE` module is implicitly imported into every program. You do not need
-an explicit `(import PRELUDE)`.
+The `PRELUDE` module is implicitly available in every program.
 
-Do not write one anyway. `PRELUDE` is already available in every program, and
-an explicit `(import PRELUDE)` currently fails with duplicate macro
-definitions.
+You do not need an explicit `(import PRELUDE)`.
+
+Do not write one anyway. `PRELUDE` is already available, and an explicit
+`(import PRELUDE)` currently fails with duplicate macro definitions.
+
+## What PRELUDE Gives You
+
+The PRELUDE provides:
+
+- common algebraic data types
+- convenience macros for writing ordinary code
+- core typeclasses used throughout examples and user programs
+
+If you want the “language most people actually write,” this page matters.
 
 ## Types
+
+The PRELUDE defines:
 
 ```
 (type List (a)
@@ -29,59 +41,130 @@ definitions.
   (Unit))
 ```
 
-`List` is the standard linked list. `&rest` parameters in lambdas collect
-arguments into a `List`.
+### `List`
 
-`Maybe` represents optional values. `Either` represents values with two
-possibilities (conventionally `Left` for errors, `Right` for success).
+`List` is the standard linked list type.
 
-`Pair` is a simple two-element tuple.
+```
+Empty
+(Cons 1 (Cons 2 (Cons 3 Empty)))
+```
 
-`Unit` is a named wrapper around `unit` — useful when you need a constructor.
+Pattern matching:
+
+```
+(case xs
+  ((Empty) 0)
+  ((Cons h t) (add h (sum-list t))))
+```
+
+`&rest` parameters collect their extra arguments into a `List`.
+
+### `Maybe`
+
+`Maybe` represents optional values:
+
+```
+Nothing
+(Just 42)
+```
+
+Typical use:
+
+```
+(fun safe-div ((a %INT) (b %INT))
+  (if (eqi b 0) Nothing (Just (div a b))))
+```
+
+### `Either`
+
+`Either` represents two possibilities, conventionally error/success:
+
+```
+(Left "bad input")
+(Right 42)
+```
+
+### `Pair`
+
+`Pair` is a simple 2-tuple:
+
+```
+(Pair "x" 10)
+```
+
+### `Unit`
+
+`Unit` is a named wrapper around the `unit` value. Use it when you need a
+constructor form instead of the bare builtin value.
 
 ## Macros
 
-### fun
+The PRELUDE macros are the main reason ordinary pllisp programs read cleanly.
 
-Binds a named function. Shorthand for `let` + `lam`:
+### `fun`
+
+Binds a named function.
 
 ```
-(fun square ((x %INT)) (mul x x))
-# Expands to: (let ((square (lam ((x %INT)) (mul x x)))) square)
+(fun square ((x %INT))
+  (mul x x))
 ```
 
-### progn
+Equivalent shape:
 
-Sequences expressions, returning the last. Intermediate results are discarded:
+```
+(let ((square (lam ((x %INT)) (mul x x))))
+  square)
+```
+
+If you need multiple expressions in the body, use `progn` inside the body:
+
+```
+(fun greet ((name %STR))
+  (progn
+    (print "greeting")
+    (print (concat "hello " name))))
+```
+
+### `progn`
+
+Sequences expressions and returns the last one:
 
 ```
 (progn
   (print "a")
   (print "b")
   (print "c"))
-# Expands to: (let ((_ (print "a"))) (let ((_ (print "b"))) (print "c")))
 ```
 
-### if_
+It is the normal way to write “do these things in order” code.
 
-Like `if`, but the condition is converted to `%BOOL` via the `TRUTHY`
-typeclass:
+### `if_`
 
-```
-(if_ 42 "truthy" "falsy")     # "truthy" — non-zero INT
-(if_ Nothing "yes" "no")      # "no" — Nothing is falsy
-```
-
-### when / unless
-
-One-armed conditionals using `TRUTHY`. Return `unit` for the missing branch:
+Like `if`, but first converts the condition through the `TRUTHY` typeclass:
 
 ```
-(when (gt x 0) (print "positive"))   # gt from ORD typeclass
-(unless (eqs s "") (print s))
+(if_ 42 "truthy" "falsy")
+(if_ Nothing "yes" "no")
 ```
 
-### cond
+Use plain `if` when you already have a `%BOOL`. Use `if_` when you want
+truthiness semantics.
+
+### `when` and `unless`
+
+One-armed conditionals using `TRUTHY`:
+
+```
+(when (gt x 0)
+  (print "positive"))
+
+(unless (eqs s "")
+  (print s))
+```
+
+### `cond`
 
 Multi-way conditional:
 
@@ -92,32 +175,41 @@ Multi-way conditional:
   (true      (print "other")))
 ```
 
-### if-let / when-let / unless-let
+### `if-let`, `when-let`, `unless-let`
 
 Bind a value, then test its truthiness:
 
 ```
-(if-let (x (find-user id))
+(if-let (x maybe-user)
   (print (.name x))
   (print "not found"))
+```
 
-(when-let (x (find-user id))
+```
+(when-let (x maybe-user)
   (print (.name x)))
+```
 
-(unless-let (x (find-user id))
+```
+(unless-let (x maybe-user)
   (print "not found"))
 ```
+
+These are especially useful with `Maybe`, lists, and strings.
 
 ## Typeclasses
 
-### TRUTHY
+### `TRUTHY`
 
-Converts a value to `%BOOL`. Used by `if_`, `when`, `unless`, and the `*-let`
-macros.
+Converts a value to `%BOOL`. It powers `if_`, `when`, `unless`, and the
+`*-let` macros.
 
 ```
-(cls TRUTHY () (a) (truthy %a %BOOL))
+(cls TRUTHY () (a)
+  (truthy %a %BOOL))
 ```
+
+Built-in PRELUDE instances:
 
 | Instance | Truthy when |
 |----------|-------------|
@@ -129,55 +221,80 @@ macros.
 | `%(List a)` | is `Cons` |
 | `%(Either a b)` | is `Right` |
 
-### EQ
-
-Equality comparison. Provides `eq` as a typeclass method, replacing direct
-use of the primitive builtins (`eqi`, `eqf`, `eqs`).
+Examples:
 
 ```
-(cls EQ () (a) (eq %a %a %BOOL))
+(if_ "hello" "yes" "no")
+(if_ "" "yes" "no")
 ```
 
-| Instance | Delegates to |
-|----------|--------------|
-| `%INT` | `eqi` |
-| `%FLT` | `eqf` |
-| `%STR` | `eqs` |
-| `%BOOL` | pure (XNOR) |
+### `EQ`
+
+Generic equality comparison.
 
 ```
-(eq 1 1)            # true — uses EQ %INT
-(eq "hello" "hello") # true — uses EQ %STR
+(cls EQ () (a)
+  (eq %a %a %BOOL))
 ```
 
-### ORD
+Built-in PRELUDE instances:
 
-Ordering comparison. Requires `EQ`. Provides `lt`, `gt`, `le`, `ge` as
-typeclass methods, replacing direct use of the primitive builtins (`lti`,
-`gti`, `lei`, `gei`).
+| Instance | Behavior |
+|----------|----------|
+| `%INT` | uses integer equality |
+| `%FLT` | uses float equality |
+| `%STR` | uses string equality |
+| `%BOOL` | compares booleans |
 
-```
-(cls ORD (EQ) (a) (lt %a %a %BOOL) (gt %a %a %BOOL) (le %a %a %BOOL) (ge %a %a %BOOL))
-```
-
-| Instance | Delegates to |
-|----------|--------------|
-| `%INT` | `lti`, `gti`, `lei`, `gei` |
-| `%FLT` | `ltf`, `gtf`, `lef`, `gef` |
-| `%STR` | `lts`, `gts`, `les`, `ges` |
+Examples:
 
 ```
-(gt 3 2)          # true — uses ORD %INT
-(le 1.5 2.0)      # true — uses ORD %FLT
+(eq 1 1)
+(eq "hello" "hello")
+(eq false false)
 ```
 
-### STRINGY
+Use `eq` when you want the typeclass-based interface. Use `eqi`, `eqf`, or
+`eqs` when you explicitly want the raw primitive builtin.
+
+### `ORD`
+
+Generic ordering comparison.
+
+```
+(cls ORD (EQ) (a)
+  (lt %a %a %BOOL)
+  (gt %a %a %BOOL)
+  (le %a %a %BOOL)
+  (ge %a %a %BOOL))
+```
+
+Built-in PRELUDE instances:
+
+| Instance | Supports |
+|----------|----------|
+| `%INT` | `lt`, `gt`, `le`, `ge` |
+| `%FLT` | `lt`, `gt`, `le`, `ge` |
+| `%STR` | lexicographic comparison |
+
+Examples:
+
+```
+(gt 3 2)
+(le 1.5 2.0)
+(lt "apple" "banana")
+```
+
+### `STRINGY`
 
 Converts a value to `%STR`.
 
 ```
-(cls STRINGY () (a) (str %a %STR))
+(cls STRINGY () (a)
+  (str %a %STR))
 ```
+
+Built-in PRELUDE instances:
 
 | Instance | Result |
 |----------|--------|
@@ -187,4 +304,24 @@ Converts a value to `%STR`.
 | `%STR` | identity |
 | `%USYM` | symbol name as string |
 
-See also: [Typeclasses](typeclasses.md) for how to define your own.
+Examples:
+
+```
+(str 42)
+(str true)
+(str :ok)
+```
+
+## Practical Advice
+
+- reach for `fun` and `progn` immediately; they make code much clearer
+- prefer `eq`, `lt`, `gt`, `le`, `ge`, and `str` when you want the generic
+  class-based APIs
+- use `if_`/`when`/`unless` only when you want truthiness semantics
+- do not try to import `PRELUDE` explicitly
+
+See also:
+
+- [Typeclasses](typeclasses.md)
+- [Macros](macros.md)
+- [Types](types.md)

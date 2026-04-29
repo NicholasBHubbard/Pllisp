@@ -30,6 +30,26 @@ This writes the executable next to the input file, using the same basename.
 The entry file can use any filename you pass on the command line. Imported
 modules are different: they are resolved as exact `MODULE.pll` filenames.
 
+### Try the Example Programs
+
+The repository already includes runnable examples:
+
+- `example-programs/valid/` — small working programs
+- `example-programs/invalid/` — programs that should fail with an error
+- `example-programs/modules/` — multi-file module examples
+
+Good starting points:
+
+- `example-programs/valid/hello.pllisp`
+- `example-programs/valid/prelude-macros.pllisp`
+- `example-programs/valid/typeclasses.pllisp`
+- `example-programs/valid/records.pllisp`
+- `example-programs/modules/valid/qualified-access/main.pllisp`
+
+Imported support files must use the module filename rule. For example, a main
+file can be named `main.pllisp`, but an imported `MATH` module must live in
+`MATH.pll`.
+
 ### Run Tests
 
 ```sh
@@ -40,15 +60,31 @@ cabal test pllisp-test
 
 Start with [Overview](doc/overview.md), then use the docs under [`doc/`](doc):
 
-- [Naming Conventions](doc/conventions.md)
-- [Expressions](doc/expressions.md)
-- [Types](doc/types.md)
-- [Typeclasses](doc/typeclasses.md)
-- [Macros](doc/macros.md)
-- [Modules](doc/modules.md)
-- [FFI](doc/ffi.md)
-- [Standard Library](doc/stdlib.md)
-- [Reference](doc/reference.md)
+- [Naming Conventions](doc/conventions.md) — case rules, naming style, and
+  how case-insensitivity affects source code
+- [Expressions](doc/expressions.md) — literals, bindings, functions,
+  conditionals, references, I/O, and regular expressions
+- [Types](doc/types.md) — annotations, inference, ADTs, records, patterns,
+  and uninterned symbols
+- [Typeclasses](doc/typeclasses.md) — classes, instances, superclasses,
+  parametric instances, and higher-kinded classes
+- [Macros](doc/macros.md) — `mac`, quasiquote, destructuring, `gensym`, and
+  macro-time builtins
+- [Modules](doc/modules.md) — file layout, imports, aliases, exports, and
+  PRELUDE behavior
+- [FFI](doc/ffi.md) — calling C functions, structs, enums, arrays,
+  variadics, and callbacks
+- [Standard Library](doc/stdlib.md) — the implicit `PRELUDE` module:
+  built-in types, convenience macros, and core typeclasses
+- [Reference](doc/reference.md) — quick syntax and builtin cheat sheet
+
+If you are new to the language, the fastest path is:
+
+1. Read [Overview](doc/overview.md).
+2. Read [Expressions](doc/expressions.md) and [Types](doc/types.md).
+3. Skim [Standard Library](doc/stdlib.md).
+4. Come back to [Typeclasses](doc/typeclasses.md), [Macros](doc/macros.md),
+   [Modules](doc/modules.md), and [FFI](doc/ffi.md) as needed.
 
 ## AI Usage Statement
 

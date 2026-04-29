@@ -2,6 +2,16 @@
 
 Typeclasses provide ad-hoc polymorphism.
 
+## Why Use Them
+
+Use a typeclass when:
+
+- several types should support the same operation name
+- you want polymorphic helper functions that depend on a capability
+- a plain sum type would be the wrong abstraction
+
+Common PRELUDE examples are `EQ`, `ORD`, `TRUTHY`, and `STRINGY`.
+
 ## Defining a Class
 
 ```
@@ -9,9 +19,13 @@ Typeclasses provide ad-hoc polymorphism.
   (show %a %STR))
 ```
 
-The syntax is `(cls Name (superclasses...) (typevars...) methods...)`.
+The syntax is:
 
-Each method signature lists its argument types and return type:
+```
+(cls CLASS-NAME (superclasses...) (typevars...) method-signatures...)
+```
+
+Each method signature lists argument types followed by the return type:
 
 ```
 (cls EQUAL () (a)
@@ -19,17 +33,11 @@ Each method signature lists its argument types and return type:
   (nequal %a %a %BOOL))
 ```
 
-## Superclasses
+Rules worth remembering:
 
-Superclasses go in the first parenthesized list:
-
-```
-(cls APPLICATIVE (FUNCTOR) (f)
-  (pure %a %(f a))
-  (ap %(f (-> a b)) %(f a) %(f b)))
-```
-
-An `APPLICATIVE` instance requires a `FUNCTOR` instance for the same type.
+- class names are usually written in `UPPER CASE`
+- a class needs at least one type variable
+- a class needs at least one method
 
 ## Defining Instances
 
@@ -38,8 +46,45 @@ An `APPLICATIVE` instance requires a `FUNCTOR` instance for the same type.
   (show (lam ((x %INT)) (int-to-str x))))
 ```
 
-Each method in the instance must be a lambda matching the class method's
-type signature.
+Each method in the instance must be a lambda matching the declared method
+shape.
+
+For a class with multiple methods:
+
+```
+(cls EQUAL () (a)
+  (equal %a %a %BOOL)
+  (nequal %a %a %BOOL))
+
+(inst EQUAL %INT
+  (equal  (lam ((x %INT) (y %INT)) (eqi x y)))
+  (nequal (lam ((x %INT) (y %INT)) (not (eqi x y)))))
+```
+
+## Calling Methods
+
+Once a class and matching instance are in scope, the method name is used like
+an ordinary function:
+
+```
+(cls SHOW () (a)
+  (show %a %STR))
+
+(inst SHOW %INT
+  (show (lam ((x %INT)) (int-to-str x))))
+
+(print (show 42))
+```
+
+Methods work inside helper functions too:
+
+```
+(let ((display (lam (x) (print (show x)))))
+  (display 42))
+```
+
+This is the main payoff: the helper stays polymorphic while still demanding a
+capability.
 
 ## Parametric Instances
 
@@ -49,16 +94,43 @@ Instances can be defined for parameterized types:
 (inst SHOW %(Maybe a)
   (show (lam ((x %(Maybe a)))
     (case x
-      ((Just v) (concat "Just(" (concat (show v) ")")))
+      ((Just _) "Just")
       (_ "Nothing")))))
 ```
 
-This works for any `Maybe a` where `a` itself has a `SHOW` instance.
+This works for any `Maybe a`.
 
-## Higher-Kinded Types
+Another common pattern is a capability on a container shape:
 
-Type class parameters can be type constructors, not just ground types.
-This enables abstractions like `FUNCTOR`:
+```
+(cls BOOLISH () (a)
+  (boolish? %a %BOOL))
+
+(inst BOOLISH %(List a)
+  (boolish? (lam ((xs %(List a)))
+    (case xs
+      ((Cons _ _) true)
+      (_ false)))))
+```
+
+## Superclasses
+
+Superclasses go in the first parenthesized list:
+
+```
+(cls APPLICATIVE (FUNCTOR) (f)
+  (pure %a %(f a))
+  (ap %(f %(-> a b)) %(f a) %(f b)))
+```
+
+An `APPLICATIVE` instance requires a `FUNCTOR` instance for the same type
+constructor.
+
+If the superclass instance is missing, that is an error.
+
+## Higher-Kinded Typeclasses
+
+Typeclass parameters can be type constructors, not just ground types.
 
 ```
 (cls FUNCTOR () (f)
@@ -77,7 +149,43 @@ This enables abstractions like `FUNCTOR`:
       ((Cons h t) (Cons (fn h) (map fn t)))))))
 ```
 
-Here `f` is a type constructor (kind `* -> *`), instantiated to `Maybe` or
+Here `f` is a type constructor of shape `* -> *`, instantiated to `Maybe` or
 `List`.
+
+Another example with a custom type:
+
+```
+(type Box (a)
+  (MkBox a))
+
+(cls BOXMAP () (f)
+  (bmap %(-> a b) %(f a) %(f b)))
+
+(inst BOXMAP %Box
+  (bmap (lam ((fn %(-> a b)) (box %(Box a)))
+    (case box
+      ((MkBox x) (MkBox (fn x)))))))
+```
+
+## Good Patterns
+
+- keep classes small and focused
+- prefer parametric instances when behavior depends on the outer shape
+- keep method names lowercase even when the class name is uppercase
+- use PRELUDE classes when they already match the capability you need
+
+## Common Errors
+
+- calling a method with no matching instance in scope
+- forgetting a required superclass instance
+- using a ground type where a higher-kinded class expects a type constructor
+- giving an instance method the wrong lambda shape
+
+## Module Use
+
+Across modules, typeclass methods export normally, but the class declaration
+name itself does not currently behave like an exported value. In practice,
+import the methods you need and keep the class definition in the providing
+module.
 
 See also: [PRELUDE typeclasses](stdlib.md#typeclasses)
