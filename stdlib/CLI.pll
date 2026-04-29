@@ -1,0 +1,453 @@
+(module CLI)
+
+(type ParsedEntry ()
+  (FlagEntry %USYM %BOOL)
+  (OptionEntry %USYM %(Maybe %STR))
+  (RequiredOptionEntry %USYM %STR)
+  (ArgEntry %USYM %STR)
+  (RestEntry %USYM %(List %STR)))
+
+(type RawEntry ()
+  (RawFlagEntry %USYM %BOOL)
+  (RawValueEntry %USYM %(Maybe %STR))
+  (RawRestEntry %USYM %(List %STR)))
+
+(type Positional ()
+  (PositionalArg %USYM)
+  (PositionalRest %USYM))
+
+(type ParseState ()
+  (ParseState %(List %RawEntry) %(List %Positional)))
+
+(eval-when (:compile-toplevel)
+  (fun ensure ((ok %BOOL) (msg %STR)) %UNIT
+    (if ok unit (error msg)))
+
+  (fun field-name-string ((sx %SYNTAX)) %STR
+    (if (syntax-symbol? sx)
+      (syntax-symbol-name sx)
+      (error "cli: field name must be a symbol")))
+
+  (fun field-name-usym ((sx %SYNTAX)) %SYNTAX
+    (syntax-usym (field-name-string sx)))
+
+  (fun string-literal-value ((sx %SYNTAX)) %STR
+    (if (syntax-string? sx)
+      (syntax-string-value sx)
+      (error "cli: option names must be strings")))
+
+  (fun emit-string-list ((xs %(List %STR))) %SYNTAX
+    (case xs
+      ((Empty) `Empty)
+      ((Cons x rest)
+        `(Cons ,(syntax-string x) ,(emit-string-list rest)))))
+
+  (fun clause-tail ((clause %SYNTAX)) %SYNTAX
+    (if (syntax-list? clause)
+      (syntax-cdr clause)
+      (error "cli: clause must be a list")))
+
+  (fun clause-kind-string ((clause %SYNTAX)) %STR
+    (if (syntax-list? clause)
+      (let ((head (syntax-car clause)))
+        (if (syntax-symbol? head)
+          (syntax-symbol-name head)
+          (error "cli: clause head must be a symbol")))
+      (error "cli: clause must be a list")))
+
+  (fun emit-kind-entry ((clause %SYNTAX)) %SYNTAX
+    (let ((kind (clause-kind-string clause)))
+      (if (eqs kind "FLAG")
+        (syntax-string "flag")
+        (if (eqs kind "OPTION")
+          (syntax-string "option")
+          (if (eqs kind "REQUIRED-OPTION")
+            (syntax-string "required-option")
+            (if (eqs kind "ARG")
+              (syntax-string "arg")
+              (if (eqs kind "REST")
+                (syntax-string "rest")
+                (error (concat "cli: unknown clause kind: " kind)))))))))
+
+  (fun emit-name-entry ((clause %SYNTAX)) %SYNTAX
+    (let ((kind (clause-kind-string clause))
+          (tail (clause-tail clause)))
+      (if (or (eqs kind "FLAG") (or (eqs kind "OPTION") (eqs kind "REQUIRED-OPTION")))
+        (let ((_ (ensure (eqi (syntax-length tail) 3)
+                         (concat "cli: " (concat kind " expects name, short flag, and long flag")))))
+          (field-name-usym (syntax-car tail)))
+        (if (or (eqs kind "ARG") (eqs kind "REST"))
+          (let ((_ (ensure (eqi (syntax-length tail) 1)
+                           (concat "cli: " (concat kind " expects exactly one field name")))))
+            (field-name-usym (syntax-car tail)))
+          (error (concat "cli: unknown clause kind: " kind))))))
+
+  (fun emit-fields-entry ((clause %SYNTAX)) %SYNTAX
+    (let ((kind (clause-kind-string clause))
+          (tail (clause-tail clause)))
+      (if (or (eqs kind "FLAG") (or (eqs kind "OPTION") (eqs kind "REQUIRED-OPTION")))
+        (let ((_ (ensure (eqi (syntax-length tail) 3)
+                         (concat "cli: " (concat kind " expects name, short flag, and long flag")))))
+          (let ((short-sx (syntax-car (syntax-cdr tail)))
+                (long-sx (syntax-car (syntax-cdr (syntax-cdr tail)))))
+            (emit-string-list
+              (Cons (string-literal-value short-sx)
+                    (Cons (string-literal-value long-sx) Empty)))))
+        (if (or (eqs kind "ARG") (eqs kind "REST"))
+          `Empty
+          (error (concat "cli: unknown clause kind: " kind))))))
+
+  (fun emit-kind-list ((clauses %SYNTAX)) %SYNTAX
+    (if (syntax-null? clauses)
+      `Empty
+      `(Cons ,(emit-kind-entry (syntax-car clauses))
+             ,(emit-kind-list (syntax-cdr clauses)))))
+
+  (fun emit-name-list ((clauses %SYNTAX)) %SYNTAX
+    (if (syntax-null? clauses)
+      `Empty
+      `(Cons ,(emit-name-entry (syntax-car clauses))
+             ,(emit-name-list (syntax-cdr clauses)))))
+
+  (fun emit-fields-list ((clauses %SYNTAX)) %SYNTAX
+    (if (syntax-null? clauses)
+      `Empty
+      `(Cons ,(emit-fields-entry (syntax-car clauses))
+             ,(emit-fields-list (syntax-cdr clauses)))))
+
+  (mac cli (&rest clauses)
+    `(lam ((args %(List %STR)))
+       (CLI.parse-spec
+         ,(emit-kind-list clauses)
+         ,(emit-name-list clauses)
+         ,(emit-fields-list clauses)
+         args))))
+
+(fun usym-eq ((a %USYM) (b %USYM)) %BOOL
+  (eqs (usym-to-str a) (usym-to-str b)))
+
+(fun reverse-list (xs)
+  (let ((go (fun go (rest acc)
+        (case rest
+          ((Empty) acc)
+          ((Cons x more) (go more (Cons x acc)))))))
+    (go xs Empty)))
+
+(fun argv-list-from ((i %INT) (n %INT)) %(List %STR)
+  (if (lti i n)
+    (Cons (argv i) (argv-list-from (add i 1) n))
+    Empty))
+
+(fun argv-list ((u %UNIT)) %(List %STR)
+  (let ((_ u))
+    (argv-list-from 1 (argc unit))))
+
+(fun build-initial-entries ((kinds %(List %STR)) (names %(List %USYM))) %(List %RawEntry)
+  (case kinds
+    ((Empty) Empty)
+    ((Cons kind more-kinds)
+      (case names
+        ((Empty) Empty)
+        ((Cons name more-names)
+          (if (eqs kind "flag")
+            (Cons (RawFlagEntry name false) (build-initial-entries more-kinds more-names))
+            (if (or (eqs kind "option") (or (eqs kind "required-option") (eqs kind "arg")))
+              (Cons (RawValueEntry name Nothing) (build-initial-entries more-kinds more-names))
+              (if (eqs kind "rest")
+                (Cons (RawRestEntry name Empty) (build-initial-entries more-kinds more-names))
+                (build-initial-entries more-kinds more-names)))))))))
+
+(fun build-positionals ((kinds %(List %STR)) (names %(List %USYM))) %(List %Positional)
+  (case kinds
+    ((Empty) Empty)
+    ((Cons kind more-kinds)
+      (case names
+        ((Empty) Empty)
+        ((Cons name more-names)
+          (if (eqs kind "arg")
+            (Cons (PositionalArg name) (build-positionals more-kinds more-names))
+            (if (eqs kind "rest")
+              (Cons (PositionalRest name) Empty)
+              (build-positionals more-kinds more-names))))))))
+
+(fun first-field ((field-names %(List %STR))) %STR
+  (case field-names
+    ((Cons x _) x)
+    (_ "")))
+
+(fun second-field ((field-names %(List %STR))) %STR
+  (case field-names
+    ((Cons _ rest)
+      (case rest
+        ((Cons x _) x)
+        (_ "")))
+    (_ "")))
+
+(fun clause-flag-match ((field-names %(List %STR)) (token %STR)) %(Maybe %STR)
+  (if (or (eqs token (first-field field-names))
+          (eqs token (second-field field-names)))
+    (Just token)
+    Nothing))
+
+(fun find-flag-name ((kinds %(List %STR)) (names %(List %USYM)) (fields %(List %(List %STR))) (token %STR)) %(Maybe %USYM)
+  (case kinds
+    ((Empty) Nothing)
+    ((Cons kind more-kinds)
+      (case names
+        ((Empty) Nothing)
+        ((Cons name more-names)
+          (case fields
+            ((Empty) Nothing)
+            ((Cons clause-fields more-fields)
+              (if (eqs kind "flag")
+                (if-let (matched (clause-flag-match clause-fields token))
+                  (let ((_ matched))
+                    (Just name))
+                  (find-flag-name more-kinds more-names more-fields token))
+                (find-flag-name more-kinds more-names more-fields token)))))))))
+
+(fun find-option-name ((kinds %(List %STR)) (names %(List %USYM)) (fields %(List %(List %STR))) (token %STR)) %(Maybe %USYM)
+  (case kinds
+    ((Empty) Nothing)
+    ((Cons kind more-kinds)
+      (case names
+        ((Empty) Nothing)
+        ((Cons name more-names)
+          (case fields
+            ((Empty) Nothing)
+            ((Cons clause-fields more-fields)
+              (if (or (eqs kind "option") (eqs kind "required-option"))
+                (if-let (matched (clause-flag-match clause-fields token))
+                  (let ((_ matched))
+                    (Just name))
+                  (find-option-name more-kinds more-names more-fields token))
+                (find-option-name more-kinds more-names more-fields token)))))))))
+
+(fun set-flag-entry ((entries %(List %RawEntry)) (name %USYM) (value %BOOL)) %(List %RawEntry)
+  (case entries
+    ((Empty) Empty)
+    ((Cons entry rest)
+      (case entry
+        ((RawFlagEntry entry-name _)
+          (if (usym-eq entry-name name)
+            (Cons (RawFlagEntry entry-name value) rest)
+            (Cons entry (set-flag-entry rest name value))))
+        (_ (Cons entry (set-flag-entry rest name value)))))))
+
+(fun set-value-entry ((entries %(List %RawEntry)) (name %USYM) (value %STR)) %(List %RawEntry)
+  (case entries
+    ((Empty) Empty)
+    ((Cons entry rest)
+      (case entry
+        ((RawValueEntry entry-name _)
+          (if (usym-eq entry-name name)
+            (Cons (RawValueEntry entry-name (Just value)) rest)
+            (Cons entry (set-value-entry rest name value))))
+        (_ (Cons entry (set-value-entry rest name value)))))))
+
+(fun push-rest-entry ((entries %(List %RawEntry)) (name %USYM) (value %STR)) %(List %RawEntry)
+  (case entries
+    ((Empty) Empty)
+    ((Cons entry rest)
+      (case entry
+        ((RawRestEntry entry-name values)
+          (if (usym-eq entry-name name)
+            (Cons (RawRestEntry entry-name (Cons value values)) rest)
+            (Cons entry (push-rest-entry rest name value))))
+        (_ (Cons entry (push-rest-entry rest name value)))))))
+
+(fun consume-positional ((state %ParseState) (token %STR)) %(Either %STR %ParseState)
+  (case state
+    ((ParseState entries pending)
+      (case pending
+        ((Empty) (Left (concat "unexpected argument: " token)))
+        ((Cons pos rest)
+          (case pos
+            ((PositionalArg name)
+              (Right (ParseState (set-value-entry entries name token) rest)))
+            ((PositionalRest name)
+              (Right (ParseState (push-rest-entry entries name token) pending)))))))))
+
+(fun parse-loop ((kinds %(List %STR)) (names %(List %USYM)) (fields %(List %(List %STR))) (state %ParseState) (after-dd %BOOL) (args %(List %STR))) %(Either %STR %ParseState)
+  (case args
+    ((Empty) (Right state))
+    ((Cons token rest)
+      (if after-dd
+        (case (consume-positional state token)
+          ((Left err) (Left err))
+          ((Right next-state) (parse-loop kinds names fields next-state true rest)))
+        (if (eqs token "--")
+          (parse-loop kinds names fields state true rest)
+          (case (find-flag-name kinds names fields token)
+            ((Just flag-name)
+              (case state
+                ((ParseState entries pending)
+                  (parse-loop kinds names fields (ParseState (set-flag-entry entries flag-name true) pending) false rest))))
+            (_
+              (case (find-option-name kinds names fields token)
+                ((Just opt-name)
+                  (case rest
+                    ((Empty) (Left (concat "missing option value: " token)))
+                    ((Cons value tail)
+                      (case state
+                        ((ParseState entries pending)
+                          (parse-loop kinds names fields (ParseState (set-value-entry entries opt-name value) pending) false tail))))))
+                (_
+                  (if (str-contains token "-")
+                    (if (eqs (substr token 0 1) "-")
+                      (Left (concat "unknown option: " token))
+                      (case (consume-positional state token)
+                        ((Left err) (Left err))
+                        ((Right next-state) (parse-loop kinds names fields next-state false rest))))
+                    (case (consume-positional state token)
+                      ((Left err) (Left err))
+                      ((Right next-state) (parse-loop kinds names fields next-state false rest)))))))))))))
+
+(fun raw-flag-value ((entries %(List %RawEntry)) (name %USYM)) %BOOL
+  (case entries
+    ((Empty) false)
+    ((Cons entry rest)
+      (case entry
+        ((RawFlagEntry entry-name value)
+          (if (usym-eq entry-name name)
+            value
+            (raw-flag-value rest name)))
+        (_ (raw-flag-value rest name))))))
+
+(fun raw-string-value ((entries %(List %RawEntry)) (name %USYM)) %(Maybe %STR)
+  (case entries
+    ((Empty) Nothing)
+    ((Cons entry rest)
+      (case entry
+        ((RawValueEntry entry-name value)
+          (if (usym-eq entry-name name)
+            value
+            (raw-string-value rest name)))
+        (_ (raw-string-value rest name))))))
+
+(fun raw-rest-values ((entries %(List %RawEntry)) (name %USYM)) %(List %STR)
+  (case entries
+    ((Empty) Empty)
+    ((Cons entry rest)
+      (case entry
+        ((RawRestEntry entry-name value)
+          (if (usym-eq entry-name name)
+            value
+            (raw-rest-values rest name)))
+        (_ (raw-rest-values rest name))))))
+
+(fun finalize-clause ((kind %STR) (name %USYM) (field-names %(List %STR)) (entries %(List %RawEntry))) %(Either %STR %ParsedEntry)
+  (if (eqs kind "flag")
+    (Right (FlagEntry name (raw-flag-value entries name)))
+      (if (eqs kind "option")
+        (Right (OptionEntry name (raw-string-value entries name)))
+        (if (eqs kind "required-option")
+          (case (raw-string-value entries name)
+            ((Just value) (Right (RequiredOptionEntry name value)))
+            (_ (Left (concat "missing option: " (usym-to-str name)))))
+          (if (eqs kind "arg")
+            (case (raw-string-value entries name)
+              ((Just value) (Right (ArgEntry name value)))
+            (_ (Left (concat "missing argument: " (usym-to-str name)))))
+          (if (eqs kind "rest")
+            (Right (RestEntry name (reverse-list (raw-rest-values entries name))))
+            (Left "invalid CLI spec")))))))
+
+(fun finalize-spec-list ((kinds %(List %STR)) (names %(List %USYM)) (fields %(List %(List %STR))) (entries %(List %RawEntry))) %(Either %STR %(List %ParsedEntry))
+  (case kinds
+    ((Empty) (Right Empty))
+    ((Cons kind more-kinds)
+      (case names
+        ((Empty) (Right Empty))
+        ((Cons name more-names)
+          (case fields
+            ((Empty) (Right Empty))
+            ((Cons clause-fields more-fields)
+              (case (finalize-clause kind name clause-fields entries)
+                ((Left err) (Left err))
+                ((Right entry)
+                  (case (finalize-spec-list more-kinds more-names more-fields entries)
+                    ((Left err) (Left err))
+                    ((Right more) (Right (Cons entry more)))))))))))))
+
+(fun parse-spec ((kinds %(List %STR)) (names %(List %USYM)) (fields %(List %(List %STR))) (args %(List %STR))) %(Either %STR %(List %ParsedEntry))
+  (let ((initial-state (ParseState (build-initial-entries kinds names)
+                                   (build-positionals kinds names))))
+    (case (parse-loop kinds names fields initial-state false args)
+      ((Left err) (Left err))
+      ((Right state)
+        (case state
+          ((ParseState entries _)
+            (finalize-spec-list kinds names fields entries)))))))
+
+(fun parse (spec args)
+  (spec args))
+
+(fun parse-argv (spec u)
+  (let ((_ u))
+    (spec (argv-list unit))))
+
+(fun flag-value ((entries %(List %ParsedEntry)) (name %USYM)) %BOOL
+  (let ((go (fun go ((rest %(List %ParsedEntry))) %BOOL
+    (case rest
+      ((Empty) false)
+      ((Cons entry more)
+        (case entry
+          ((FlagEntry entry-name value)
+            (if (usym-eq entry-name name)
+              value
+              (go more)))
+          (_ (go more))))))))
+    (go entries)))
+
+(fun option-value ((entries %(List %ParsedEntry)) (name %USYM)) %(Maybe %STR)
+  (let ((go (fun go ((rest %(List %ParsedEntry))) %(Maybe %STR)
+    (case rest
+      ((Empty) Nothing)
+      ((Cons entry more)
+        (case entry
+          ((OptionEntry entry-name value)
+            (if (usym-eq entry-name name)
+              value
+              (go more)))
+          (_ (go more))))))))
+    (go entries)))
+
+(fun required-option-value ((entries %(List %ParsedEntry)) (name %USYM)) %STR
+  (let ((go (fun go ((rest %(List %ParsedEntry))) %STR
+    (case rest
+      ((Empty) "")
+      ((Cons entry more)
+        (case entry
+          ((RequiredOptionEntry entry-name value)
+            (if (usym-eq entry-name name)
+              value
+              (go more)))
+          (_ (go more))))))))
+    (go entries)))
+
+(fun arg-value ((entries %(List %ParsedEntry)) (name %USYM)) %STR
+  (let ((go (fun go ((rest %(List %ParsedEntry))) %STR
+    (case rest
+      ((Empty) "")
+      ((Cons entry more)
+        (case entry
+          ((ArgEntry entry-name value)
+            (if (usym-eq entry-name name)
+              value
+              (go more)))
+          (_ (go more))))))))
+    (go entries)))
+
+(fun rest-value ((entries %(List %ParsedEntry)) (name %USYM)) %(List %STR)
+  (let ((go (fun go ((rest %(List %ParsedEntry))) %(List %STR)
+    (case rest
+      ((Empty) Empty)
+      ((Cons entry more)
+        (case entry
+          ((RestEntry entry-name value)
+            (if (usym-eq entry-name name)
+              value
+              (go more)))
+          (_ (go more))))))))
+    (go entries)))

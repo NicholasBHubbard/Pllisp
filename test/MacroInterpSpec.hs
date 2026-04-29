@@ -110,12 +110,24 @@ spec = do
 
     it "builds syntax with quote" $
       "(quote (a 1 :foo))" `shouldEvalTo`
-        MI.MList [MI.MAtom "A", MI.MInt 1, MI.MUSym "FOO"]
+        MI.MSyntax (MI.SyList [MI.SyAtom "A", MI.SyInt 1, MI.SyUSym "FOO"])
 
     it "builds syntax with quasiquote, unquote, and splice" $
       "(let ((x 42) (xs (quote (1 2)))) `(a ,x ,@xs b))"
         `shouldEvalTo`
-          MI.MList [MI.MAtom "A", MI.MInt 42, MI.MInt 1, MI.MInt 2, MI.MAtom "B"]
+          MI.MSyntax (MI.SyList [MI.SyAtom "A", MI.SyInt 42, MI.SyInt 1, MI.SyInt 2, MI.SyAtom "B"])
+
+    it "matches syntax-case quoted literal patterns" $
+      "(syntax-case (quote foo) ((quote foo) 42) (_ 0))"
+        `shouldEvalTo` MI.MInt 42
+
+    it "matches syntax-case list patterns with &rest binders" $
+      "(syntax-case (quote (foo 1 2)) ((head &rest tail) (add 1 (syntax-length tail))) (_ 0))"
+        `shouldEvalTo` MI.MInt 3
+
+    it "compares syntax structurally" $
+      "(syntax-equal? (quote (foo 1)) (quote (foo 1)))"
+        `shouldEvalTo` MI.MBool True
 
     it "uses syntax constructors and accessors directly" $
       "(syntax-symbol-name (syntax-symbol \"foo\"))"
@@ -127,15 +139,15 @@ spec = do
 
     it "uses prelude syntax-list helpers on quoted syntax" $
       "(append (quote (1 2)) (quote (3 4)))"
-        `shouldEvalTo` MI.MList [MI.MInt 1, MI.MInt 2, MI.MInt 3, MI.MInt 4]
+        `shouldEvalTo` MI.MSyntax (MI.SyList [MI.SyInt 1, MI.SyInt 2, MI.SyInt 3, MI.SyInt 4])
 
     it "maps over syntax lists with typed lambdas" $
       "(map (lam ((x %SYNTAX)) (syntax-int (add (syntax-int-value x) 10))) (quote (1 2 3)))"
-        `shouldEvalTo` MI.MList [MI.MInt 11, MI.MInt 12, MI.MInt 13]
+        `shouldEvalTo` MI.MSyntax (MI.SyList [MI.SyInt 11, MI.SyInt 12, MI.SyInt 13])
 
     it "filters syntax lists with typed lambdas" $
       "(filter (lam ((x %SYNTAX)) (lt 1 (syntax-int-value x))) (quote (1 2 3)))"
-        `shouldEvalTo` MI.MList [MI.MInt 2, MI.MInt 3]
+        `shouldEvalTo` MI.MSyntax (MI.SyList [MI.SyInt 2, MI.SyInt 3])
 
     it "folds syntax lists with typed lambdas" $
       "(foldl (lam ((acc %INT) (x %SYNTAX)) (add acc (syntax-int-value x))) 0 (quote (1 2 3)))"
@@ -169,11 +181,8 @@ spec = do
       "(rx-split (rx-compile \",\") \"a,b,c\")"
         `shouldEvalTo` MI.MList [MI.MStr "a", MI.MStr "b", MI.MStr "c"]
 
-    it "provides gensym through the typed path" $ do
-      case evalSrc "(let ((a (gensym)) (b (gensym))) (eq (syntax-symbol-name a) (syntax-symbol-name b)))" of
-        Right (MI.MBool False) -> pure ()
-        Right other -> expectationFailure ("expected false, got " ++ show other)
-        Left err -> expectationFailure ("eval failed: " ++ err)
+    it "does not expose gensym anymore" $
+      shouldFail "(gensym)"
 
     it "raises compile-time errors through error" $
       case evalSrc "(error \"boom\")" of
@@ -196,14 +205,14 @@ spec = do
   describe "conversion" $ do
     it "sexprToVal preserves syntax forms" $
       MI.sexprToVal (parseSExpr "(quote (a 1))")
-        `shouldBe` MI.MList [MI.MAtom "QUOTE", MI.MList [MI.MAtom "A", MI.MInt 1]]
+        `shouldBe` MI.MSyntax (MI.SyList [MI.SyAtom "QUOTE", MI.SyList [MI.SyAtom "A", MI.SyInt 1]])
 
     it "valToSExpr round-trips atoms" $
       MI.valToSExpr (MI.MAtom "FOO")
         `shouldBe` Right (Loc.Located dummySpan (SExpr.SAtom "FOO"))
 
     it "valToSExpr round-trips quoted syntax lists" $
-      MI.valToSExpr (MI.MList [MI.MAtom "A", MI.MInt 1])
+      MI.valToSExpr (MI.MSyntax (MI.SyList [MI.SyAtom "A", MI.SyInt 1]))
         `shouldBe`
           Right
             (Loc.Located dummySpan
@@ -211,6 +220,21 @@ spec = do
                 [ Loc.Located dummySpan (SExpr.SAtom "A")
                 , Loc.Located dummySpan (SExpr.SInt 1)
                 ]))
+
+    it "valToSExpr round-trips quasiquote syntax forms" $
+      MI.valToSExpr (MI.sexprToVal (parseSExpr "`(a ,x ,@xs)"))
+        `shouldBe`
+          Right
+            (Loc.Located dummySpan
+              (SExpr.SQuasi
+                (Loc.Located dummySpan
+                  (SExpr.SList
+                    [ Loc.Located dummySpan (SExpr.SAtom "A")
+                    , Loc.Located dummySpan
+                        (SExpr.SUnquote (Loc.Located dummySpan (SExpr.SAtom "X")))
+                    , Loc.Located dummySpan
+                        (SExpr.SSplice (Loc.Located dummySpan (SExpr.SAtom "XS")))
+                    ]))))
 
     it "valToSExpr rejects typed closures" $
       case compileExpr "1" of

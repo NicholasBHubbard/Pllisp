@@ -22,7 +22,7 @@ spec = do
       preludeMacros <- extractConstStrings "pllisp-prelude-macros"
       let actual = S.fromList (specials ++ preludeMacros)
       mapM_ (\name -> S.member name actual `shouldBe` True)
-        [ "eval-when", "fun", "progn", "if_", "when", "unless"
+        [ "eval-when", "syntax-case", "fun", "progn", "if_", "when", "unless"
         , "cond", "if-let", "when-let", "unless-let", "and", "or"
         ]
 
@@ -69,7 +69,7 @@ parseQuotedStrings txt =
 expectedKeywordNames :: S.Set T.Text
 expectedKeywordNames = S.fromList
   [ "lam", "let", "if", "case", "type", "cls", "inst"
-  , "module", "import", "mac", "eval-when", "ffi", "ffi-struct"
+  , "module", "import", "mac", "eval-when", "syntax-case", "ffi", "ffi-struct"
   , "ffi-var", "ffi-enum", "ffi-callback"
   , "fun", "progn", "if_", "when", "unless", "cond"
   , "if-let", "when-let", "unless-let", "and", "or"
@@ -102,11 +102,11 @@ expectedBuiltinNames = S.fromList
   , "syntax-symbol", "syntax-int", "syntax-float", "syntax-string"
   , "syntax-bool", "syntax-usym", "syntax-rx", "syntax-type"
   , "syntax-cons", "syntax-append"
-  , "syntax-car", "syntax-cdr", "syntax-length"
+  , "syntax-car", "syntax-cdr", "syntax-length", "syntax-equal?"
   , "syntax-null?", "syntax-symbol?", "syntax-list?"
   , "syntax-string?", "syntax-number?", "syntax-bool?"
   , "syntax-type?"
   , "syntax-int-value", "syntax-float-value", "syntax-string-value"
   , "syntax-symbol-name", "syntax-usym-name"
-  , "gensym", "error"
+  , "error"
   ]

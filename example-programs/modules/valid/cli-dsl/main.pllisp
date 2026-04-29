@@ -1,0 +1,26 @@
+(import CLI)
+
+(fun list-len ((xs %(List %STR))) %INT
+  (case xs
+    ((Empty) 0)
+    ((Cons _ rest) (add 1 (list-len rest)))))
+
+(let ((spec (cli
+              (flag verbose "-v" "--verbose")
+              (required-option mode "-m" "--mode")
+              (arg input)
+              (rest extras))))
+  (case (CLI.parse spec
+          (Cons "--verbose"
+            (Cons "--mode"
+              (Cons "fast"
+                (Cons "main.pll"
+                  (Cons "a"
+                    (Cons "b" Empty)))))))
+    ((Left err) (print err))
+    ((Right parsed)
+      (progn
+        (print (if (CLI.flag-value parsed :verbose) "true" "false"))
+        (print (CLI.required-option-value parsed :mode))
+        (print (CLI.arg-value parsed :input))
+        (print (int-to-str (list-len (CLI.rest-value parsed :extras))))))))

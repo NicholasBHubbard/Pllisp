@@ -8,7 +8,7 @@
 
 (defconst pllisp-special-forms
   '("lam" "let" "if" "case" "type" "cls" "inst"
-    "module" "import" "mac" "eval-when" "ffi" "ffi-struct"
+    "module" "import" "mac" "eval-when" "syntax-case" "ffi" "ffi-struct"
     "ffi-var" "ffi-enum" "ffi-callback")
   "Special forms and declaration keywords.")
 
@@ -43,13 +43,13 @@
     "syntax-symbol" "syntax-int" "syntax-float" "syntax-string"
     "syntax-bool" "syntax-usym" "syntax-rx" "syntax-type"
     "syntax-cons" "syntax-append"
-    "syntax-car" "syntax-cdr" "syntax-length"
+    "syntax-car" "syntax-cdr" "syntax-length" "syntax-equal?"
     "syntax-null?" "syntax-symbol?" "syntax-list?"
     "syntax-string?" "syntax-number?" "syntax-bool?"
     "syntax-type?"
     "syntax-int-value" "syntax-float-value" "syntax-string-value"
     "syntax-symbol-name" "syntax-usym-name"
-    "gensym" "error")
+    "error")
   "Implicit function-like names from the language and PRELUDE.")
 
 (defconst pllisp-constants

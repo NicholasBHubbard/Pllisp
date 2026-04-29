@@ -5,6 +5,7 @@
 module Pllisp.SExpr where
 
 import Control.Monad (foldM)
+import qualified Control.Monad.State.Strict as State
 import qualified Data.Set as S
 import qualified Data.Text as T
 
@@ -104,15 +105,24 @@ toAtomName (Loc.Located sp _) = Left $ ConvertError sp "expected symbol"
 -- EXPRESSIONS
 
 toCompileExpr :: SExpr -> Either ConvertError CST.Expr
-toCompileExpr sx = compilePrepare sx >>= toExpr
+toCompileExpr sx = State.evalStateT (compilePrepare sx) 0 >>= toExpr
 
-compilePrepare :: SExpr -> Either ConvertError SExpr
+type PrepareM = State.StateT Int (Either ConvertError)
+
+data PatternMatch = PatternMatch
+  { pmCond :: SExpr
+  , pmBinds :: [(T.Text, SExpr)]
+  }
+
+compilePrepare :: SExpr -> PrepareM SExpr
 compilePrepare (Loc.Located sp sexprF) = case sexprF of
   SQuasi inner -> quasiPrepare inner
-  SUnquote _   -> Left $ ConvertError sp "unquote outside quasiquote"
-  SSplice _    -> Left $ ConvertError sp "splice outside quasiquote"
+  SUnquote _   -> throwPrepare sp "unquote outside quasiquote"
+  SSplice _    -> throwPrepare sp "splice outside quasiquote"
   SList [Loc.Located _ (SAtom "QUOTE"), inner] ->
     pure $ datumPrepare inner
+  SList (Loc.Located _ (SAtom "SYNTAX-CASE") : scrutinee : clauses) ->
+    compileSyntaxCase sp scrutinee clauses
   SList xs ->
     Loc.Located sp . SList <$> mapM compilePrepare xs
   _ -> pure (Loc.Located sp sexprF)
@@ -135,11 +145,11 @@ datumPrepare (Loc.Located sp sexprF) = case sexprF of
   where
     consDatum x acc = mkCtCall sp "SYNTAX-CONS" [datumPrepare x, acc]
 
-quasiPrepare :: SExpr -> Either ConvertError SExpr
+quasiPrepare :: SExpr -> PrepareM SExpr
 quasiPrepare sx@(Loc.Located sp sexprF) = case sexprF of
   SUnquote inner -> compileLift sp inner
   SList xs       -> foldM step (Loc.Located sp (SAtom "SYNTAX-EMPTY")) (reverse xs)
-  SSplice _      -> Left $ ConvertError sp "splice outside list in quasiquote"
+  SSplice _      -> throwPrepare sp "splice outside list in quasiquote"
   _              -> pure (datumPrepare sx)
   where
     step acc x = case Loc.locVal x of
@@ -150,13 +160,181 @@ quasiPrepare sx@(Loc.Located sp sexprF) = case sexprF of
         x' <- quasiPrepare x
         pure $ mkCtCall sp "SYNTAX-CONS" [x', acc]
 
-compileLift :: Loc.Span -> SExpr -> Either ConvertError SExpr
+compileLift :: Loc.Span -> SExpr -> PrepareM SExpr
 compileLift sp inner = do
   inner' <- compilePrepare inner
   pure $ mkCtCall sp "SYNTAX-LIFT" [inner']
 
 mkCtCall :: Loc.Span -> T.Text -> [SExpr] -> SExpr
 mkCtCall sp name args = Loc.Located sp (SList (Loc.Located sp (SAtom name) : args))
+
+throwPrepare :: Loc.Span -> String -> PrepareM a
+throwPrepare sp msg = State.lift (Left (ConvertError sp msg))
+
+compileSyntaxCase :: Loc.Span -> SExpr -> [SExpr] -> PrepareM SExpr
+compileSyntaxCase sp scrutinee clauses = do
+  scrutinee' <- compilePrepare scrutinee
+  tmp <- freshPrepareName "__SC"
+  body <- compileSyntaxCaseClauses sp (mkAtom sp tmp) clauses
+  pure $ mkLet sp [(tmp, scrutinee')] body
+
+compileSyntaxCaseClauses :: Loc.Span -> SExpr -> [SExpr] -> PrepareM SExpr
+compileSyntaxCaseClauses sp _ [] =
+  throwPrepare sp "syntax-case requires at least one clause"
+compileSyntaxCaseClauses sp scrutinee [clause] = do
+  (pat, body) <- parseSyntaxCaseClause clause
+  body' <- compilePrepare body
+  match <- liftPattern (compilePattern scrutinee pat)
+  pure $ wrapSyntaxCaseBody sp match body' (mkError sp "syntax-case: no matching pattern")
+compileSyntaxCaseClauses sp scrutinee (clause : rest) = do
+  (pat, body) <- parseSyntaxCaseClause clause
+  body' <- compilePrepare body
+  match <- liftPattern (compilePattern scrutinee pat)
+  elseExpr <- compileSyntaxCaseClauses sp scrutinee rest
+  pure $ wrapSyntaxCaseBody sp match body' elseExpr
+
+parseSyntaxCaseClause :: SExpr -> PrepareM (SExpr, SExpr)
+parseSyntaxCaseClause (Loc.Located _ (SList [pat, body])) =
+  pure (pat, body)
+parseSyntaxCaseClause (Loc.Located sp _) =
+  throwPrepare sp "invalid syntax-case clause: expected (pattern body)"
+
+liftPattern :: Either ConvertError PatternMatch -> PrepareM PatternMatch
+liftPattern = either (State.lift . Left) pure
+
+wrapSyntaxCaseBody :: Loc.Span -> PatternMatch -> SExpr -> SExpr -> SExpr
+wrapSyntaxCaseBody sp match body elseExpr =
+  mkIf sp (pmCond match) (mkLet sp (pmBinds match) body) elseExpr
+
+compilePattern :: SExpr -> SExpr -> Either ConvertError PatternMatch
+compilePattern scrutinee pat@(Loc.Located sp sexprF) = case sexprF of
+  SAtom "_" ->
+    pure $ PatternMatch (mkBool sp True) []
+  SAtom "TRUE" ->
+    literalPattern scrutinee pat
+  SAtom "FALSE" ->
+    literalPattern scrutinee pat
+  SAtom name -> do
+    checkReservedName "pattern variable" sp name
+    pure $ PatternMatch (mkBool sp True) [(name, scrutinee)]
+  SInt _ ->
+    literalPattern scrutinee pat
+  SFlt _ ->
+    literalPattern scrutinee pat
+  SStr _ ->
+    literalPattern scrutinee pat
+  SRx _ _ ->
+    literalPattern scrutinee pat
+  SUSym _ ->
+    literalPattern scrutinee pat
+  SType _ ->
+    literalPattern scrutinee pat
+  SList [Loc.Located _ (SAtom "QUOTE"), inner] ->
+    pure $ PatternMatch (mkSyntaxEq sp scrutinee (datumPrepare inner)) []
+  SList items ->
+    compileListPattern sp scrutinee items
+  SQuasi _ ->
+    Left $ ConvertError sp "quasiquote is not valid in syntax-case patterns"
+  SUnquote _ ->
+    Left $ ConvertError sp "unquote is not valid in syntax-case patterns"
+  SSplice _ ->
+    Left $ ConvertError sp "splice is not valid in syntax-case patterns"
+
+literalPattern :: SExpr -> SExpr -> Either ConvertError PatternMatch
+literalPattern scrutinee pat =
+  pure $ PatternMatch (mkSyntaxEq (Loc.locSpan pat) scrutinee (datumPrepare pat)) []
+
+compileListPattern :: Loc.Span -> SExpr -> [SExpr] -> Either ConvertError PatternMatch
+compileListPattern sp scrutinee items = do
+  (prefix, mRest) <- splitRestPattern sp items
+  let baseConds = [mkCtCall sp "SYNTAX-LIST?" [scrutinee]]
+  (conds, binds, tailExpr) <- compileListPatternPrefix scrutinee prefix
+  restMatch <- case mRest of
+    Nothing -> pure $ PatternMatch (mkCtCall sp "SYNTAX-NULL?" [tailExpr]) []
+    Just restPat -> compilePattern tailExpr restPat
+  let allConds = baseConds ++ conds ++ [pmCond restMatch]
+      allBinds = binds ++ pmBinds restMatch
+  checkDuplicatePatternBindings sp (map fst allBinds)
+  pure $ PatternMatch (mkAnd sp allConds) allBinds
+
+splitRestPattern :: Loc.Span -> [SExpr] -> Either ConvertError ([SExpr], Maybe SExpr)
+splitRestPattern sp = go []
+  where
+    go acc [] = Right (reverse acc, Nothing)
+    go acc (Loc.Located _ (SAtom "&REST") : rest) =
+      case rest of
+        [restPat] -> Right (reverse acc, Just restPat)
+        [] -> Left $ ConvertError sp "&rest in syntax-case pattern must be followed by a pattern"
+        _ -> Left $ ConvertError sp "&rest in syntax-case pattern must appear at the end"
+    go acc (sx : rest) = go (sx : acc) rest
+
+compileListPatternPrefix :: SExpr -> [SExpr] -> Either ConvertError ([SExpr], [(T.Text, SExpr)], SExpr)
+compileListPatternPrefix scrutinee = go scrutinee [] []
+  where
+    go tailExpr conds binds [] =
+      Right (reverse conds, reverse binds, tailExpr)
+    go tailExpr conds binds (pat : rest) = do
+      let notNull = mkIf sp (mkCtCall sp "SYNTAX-NULL?" [tailExpr]) (mkBool sp False) (mkBool sp True)
+          headExpr = mkCtCall sp "SYNTAX-CAR" [tailExpr]
+          nextTail = mkCtCall sp "SYNTAX-CDR" [tailExpr]
+      sub <- compilePattern headExpr pat
+      go nextTail (pmCond sub : notNull : conds) (reverse (pmBinds sub) ++ binds) rest
+      where
+        sp = Loc.locSpan pat
+
+checkDuplicatePatternBindings :: Loc.Span -> [T.Text] -> Either ConvertError ()
+checkDuplicatePatternBindings sp = go S.empty
+  where
+    go _ [] = Right ()
+    go seen (name : rest)
+      | name == "_" = go seen rest
+      | S.member name seen =
+          Left $ ConvertError sp ("duplicate syntax-case binding: " ++ T.unpack name)
+      | otherwise =
+          go (S.insert name seen) rest
+
+freshPrepareName :: T.Text -> PrepareM T.Text
+freshPrepareName prefix = do
+  n <- State.get
+  State.put (n + 1)
+  pure (prefix <> T.pack (show n))
+
+mkAtom :: Loc.Span -> T.Text -> SExpr
+mkAtom sp name = Loc.Located sp (SAtom name)
+
+mkBool :: Loc.Span -> Bool -> SExpr
+mkBool sp True = mkAtom sp "TRUE"
+mkBool sp False = mkAtom sp "FALSE"
+
+mkIf :: Loc.Span -> SExpr -> SExpr -> SExpr -> SExpr
+mkIf sp cond thenExpr elseExpr =
+  Loc.Located sp (SList [mkAtom sp "IF", cond, thenExpr, elseExpr])
+
+mkLet :: Loc.Span -> [(T.Text, SExpr)] -> SExpr -> SExpr
+mkLet _ [] body = body
+mkLet sp binds body =
+  Loc.Located sp
+    (SList
+      [ mkAtom sp "LET"
+      , Loc.Located sp (SList (map mkBind binds))
+      , body
+      ])
+  where
+    mkBind (name, val) = Loc.Located sp (SList [mkAtom sp name, val])
+
+mkEq :: Loc.Span -> SExpr -> SExpr -> SExpr
+mkEq sp a b = mkCtCall sp "EQ" [a, b]
+
+mkSyntaxEq :: Loc.Span -> SExpr -> SExpr -> SExpr
+mkSyntaxEq sp a b = mkCtCall sp "SYNTAX-EQUAL?" [a, b]
+
+mkAnd :: Loc.Span -> [SExpr] -> SExpr
+mkAnd sp [] = mkBool sp True
+mkAnd _ [expr] = expr
+mkAnd sp (expr : rest) = mkIf sp expr (mkAnd sp rest) (mkBool sp False)
+
+mkError :: Loc.Span -> T.Text -> SExpr
+mkError sp msg = mkCtCall sp "ERROR" [Loc.Located sp (SStr msg)]
 
 toExpr :: SExpr -> Either ConvertError CST.Expr
 toExpr (Loc.Located sp sexprF) = case sexprF of

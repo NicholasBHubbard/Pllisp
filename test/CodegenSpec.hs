@@ -777,6 +777,70 @@ spec = do
       run "(print (int-to-str (if (str-contains \"hello\" \"hello\") 1 0)))"
         >>= (`shouldBe` "1")
 
+  describe "CLI stdlib module" $ do
+    it "parses flags, options, required options, args, and rest arguments" $
+      runWithCLIArgs []
+        (T.unlines
+          [ "(import CLI)"
+          , "(fun list-len ((xs %(List %STR))) %INT"
+          , "  (case xs"
+          , "    ((Empty) 0)"
+          , "    ((Cons _ rest) (add 1 (list-len rest)))))"
+          , "(let ((spec (cli"
+          , "              (flag verbose \"-v\" \"--verbose\")"
+          , "              (option output \"-o\" \"--output\")"
+          , "              (required-option mode \"-m\" \"--mode\")"
+          , "              (arg input)"
+          , "              (rest extras))))"
+          , "  (case (CLI.parse spec"
+          , "          (Cons \"--verbose\""
+          , "            (Cons \"-o\""
+          , "              (Cons \"build/out.txt\""
+          , "                (Cons \"--mode\""
+          , "                  (Cons \"fast\""
+          , "                    (Cons \"input.pll\""
+          , "                      (Cons \"extra-1\""
+          , "                        (Cons \"extra-2\" Empty)))))))))"
+          , "    ((Left err) (print err))"
+          , "    ((Right parsed)"
+          , "      (progn"
+          , "        (print (if (CLI.flag-value parsed :verbose) \"true\" \"false\"))"
+          , "        (case (CLI.option-value parsed :output)"
+          , "          ((Just out) (print out))"
+          , "          (_ (print \"missing\")))"
+          , "        (print (CLI.required-option-value parsed :mode))"
+          , "        (print (CLI.arg-value parsed :input))"
+          , "        (print (int-to-str (list-len (CLI.rest-value parsed :extras))))))))"
+          ])
+        >>= (`shouldBe` "true\nbuild/out.txt\nfast\ninput.pll\n2")
+
+    it "parses argv from the real process command line" $
+      runWithCLIArgs ["--mode", "fast", "main.pll"]
+        (T.unlines
+          [ "(import CLI)"
+          , "(let ((spec (cli"
+          , "              (required-option mode \"-m\" \"--mode\")"
+          , "              (arg input))))"
+          , "  (case (CLI.parse-argv spec unit)"
+          , "    ((Left err) (print err))"
+          , "    ((Right parsed)"
+          , "      (progn"
+          , "        (print (CLI.required-option-value parsed :mode))"
+          , "        (print (CLI.arg-value parsed :input))))))"
+          ])
+        >>= (`shouldBe` "fast\nmain.pll")
+
+    it "reports unknown options as parse errors" $
+      runWithCLIArgs ["--bogus"]
+        (T.unlines
+          [ "(import CLI)"
+          , "(let ((spec (cli (flag verbose \"-v\" \"--verbose\"))))"
+          , "  (case (CLI.parse-argv spec unit)"
+          , "    ((Left err) (print err))"
+          , "    ((Right _) (print \"unexpected\"))))"
+          ])
+        >>= (`shouldBe` "unknown option: --bogus")
+
   describe "built-in List type" $ do
     it "constructs Empty" $
       run "(case Empty ((Empty) (print \"empty\")))" >>= (`shouldBe` "empty")
@@ -1252,6 +1316,22 @@ spec = do
         [ "(mac first-of ((a b)) `,a)"
         , "(print (int-to-str (first-of (42 99))))"
         ]) >>= (`shouldBe` "42")
+
+    it "macro-introduced let bindings do not capture caller identifiers" $ do
+      run (T.unlines
+        [ "(mac with-temp (val body)"
+        , "  `(let ((tmp ,val)) ,body))"
+        , "(let ((tmp 99))"
+        , "  (print (int-to-str (with-temp 1 tmp))))"
+        ]) >>= (`shouldBe` "99")
+
+    it "macro-introduced references stay linked to their own bindings" $ do
+      run (T.unlines
+        [ "(mac return-temp (val)"
+        , "  `(let ((tmp ,val)) tmp))"
+        , "(let ((tmp 99))"
+        , "  (print (int-to-str (return-temp 1))))"
+        ]) >>= (`shouldBe` "1")
 
   describe "if-let / when-let / unless-let" $ do
     it "if-let on truthy Maybe" $ do
@@ -2376,6 +2456,23 @@ runWithModules modules mainSrc = do
     ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
     ExitSuccess -> do
       (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" [] ""
+      case ec2 of
+        ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
+        ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
+
+runWithCLIArgs :: [String] -> T.Text -> IO String
+runWithCLIArgs extraArgs mainSrc = do
+  cliSrc <- T.IO.readFile "stdlib/CLI.pll"
+  ir <- multiModulePipeline [("CLI", cliSrc)] mainSrc
+  T.IO.writeFile "/tmp/pllisp_test.ll" ir
+  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
+  (ec1, _, err1) <- readProcessWithExitCode
+    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
+             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+  case ec1 of
+    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
+    ExitSuccess -> do
+      (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" extraArgs ""
       case ec2 of
         ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
         ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)

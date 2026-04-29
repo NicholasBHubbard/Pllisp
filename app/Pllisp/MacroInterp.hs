@@ -3,19 +3,23 @@
 -- MODULE
 
 module Pllisp.MacroInterp
-  ( MVal(..)
+  ( SyntaxVal(..)
+  , MVal(..)
   , Env
   , InterpM
   , evalTyped
   , runInterpM
+  , runInterpMWithMark
   , defaultEnv
   , loadTypedTopLevelBindings
   , loadTypedTopLevelForms
   , sexprToVal
   , valToSExpr
+  , valToSExprHygienic
   ) where
 
 import qualified Pllisp.CST    as CST
+import Control.Monad (foldM)
 import qualified Data.Map.Strict as M
 import qualified Data.Text       as T
 
@@ -30,6 +34,18 @@ import Text.Regex.TDFA ((=~))
 
 -- CORE TYPES
 
+data SyntaxVal
+  = SyAtom T.Text
+  | SyStr T.Text
+  | SyInt Integer
+  | SyFlt Double
+  | SyList [SyntaxVal]
+  | SyBool Bool
+  | SyRx T.Text T.Text
+  | SyUSym T.Text
+  | SyType SyntaxVal
+  deriving (Eq, Show)
+
 data MVal
   = MAtom T.Text
   | MStr T.Text
@@ -40,9 +56,7 @@ data MVal
   | MRx T.Text T.Text
   | MUSym T.Text
   | MType MVal
-  | MQuasi MVal
-  | MUnquote MVal
-  | MSplice MVal
+  | MSyntax SyntaxVal
   | MRef Int
   | MData T.Text [MVal]
   | MCtor T.Text Int [MVal]
@@ -60,9 +74,7 @@ instance Show MVal where
   show (MRx p f)   = "MRx " ++ show p ++ " " ++ show f
   show (MUSym t)   = "MUSym " ++ show t
   show (MType v)   = "MType " ++ show v
-  show (MQuasi v)  = "MQuasi " ++ show v
-  show (MUnquote v) = "MUnquote " ++ show v
-  show (MSplice v) = "MSplice " ++ show v
+  show (MSyntax v) = "MSyntax " ++ show v
   show (MRef n) = "MRef " ++ show n
   show (MData n xs) = "MData " ++ show n ++ " " ++ show xs
   show (MCtor n _ xs) = "MCtor " ++ show n ++ " " ++ show xs
@@ -80,9 +92,7 @@ instance Eq MVal where
   MRx a b   == MRx c d   = a == c && b == d
   MUSym a   == MUSym b   = a == b
   MType a   == MType b   = a == b
-  MQuasi a  == MQuasi b  = a == b
-  MUnquote a == MUnquote b = a == b
-  MSplice a == MSplice b = a == b
+  MSyntax a == MSyntax b = syntaxEq a b
   MRef a    == MRef b    = a == b
   MData n xs == MData m ys = n == m && xs == ys
   _         == _         = False
@@ -90,9 +100,9 @@ instance Eq MVal where
 type Env = M.Map T.Text MVal
 
 data InterpState = InterpState
-  { isGensym :: Int
-  , isNextRef :: Int
+  { isNextRef :: Int
   , isRefs :: M.Map Int MVal
+  , isCurrentIntro :: Maybe Int
   }
 
 type InterpM = State.StateT InterpState (Either String)
@@ -101,25 +111,32 @@ throwError :: String -> InterpM a
 throwError = State.StateT . const . Left
 
 runInterpM :: InterpM a -> Either String a
-runInterpM m = State.evalStateT m (InterpState 0 0 M.empty)
+runInterpM m = State.evalStateT m (InterpState 0 M.empty Nothing)
+
+runInterpMWithMark :: Int -> InterpM a -> Either String a
+runInterpMWithMark mark m =
+  State.evalStateT m (InterpState 0 M.empty (Just mark))
 
 -- CONVERSION: SExpr <-> MVal
 
 sexprToVal :: SExpr.SExpr -> MVal
-sexprToVal (Loc.Located _ sf) = case sf of
-  SExpr.SAtom "TRUE"  -> MBool True
-  SExpr.SAtom "FALSE" -> MBool False
-  SExpr.SAtom t       -> MAtom t
-  SExpr.SStr t        -> MStr t
-  SExpr.SInt n        -> MInt n
-  SExpr.SFlt f        -> MFlt f
-  SExpr.SRx p f       -> MRx p f
-  SExpr.SUSym t       -> MUSym t
-  SExpr.SList xs      -> MList (map sexprToVal xs)
-  SExpr.SType inner   -> MType (sexprToVal inner)
-  SExpr.SQuasi inner  -> MQuasi (sexprToVal inner)
-  SExpr.SUnquote inner -> MUnquote (sexprToVal inner)
-  SExpr.SSplice inner -> MSplice (sexprToVal inner)
+sexprToVal = MSyntax . sexprToSyntax
+
+sexprToSyntax :: SExpr.SExpr -> SyntaxVal
+sexprToSyntax (Loc.Located _ sf) = case sf of
+  SExpr.SAtom "TRUE"  -> SyBool True
+  SExpr.SAtom "FALSE" -> SyBool False
+  SExpr.SAtom t       -> SyAtom t
+  SExpr.SStr t        -> SyStr t
+  SExpr.SInt n        -> SyInt n
+  SExpr.SFlt f        -> SyFlt f
+  SExpr.SRx p f       -> SyRx p f
+  SExpr.SUSym t       -> SyUSym t
+  SExpr.SList xs      -> SyList (map sexprToSyntax xs)
+  SExpr.SType inner   -> SyType (sexprToSyntax inner)
+  SExpr.SQuasi inner  -> SyList [SyAtom "%QUASI", sexprToSyntax inner]
+  SExpr.SUnquote inner -> SyList [SyAtom "%UNQUOTE", sexprToSyntax inner]
+  SExpr.SSplice inner -> SyList [SyAtom "%SPLICE", sexprToSyntax inner]
 
 valToSExpr :: MVal -> Either String SExpr.SExpr
 valToSExpr val = case val of
@@ -137,21 +154,48 @@ valToSExpr val = case val of
   MType inner -> do
     inner' <- valToSExpr inner
     Right $ loc $ SExpr.SType inner'
-  MQuasi inner -> do
-    inner' <- valToSExpr inner
-    Right $ loc $ SExpr.SQuasi inner'
-  MUnquote inner -> do
-    inner' <- valToSExpr inner
-    Right $ loc $ SExpr.SUnquote inner'
-  MSplice inner -> do
-    inner' <- valToSExpr inner
-    Right $ loc $ SExpr.SSplice inner'
+  MSyntax stx ->
+    syntaxToSExpr stx
   MRef {} -> Left "cannot convert ref to syntax"
   MData {} -> Left "cannot convert data value to syntax"
   MCtor {} -> Left "cannot convert constructor to syntax"
   MUnavailable _ msg -> Left msg
   MTypedClosure {} -> Left "cannot convert typed closure to syntax"
   MBuiltin {} -> Left "cannot convert builtin to syntax"
+  where
+    loc = Loc.Located dummySpan
+
+valToSExprHygienic :: MVal -> Either String SExpr.SExpr
+valToSExprHygienic (MSyntax stx) =
+  syntaxToSExpr (hygienizeSyntax stx)
+valToSExprHygienic other =
+  valToSExpr other
+
+syntaxToSExpr :: SyntaxVal -> Either String SExpr.SExpr
+syntaxToSExpr stx = case stx of
+  SyAtom t -> Right $ loc $ SExpr.SAtom t
+  SyStr t -> Right $ loc $ SExpr.SStr t
+  SyInt n -> Right $ loc $ SExpr.SInt n
+  SyFlt f -> Right $ loc $ SExpr.SFlt f
+  SyBool True -> Right $ loc $ SExpr.SAtom "TRUE"
+  SyBool False -> Right $ loc $ SExpr.SAtom "FALSE"
+  SyRx p f -> Right $ loc $ SExpr.SRx p f
+  SyUSym t -> Right $ loc $ SExpr.SUSym t
+  SyType inner -> do
+    inner' <- syntaxToSExpr inner
+    Right $ loc $ SExpr.SType inner'
+  SyList [SyAtom "%QUASI", inner] -> do
+    inner' <- syntaxToSExpr inner
+    Right $ loc $ SExpr.SQuasi inner'
+  SyList [SyAtom "%UNQUOTE", inner] -> do
+    inner' <- syntaxToSExpr inner
+    Right $ loc $ SExpr.SUnquote inner'
+  SyList [SyAtom "%SPLICE", inner] -> do
+    inner' <- syntaxToSExpr inner
+    Right $ loc $ SExpr.SSplice inner'
+  SyList xs -> do
+    xs' <- mapM syntaxToSExpr xs
+    Right $ loc $ SExpr.SList xs'
   where
     loc = Loc.Located dummySpan
 
@@ -364,6 +408,7 @@ truthy :: MVal -> Bool
 truthy (MBool b)   = b
 truthy (MList [])  = False
 truthy (MList _)   = True
+truthy (MSyntax (SyList [])) = False
 truthy (MInt 0)    = False
 truthy (MInt _)    = True
 truthy (MStr "")   = False
@@ -377,11 +422,12 @@ defaultEnv = primitiveEnv
 
 primitiveEnv :: Env
 primitiveEnv = M.fromList
-  [ ("SYNTAX-EMPTY",    MList [])
+  [ ("SYNTAX-EMPTY",    MSyntax (SyList []))
   , ("SYNTAX-LIFT",     MBuiltin "SYNTAX-LIFT" bSyntaxLift)
   , ("SYNTAX-CAR",      MBuiltin "SYNTAX-CAR" bCar)
   , ("SYNTAX-CDR",      MBuiltin "SYNTAX-CDR" bCdr)
   , ("SYNTAX-LENGTH",   MBuiltin "SYNTAX-LENGTH" bLength)
+  , ("SYNTAX-EQUAL?",   MBuiltin "SYNTAX-EQUAL?" bSyntaxEqual)
   , ("SYNTAX-NULL?",    MBuiltin "SYNTAX-NULL?" bNullQ)
   , ("SYNTAX-SYMBOL?",  MBuiltin "SYNTAX-SYMBOL?" bSymbolQ)
   , ("SYNTAX-LIST?",    MBuiltin "SYNTAX-LIST?" bListQ)
@@ -392,7 +438,6 @@ primitiveEnv = M.fromList
   , ("EQ",              MBuiltin "EQ" bEq)
   , ("NOT",             MBuiltin "NOT" bNot)
   , ("CONCAT",          MBuiltin "CONCAT" bConcat)
-  , ("GENSYM",          MBuiltin "GENSYM" bGensym)
   , ("ERROR",           MBuiltin "ERROR" bError)
   , ("ADD",             MBuiltin "ADD" bAdd)
   , ("SUB",             MBuiltin "SUB" bSub)
@@ -445,62 +490,67 @@ primitiveEnv = M.fromList
 -- SYNTAX HELPERS: LIST OPERATIONS
 
 bCar :: [MVal] -> InterpM MVal
-bCar [MList (x:_)] = pure x
-bCar [MList []]     = throwError "syntax-car: empty list"
-bCar [_]            = throwError "syntax-car: not a list"
+bCar [MSyntax (SyList (x:_))] = pure (MSyntax x)
+bCar [MSyntax (SyList [])] = throwError "syntax-car: empty list"
+bCar [_] = throwError "syntax-car: not a list"
 bCar args           = throwError $ "syntax-car: expected 1 argument, got " ++ show (length args)
 
 bCdr :: [MVal] -> InterpM MVal
-bCdr [MList (_:xs)] = pure $ MList xs
-bCdr [MList []]      = throwError "syntax-cdr: empty list"
-bCdr [_]             = throwError "syntax-cdr: not a list"
+bCdr [MSyntax (SyList (_:xs))] = pure $ MSyntax (SyList xs)
+bCdr [MSyntax (SyList [])] = throwError "syntax-cdr: empty list"
+bCdr [_] = throwError "syntax-cdr: not a list"
 bCdr args            = throwError $ "syntax-cdr: expected 1 argument, got " ++ show (length args)
 
 bCons :: [MVal] -> InterpM MVal
-bCons [x, MList xs] = pure $ MList (x : xs)
+bCons [MSyntax x, MSyntax (SyList xs)] = pure $ MSyntax (SyList (x : xs))
 bCons [_, _]         = throwError "syntax-cons: second argument must be a list"
 bCons args           = throwError $ "syntax-cons: expected 2 arguments, got " ++ show (length args)
 
 bLength :: [MVal] -> InterpM MVal
-bLength [MList xs] = pure $ MInt (fromIntegral (length xs))
+bLength [MSyntax (SyList xs)] = pure $ MInt (fromIntegral (length xs))
 bLength [_]         = throwError "syntax-length: not a list"
 bLength args        = throwError $ "syntax-length: expected 1 argument, got " ++ show (length args)
+
+bSyntaxEqual :: [MVal] -> InterpM MVal
+bSyntaxEqual [MSyntax a, MSyntax b] = pure $ MBool (syntaxEq a b)
+bSyntaxEqual [_, _] = throwError "syntax-equal?: expected syntax arguments"
+bSyntaxEqual args   = throwError $ "syntax-equal?: expected 2 arguments, got " ++ show (length args)
 
 -- SYNTAX HELPERS: PREDICATES
 
 bNullQ :: [MVal] -> InterpM MVal
-bNullQ [MList []] = pure $ MBool True
+bNullQ [MSyntax (SyList [])] = pure $ MBool True
 bNullQ [_]         = pure $ MBool False
 bNullQ args        = throwError $ "syntax-null?: expected 1 argument, got " ++ show (length args)
 
 bSymbolQ :: [MVal] -> InterpM MVal
-bSymbolQ [MAtom _] = pure $ MBool True
+bSymbolQ [MSyntax (SyAtom _)] = pure $ MBool True
 bSymbolQ [_]        = pure $ MBool False
 bSymbolQ args       = throwError $ "syntax-symbol?: expected 1 argument, got " ++ show (length args)
 
 bListQ :: [MVal] -> InterpM MVal
-bListQ [MList _] = pure $ MBool True
+bListQ [MSyntax (SyList _)] = pure $ MBool True
 bListQ [_]        = pure $ MBool False
 bListQ args       = throwError $ "syntax-list?: expected 1 argument, got " ++ show (length args)
 
 bStringQ :: [MVal] -> InterpM MVal
-bStringQ [MStr _] = pure $ MBool True
+bStringQ [MSyntax (SyStr _)] = pure $ MBool True
 bStringQ [_]       = pure $ MBool False
 bStringQ args      = throwError $ "syntax-string?: expected 1 argument, got " ++ show (length args)
 
 bNumberQ :: [MVal] -> InterpM MVal
-bNumberQ [MInt _] = pure $ MBool True
-bNumberQ [MFlt _] = pure $ MBool True
+bNumberQ [MSyntax (SyInt _)] = pure $ MBool True
+bNumberQ [MSyntax (SyFlt _)] = pure $ MBool True
 bNumberQ [_]       = pure $ MBool False
 bNumberQ args      = throwError $ "syntax-number?: expected 1 argument, got " ++ show (length args)
 
 bBoolQ :: [MVal] -> InterpM MVal
-bBoolQ [MBool _] = pure $ MBool True
+bBoolQ [MSyntax (SyBool _)] = pure $ MBool True
 bBoolQ [_]        = pure $ MBool False
 bBoolQ args       = throwError $ "syntax-bool?: expected 1 argument, got " ++ show (length args)
 
 bTypeQ :: [MVal] -> InterpM MVal
-bTypeQ [MType _] = pure $ MBool True
+bTypeQ [MSyntax (SyType _)] = pure $ MBool True
 bTypeQ [_]        = pure $ MBool False
 bTypeQ args       = throwError $ "syntax-type?: expected 1 argument, got " ++ show (length args)
 
@@ -519,9 +569,7 @@ valEq (MBool a)  (MBool b)  = a == b
 valEq (MUSym a)  (MUSym b)  = a == b
 valEq (MList a)  (MList b)  = length a == length b && all (uncurry valEq) (zip a b)
 valEq (MType a)  (MType b)  = valEq a b
-valEq (MQuasi a) (MQuasi b) = valEq a b
-valEq (MUnquote a) (MUnquote b) = valEq a b
-valEq (MSplice a) (MSplice b) = valEq a b
+valEq (MSyntax a) (MSyntax b) = syntaxEq a b
 valEq (MData n xs) (MData m ys) = n == m && length xs == length ys && all (uncurry valEq) (zip xs ys)
 valEq _          _          = False
 
@@ -538,12 +586,12 @@ bConcat [_, _]            = throwError "concat: arguments must be strings"
 bConcat args              = throwError $ "concat: expected 2 arguments, got " ++ show (length args)
 
 bSymToStr :: [MVal] -> InterpM MVal
-bSymToStr [MAtom t] = pure $ MStr t
+bSymToStr [MSyntax (SyAtom t)] = pure $ MStr (stripIntroName t)
 bSymToStr [_]        = throwError "syntax-symbol-name: not symbol syntax"
 bSymToStr args       = throwError $ "syntax-symbol-name: expected 1 argument, got " ++ show (length args)
 
 bUSymToStr :: [MVal] -> InterpM MVal
-bUSymToStr [MUSym t] = pure $ MStr t
+bUSymToStr [MSyntax (SyUSym t)] = pure $ MStr t
 bUSymToStr [_]       = throwError "syntax-usym-name: not usym syntax"
 bUSymToStr args      = throwError $ "syntax-usym-name: expected 1 argument, got " ++ show (length args)
 
@@ -728,89 +776,69 @@ bRxCaptures args = throwError $ "rx-captures: expected 2 arguments, got " ++ sho
 -- SYNTAX HELPERS
 
 bSyntaxLift :: [MVal] -> InterpM MVal
-bSyntaxLift [MAtom t]    = pure (MAtom t)
-bSyntaxLift [MStr t]     = pure (MStr t)
-bSyntaxLift [MInt n]     = pure (MInt n)
-bSyntaxLift [MFlt f]     = pure (MFlt f)
-bSyntaxLift [MList xs]   = pure (MList xs)
-bSyntaxLift [MBool b]    = pure (MBool b)
-bSyntaxLift [MRx p f]    = pure (MRx p f)
-bSyntaxLift [MUSym t]    = pure (MUSym t)
-bSyntaxLift [MType v]    = pure (MType v)
-bSyntaxLift [MQuasi v]   = pure (MQuasi v)
-bSyntaxLift [MUnquote v] = pure (MUnquote v)
-bSyntaxLift [MSplice v]  = pure (MSplice v)
-bSyntaxLift [v]          = throwError $ "cannot lift value into syntax: " ++ showBrief v
+bSyntaxLift [MSyntax stx] = pure (MSyntax stx)
+bSyntaxLift [v] = MSyntax <$> liftToSyntax v
 bSyntaxLift args         = throwError $ "syntax-lift: expected 1 argument, got " ++ show (length args)
 
 bSyntaxSymbol :: [MVal] -> InterpM MVal
-bSyntaxSymbol [MStr t] = pure $ MAtom t
+bSyntaxSymbol [MStr t] = MSyntax . SyAtom <$> markIntroName t
 bSyntaxSymbol [_]      = throwError "syntax-symbol: expected a string"
 bSyntaxSymbol args     = throwError $ "syntax-symbol: expected 1 argument, got " ++ show (length args)
 
 bSyntaxInt :: [MVal] -> InterpM MVal
-bSyntaxInt [MInt n] = pure $ MInt n
+bSyntaxInt [MInt n] = pure $ MSyntax (SyInt n)
 bSyntaxInt [_]      = throwError "syntax-int: expected an integer"
 bSyntaxInt args     = throwError $ "syntax-int: expected 1 argument, got " ++ show (length args)
 
 bSyntaxFloat :: [MVal] -> InterpM MVal
-bSyntaxFloat [MFlt f] = pure $ MFlt f
+bSyntaxFloat [MFlt f] = pure $ MSyntax (SyFlt f)
 bSyntaxFloat [_]      = throwError "syntax-float: expected a float"
 bSyntaxFloat args     = throwError $ "syntax-float: expected 1 argument, got " ++ show (length args)
 
 bSyntaxString :: [MVal] -> InterpM MVal
-bSyntaxString [MStr t] = pure $ MStr t
+bSyntaxString [MStr t] = pure $ MSyntax (SyStr t)
 bSyntaxString [_]      = throwError "syntax-string: expected a string"
 bSyntaxString args     = throwError $ "syntax-string: expected 1 argument, got " ++ show (length args)
 
 bSyntaxBool :: [MVal] -> InterpM MVal
-bSyntaxBool [MBool b] = pure $ MBool b
+bSyntaxBool [MBool b] = pure $ MSyntax (SyBool b)
 bSyntaxBool [_]       = throwError "syntax-bool: expected a bool"
 bSyntaxBool args      = throwError $ "syntax-bool: expected 1 argument, got " ++ show (length args)
 
 bSyntaxUSym :: [MVal] -> InterpM MVal
-bSyntaxUSym [MStr t] = pure $ MUSym t
+bSyntaxUSym [MStr t] = pure $ MSyntax (SyUSym t)
 bSyntaxUSym [_]      = throwError "syntax-usym: expected a string"
 bSyntaxUSym args     = throwError $ "syntax-usym: expected 1 argument, got " ++ show (length args)
 
 bSyntaxRx :: [MVal] -> InterpM MVal
-bSyntaxRx [MStr p, MStr f] = pure $ MRx p f
+bSyntaxRx [MStr p, MStr f] = pure $ MSyntax (SyRx p f)
 bSyntaxRx [_, _]           = throwError "syntax-rx: expected (string string)"
 bSyntaxRx args             = throwError $ "syntax-rx: expected 2 arguments, got " ++ show (length args)
 
 bSyntaxType :: [MVal] -> InterpM MVal
-bSyntaxType [v] = pure $ MType v
+bSyntaxType [MSyntax v] = pure $ MSyntax (SyType v)
+bSyntaxType [_] = throwError "syntax-type: expected syntax"
 bSyntaxType args = throwError $ "syntax-type: expected 1 argument, got " ++ show (length args)
 
 bSyntaxAppend :: [MVal] -> InterpM MVal
-bSyntaxAppend [MList xs, MList ys] = pure $ MList (xs ++ ys)
+bSyntaxAppend [MSyntax (SyList xs), MSyntax (SyList ys)] = pure $ MSyntax (SyList (xs ++ ys))
 bSyntaxAppend [_, _]               = throwError "syntax-append: arguments must be lists"
 bSyntaxAppend args                 = throwError $ "syntax-append: expected 2 arguments, got " ++ show (length args)
 
 bSyntaxIntValue :: [MVal] -> InterpM MVal
-bSyntaxIntValue [MInt n] = pure $ MInt n
+bSyntaxIntValue [MSyntax (SyInt n)] = pure $ MInt n
 bSyntaxIntValue [_]      = throwError "syntax-int-value: expected integer syntax"
 bSyntaxIntValue args     = throwError $ "syntax-int-value: expected 1 argument, got " ++ show (length args)
 
 bSyntaxFltValue :: [MVal] -> InterpM MVal
-bSyntaxFltValue [MFlt f] = pure $ MFlt f
+bSyntaxFltValue [MSyntax (SyFlt f)] = pure $ MFlt f
 bSyntaxFltValue [_]      = throwError "syntax-float-value: expected float syntax"
 bSyntaxFltValue args     = throwError $ "syntax-float-value: expected 1 argument, got " ++ show (length args)
 
 bSyntaxStrValue :: [MVal] -> InterpM MVal
-bSyntaxStrValue [MStr t] = pure $ MStr t
+bSyntaxStrValue [MSyntax (SyStr t)] = pure $ MStr t
 bSyntaxStrValue [_]      = throwError "syntax-string-value: expected string syntax"
 bSyntaxStrValue args     = throwError $ "syntax-string-value: expected 1 argument, got " ++ show (length args)
-
--- BUILTINS: GENSYM
-
-bGensym :: [MVal] -> InterpM MVal
-bGensym [] = do
-  st <- State.get
-  let n = isGensym st
-  State.put st { isGensym = n + 1 }
-  pure $ MAtom (T.pack ("__G" ++ show n))
-bGensym args = throwError $ "gensym: expected 0 arguments, got " ++ show (length args)
 
 -- BUILTINS: ERROR
 
@@ -820,6 +848,202 @@ bError [val]      = throwError $ "macro error: " ++ showBrief val
 bError args       = throwError $ "error: expected 1 argument, got " ++ show (length args)
 
 -- HELPERS
+
+liftToSyntax :: MVal -> InterpM SyntaxVal
+liftToSyntax val = case val of
+  MAtom t -> SyAtom <$> markIntroName t
+  MStr t -> pure (SyStr t)
+  MInt n -> pure (SyInt n)
+  MFlt f -> pure (SyFlt f)
+  MList xs -> SyList <$> mapM liftToSyntax xs
+  MBool b -> pure (SyBool b)
+  MRx p f -> pure (SyRx p f)
+  MUSym t -> pure (SyUSym t)
+  MType inner -> SyType <$> liftToSyntax inner
+  MSyntax stx -> pure stx
+  _ -> throwError $ "cannot lift value into syntax: " ++ showBrief val
+
+introPrefix :: T.Text
+introPrefix = "__HY"
+
+markIntroName :: T.Text -> InterpM T.Text
+markIntroName name = do
+  m <- isCurrentIntro <$> State.get
+  pure $ case m of
+    Just mark -> introPrefix <> T.pack (show mark) <> "_" <> name
+    Nothing -> name
+
+stripIntroName :: T.Text -> T.Text
+stripIntroName name =
+  case T.stripPrefix introPrefix name of
+    Nothing -> name
+    Just rest ->
+      case T.breakOn "_" rest of
+        (digits, suffix)
+          | not (T.null digits)
+          , T.all (\c -> c >= '0' && c <= '9') digits
+          , Just bare <- T.stripPrefix "_" suffix ->
+              bare
+        _ -> name
+
+isIntroName :: T.Text -> Bool
+isIntroName name = stripIntroName name /= name
+
+syntaxEq :: SyntaxVal -> SyntaxVal -> Bool
+syntaxEq a b = case (a, b) of
+  (SyAtom x, SyAtom y) -> stripIntroName x == stripIntroName y
+  (SyStr x, SyStr y) -> x == y
+  (SyInt x, SyInt y) -> x == y
+  (SyFlt x, SyFlt y) -> x == y
+  (SyBool x, SyBool y) -> x == y
+  (SyRx px fx, SyRx py fy) -> px == py && fx == fy
+  (SyUSym x, SyUSym y) -> x == y
+  (SyType x, SyType y) -> syntaxEq x y
+  (SyList xs, SyList ys) ->
+    length xs == length ys && all (uncurry syntaxEq) (zip xs ys)
+  _ -> False
+
+hygienizeSyntax :: SyntaxVal -> SyntaxVal
+hygienizeSyntax stx = State.evalState (goExpr [] stx) (0 :: Int)
+  where
+    goExpr env val = case val of
+      SyAtom name -> pure $ SyAtom (rewriteName env name)
+      SyType inner -> SyType <$> goExpr env inner
+      SyList (SyAtom headName : SyList binds : [body])
+        | stripIntroName headName == "LET" -> do
+        frame <- bindFrame (mapMaybe bindingName binds)
+        let env' = frame : env
+        binds' <- mapM (renameLetBinding env') binds
+        body' <- goExpr env' body
+        pure $ SyList [SyAtom "LET", SyList binds', body']
+      SyList (SyAtom headName : SyList params : rest)
+        | stripIntroName headName == "LAM" -> do
+        frame <- bindFrame (mapMaybe paramName params)
+        let env' = frame : env
+        params' <- mapM (renameLamParam env') params
+        rest' <- case rest of
+          [body] -> (:[]) <$> goExpr env' body
+          [retTy, body] -> do
+            retTy' <- goExpr env retTy
+            body' <- goExpr env' body
+            pure [retTy', body']
+          _ -> pure rest
+        pure $ SyList (SyAtom "LAM" : SyList params' : rest')
+      SyList (SyAtom headName : scrutinee : arms)
+        | stripIntroName headName == "CASE" -> do
+        scrutinee' <- goExpr env scrutinee
+        arms' <- mapM (renameCaseArm env) arms
+        pure $ SyList (SyAtom "CASE" : scrutinee' : arms')
+      SyList xs -> SyList <$> mapM (goExpr env) xs
+      _ -> pure val
+
+    mapMaybe f = foldr (\x acc -> maybe acc (:acc) (f x)) []
+
+    rewriteName env name =
+      case lookupRename env name of
+        Just renamed -> renamed
+        Nothing -> stripIntroName name
+
+    lookupRename [] _ = Nothing
+    lookupRename (frame : rest) name =
+      case M.lookup name frame of
+        Just renamed -> Just renamed
+        Nothing -> lookupRename rest name
+
+    bindFrame names =
+      foldM
+        (\acc name ->
+          if isIntroName name
+            then do
+              fresh <- freshName name
+              pure (M.insert name fresh acc)
+            else pure acc)
+        M.empty
+        names
+
+    renameLetBinding env' binding = case binding of
+      SyList [SyAtom name, rhs] -> do
+        rhs' <- goExpr env' rhs
+        pure $ SyList [SyAtom (rewriteName env' name), rhs']
+      other -> goExpr env' other
+
+    renameLamParam env' val = case val of
+      SyAtom marker | stripIntroName marker == "&REST" -> pure (SyAtom "&REST")
+      SyAtom marker | stripIntroName marker == "&KEY" -> pure (SyAtom "&KEY")
+      SyType inner -> SyType <$> goExpr env' inner
+      SyAtom name ->
+        pure $ SyAtom (rewriteName env' name)
+      SyList [SyAtom name, ty] -> do
+        ty' <- goExpr env' ty
+        pure $ SyList [SyAtom (rewriteName env' name), ty']
+      SyList [param, defExpr] -> do
+        defExpr' <- goExpr env' defExpr
+        pure $ SyList [renameLamParamPure env' param, defExpr']
+      SyList [param, ty, defExpr] -> do
+        defExpr' <- goExpr env' defExpr
+        ty' <- goExpr env' ty
+        pure $ SyList [renameLamParamPure env' param, ty', defExpr']
+      _ -> goExpr env' val
+
+    renameLamParamPure env' param = case param of
+      SyAtom name -> SyAtom (rewriteName env' name)
+      SyList [SyAtom name, ty] ->
+        SyList [SyAtom (rewriteName env' name), mapSyntaxAtoms stripIntroName ty]
+      other -> mapSyntaxAtoms stripIntroName other
+
+    renameCaseArm env arm = case arm of
+      SyList [pat, body] -> do
+        (frame, pat') <- renamePattern pat
+        body' <- goExpr (frame : env) body
+        pure $ SyList [pat', body']
+      _ -> goExpr env arm
+
+    renamePattern pat = case pat of
+      SyAtom "_" -> pure (M.empty, pat)
+      SyAtom "TRUE" -> pure (M.empty, pat)
+      SyAtom "FALSE" -> pure (M.empty, pat)
+      SyAtom marker | stripIntroName marker == "_" -> pure (M.empty, SyAtom "_")
+      SyAtom marker | stripIntroName marker == "TRUE" -> pure (M.empty, SyAtom "TRUE")
+      SyAtom marker | stripIntroName marker == "FALSE" -> pure (M.empty, SyAtom "FALSE")
+      SyAtom name
+        | isIntroName name -> do
+            fresh <- freshName name
+            pure (M.singleton name fresh, SyAtom fresh)
+        | otherwise -> pure (M.empty, SyAtom name)
+      SyList (SyAtom ctor : subPats) -> do
+        renamed <- mapM renamePattern subPats
+        let (frames, pats') = unzip renamed
+        pure (M.unions frames, SyList (SyAtom (stripIntroName ctor) : pats'))
+      SyType inner -> do
+        (frame, inner') <- renamePattern inner
+        pure (frame, SyType inner')
+      other -> pure (M.empty, other)
+
+    bindingName val = case val of
+      SyList [SyAtom name, _] -> Just name
+      _ -> Nothing
+
+    paramName val = case val of
+      SyAtom marker | stripIntroName marker == "&REST" -> Nothing
+      SyAtom marker | stripIntroName marker == "&KEY" -> Nothing
+      SyType _ -> Nothing
+      SyAtom name -> Just name
+      SyList [SyAtom name, _] -> Just name
+      SyList [param, _] -> paramName param
+      SyList [param, _, _] -> paramName param
+      _ -> Nothing
+
+    freshName encoded = do
+      n <- State.get
+      State.put (n + 1)
+      pure ("__H" <> T.pack (show n) <> "_" <> stripIntroName encoded)
+
+mapSyntaxAtoms :: (T.Text -> T.Text) -> SyntaxVal -> SyntaxVal
+mapSyntaxAtoms f stx = case stx of
+  SyAtom name -> SyAtom (f name)
+  SyType inner -> SyType (mapSyntaxAtoms f inner)
+  SyList xs -> SyList (map (mapSyntaxAtoms f) xs)
+  other -> other
 
 showBrief :: MVal -> String
 showBrief (MAtom t)    = T.unpack t
@@ -831,9 +1055,7 @@ showBrief (MBool b)    = show b
 showBrief (MRx _ _)    = "<regex>"
 showBrief (MUSym t)    = ":" ++ T.unpack t
 showBrief (MType _)    = "<type>"
-showBrief (MQuasi _)   = "<quasi>"
-showBrief (MUnquote _) = "<unquote>"
-showBrief (MSplice _)  = "<splice>"
+showBrief (MSyntax _)  = "<syntax>"
 showBrief (MRef n)     = "<ref:" ++ show n ++ ">"
 showBrief (MData n _)  = T.unpack n
 showBrief (MCtor n _ _) = "<ctor:" ++ T.unpack n ++ ">"

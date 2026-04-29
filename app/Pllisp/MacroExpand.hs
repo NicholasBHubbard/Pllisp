@@ -77,6 +77,7 @@ compileTimeBuiltins = M.fromList
   [ ("SYNTAX-CAR", syntaxFun [Ty.TySyntax] Ty.TySyntax)
   , ("SYNTAX-CDR", syntaxFun [Ty.TySyntax] Ty.TySyntax)
   , ("SYNTAX-LENGTH", syntaxFun [Ty.TySyntax] Ty.TyInt)
+  , ("SYNTAX-EQUAL?", syntaxFun [Ty.TySyntax, Ty.TySyntax] Ty.TyBool)
   , ("SYNTAX-NULL?", syntaxFun [Ty.TySyntax] Ty.TyBool)
   , ("SYNTAX-SYMBOL?", syntaxFun [Ty.TySyntax] Ty.TyBool)
   , ("SYNTAX-LIST?", syntaxFun [Ty.TySyntax] Ty.TyBool)
@@ -84,7 +85,6 @@ compileTimeBuiltins = M.fromList
   , ("SYNTAX-NUMBER?", syntaxFun [Ty.TySyntax] Ty.TyBool)
   , ("SYNTAX-BOOL?", syntaxFun [Ty.TySyntax] Ty.TyBool)
   , ("SYNTAX-TYPE?", syntaxFun [Ty.TySyntax] Ty.TyBool)
-  , ("GENSYM", syntaxFun [] Ty.TySyntax)
   , ("EQ", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0, Ty.TyVar 0] Ty.TyBool))
   , ("ERROR", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyStr] (Ty.TyVar 0)))
   , ("SYNTAX-LIFT", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0] Ty.TySyntax))
@@ -661,10 +661,12 @@ applyMacro :: MacroClause -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
 applyMacro clause args name =
   case matchClause clause args of
     Just bindings -> do
+      mark <- State.get
+      State.put (mark + 1)
       let mvalBinds = M.map MI.sexprToVal bindings
           env = M.union mvalBinds (mcEnv clause)
-      result <- liftEither (firstLeft id (MI.runInterpM (MI.evalTyped env (mcTypedBody clause))))
-      case MI.valToSExpr result of
+      result <- liftEither (firstLeft id (MI.runInterpMWithMark mark (MI.evalTyped env (mcTypedBody clause))))
+      case MI.valToSExprHygienic result of
         Left err -> throwExpandError err
         Right sexpr -> pure sexpr
     Nothing ->

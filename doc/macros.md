@@ -90,14 +90,18 @@ appears later.
 
 ## Quasiquote, Unquote, and Splicing
 
-Most macros use quasiquote:
+Most macros use quasiquote, usually together with `syntax-case`:
 
 ```lisp
 (mac progn (&rest args)
-  (if (eq (syntax-length args) 1)
-    (syntax-car args)
-    `(let ((_ ,(syntax-car args)))
-       (progn ,@(syntax-cdr args)))))
+  (syntax-case args
+    ((arg)
+      arg)
+    ((arg &rest rest)
+      `(let ((_ ,arg))
+         (progn ,@rest)))
+    (_
+      (error "progn expects at least one argument"))))
 ```
 
 Key pieces:
@@ -186,6 +190,56 @@ Called like:
   (print x))
 ```
 
+## syntax-case
+
+`syntax-case` is a compile-time-only special form for matching `%SYNTAX`
+values structurally.
+
+General form:
+
+```lisp
+(syntax-case expr
+  (pattern body)
+  ...)
+```
+
+Useful pattern forms:
+
+- `_` matches anything and does not bind
+- `name` matches anything and binds one `%SYNTAX` value
+- `(quote datum)` matches literal syntax exactly
+- `(p1 p2 ...)` matches an exact syntax list
+- `(p1 p2 &rest rest)` matches a syntax list with a tail
+
+Example:
+
+```lisp
+(mac maybe-wrap (flag expr)
+  (syntax-case flag
+    ((quote YES)
+      `(Just ,expr))
+    (_
+      expr)))
+```
+
+Another example:
+
+```lisp
+(mac my-progn (&rest args)
+  (syntax-case args
+    ((arg)
+      arg)
+    ((arg &rest rest)
+      `(let ((_ ,arg))
+         (my-progn ,@rest)))
+    (_
+      (error "my-progn expects at least one argument"))))
+```
+
+`syntax-case` is the right default tool when the macro depends on the shape of
+its input. Reach for direct `syntax-car` / `syntax-cdr` manipulation only when
+the lower-level style is genuinely clearer.
+
 ## Procedural Macro Bodies
 
 A macro body can work in two styles:
@@ -194,7 +248,7 @@ A macro body can work in two styles:
 - ordinary compile-time helper code defined elsewhere and called from the macro
 
 The first style is the classic procedural-macro style. A macro can compute,
-branch, recurse, inspect lists of syntax, and build new syntax
+branch, recurse, inspect syntax, pattern-match on syntax, and build new syntax
 programmatically:
 
 ```lisp
@@ -241,13 +295,14 @@ That means compile-time code can use:
 - imported runtime bindings from other modules when those bindings can be
   evaluated at compile time
 - the public `%SYNTAX` API: `syntax-car`, `syntax-cdr`, `syntax-cons`,
-  `syntax-length`, `syntax-symbol`, `syntax-symbol-name`, and related helpers
+  `syntax-length`, `syntax-equal?`, `syntax-symbol`, `syntax-symbol-name`,
+  and related helpers
 - compile-time helper functions loaded from `PRELUDE`, such as `append`,
   `reverse`, `map`, `filter`, and `foldl`
 - `ref`, `deref`, and `set!`
 - regex helpers such as `rx-compile`, `rx-match`, `rx-find`, `rx-sub`,
   `rx-gsub`, `rx-split`, and `rx-captures`
-- `gensym` and `error`
+- `error`
 
 Two boundaries still matter:
 
@@ -411,20 +466,47 @@ So this is the sane pattern:
 Do not assume a macro will automatically pick up helper definitions that only
 appear later in the file.
 
-## Hygiene and `gensym`
+## Automatic Hygiene
 
-Pllisp macros are not hygienic by default. If a macro introduces a temporary
-name, that name can capture or collide with user code unless you generate a
-fresh one.
+Pllisp now automatically renames macro-introduced lexical bindings so normal
+temporary names do not capture user code and user code does not accidentally
+capture the macro's internals.
 
-Use `gensym` for hidden temporaries:
+In practice this applies to lexical binders introduced by macro output in:
+
+- `let`
+- `lam`
+- `case` patterns
+
+So this is safe:
 
 ```lisp
 (mac with-tmp (expr body)
-  (let ((tmp (gensym)))
-    `(let ((,tmp ,expr))
-       ,body)))
+  `(let ((tmp ,expr))
+     ,body))
 ```
+
+```lisp
+(let ((tmp 99))
+  (with-tmp 1 tmp))
+```
+
+That still refers to the caller's `tmp`, not the macro's internal one.
+
+The same renaming also keeps the macro's own internal references connected to
+their introduced binders:
+
+```lisp
+(mac return-tmp (expr)
+  `(let ((tmp ,expr))
+     tmp))
+```
+
+This returns the introduced temporary, not some caller binding named `tmp`.
+
+This is practical lexical hygiene, not a full scoped-syntax system. The useful
+rule is simple: write normal temporary names in macro output and let the
+expander protect them automatically.
 
 ## Failing Deliberately
 

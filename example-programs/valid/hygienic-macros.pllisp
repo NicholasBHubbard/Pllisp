@@ -1,0 +1,12 @@
+(mac with-temp (val body)
+  `(let ((tmp ,val))
+     ,body))
+
+(mac capture-safe-lam (body)
+  `(lam ((tmp %INT))
+     ,body))
+
+(let ((tmp 99))
+  (progn
+    (print (int-to-str (with-temp 1 tmp)))
+    (print (int-to-str ((capture-safe-lam tmp) 1)))))

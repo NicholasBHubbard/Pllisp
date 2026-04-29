@@ -488,6 +488,29 @@ spec = do
         [SExpr.SList [Loc.Located _ (SExpr.SAtom "CONS"), Loc.Located _ (SExpr.SInt 1), _]] -> pure ()
         _ -> expectationFailure (show r)
 
+    it "macro uses syntax-case list patterns" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac my-progn (&rest args)"
+                   , "  (syntax-case args"
+                   , "    ((arg) arg)"
+                   , "    ((arg &rest rest) `(let ((_ ,arg)) (my-progn ,@rest)))"
+                   , "    (_ (error \"my-progn expects at least one argument\"))))"
+                   , "(my-progn a b c)"
+                   ])
+      case r of
+        [SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"), _, _]] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "macro uses syntax-case quoted literal patterns" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac maybe-wrap (flag expr)"
+                   , "  (syntax-case flag"
+                   , "    ((quote YES) `(just ,expr))"
+                   , "    (_ expr)))"
+                   , "(maybe-wrap yes 42)"
+                   ])
+      r `shouldBe` [SExpr.SList [l (SExpr.SAtom "JUST"), l (SExpr.SInt 42)]]
+
     it "macro with string manipulation" $ do
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac make-name (prefix suffix)"
@@ -496,18 +519,34 @@ spec = do
                    ])
       r `shouldBe` [SExpr.SAtom "FOOBAR"]
 
-    it "macro with gensym for hygiene" $ do
+    it "hygienically renames introduced bindings without gensym" $ do
       r <- either fail pure $ expandSrc
         (T.unlines [ "(mac with-temp (val body)"
-                   , "  (let ((tmp (gensym)))"
-                   , "    `(let ((,tmp ,val)) ,body)))"
-                   , "(with-temp 42 (add 1 2))"
+                   , "  `(let ((tmp ,val)) ,body))"
+                   , "(with-temp 42 tmp)"
                    ])
-      -- Should produce (let ((__G0 42)) (add 1 2))
       case r of
         [SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"),
-                      Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom gname), _])]),
-                      _]] -> T.isPrefixOf "__G" gname `shouldBe` True
+                      Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom bindName), _])]),
+                      Loc.Located _ (SExpr.SAtom bodyName)]]
+                        -> do
+                            bindName `shouldNotBe` "TMP"
+                            bodyName `shouldBe` "TMP"
+        _ -> expectationFailure (show r)
+
+    it "hygienically renames internal references consistently" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac return-temp (val)"
+                   , "  `(let ((tmp ,val)) tmp))"
+                   , "(return-temp 42)"
+                   ])
+      case r of
+        [SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"),
+                      Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom bindName), _])]),
+                      Loc.Located _ (SExpr.SAtom bodyName)]]
+                        -> do
+                            bindName `shouldNotBe` "TMP"
+                            bodyName `shouldBe` bindName
         _ -> expectationFailure (show r)
 
     it "macro error propagates" $ do

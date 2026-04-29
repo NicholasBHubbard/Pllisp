@@ -35,6 +35,19 @@ spec = do
           withTempSource "fallback-stdlib.pll" "(print \"ok\")" $ \fp ->
             Driver.runFiles [fp] `shouldReturn` ExitSuccess
 
+    it "falls back to the workspace for additional stdlib modules too" $
+      withRepoRoot $ do
+        withEnvVar "pllisp_datadir" "/definitely/missing" $
+          withTempSource "fallback-cli.pll" (unlines
+            [ "(import CLI)"
+            , "(let ((spec (cli (flag verbose \"-v\" \"--verbose\")"
+            , "                  (arg input))))"
+            , "  (case (CLI.parse spec (Cons \"main.pll\" Empty))"
+            , "    ((Left err) (print err))"
+            , "    ((Right parsed) (print (CLI.arg-value parsed :input)))))"
+            ]) $ \fp ->
+              Driver.runFiles [fp] `shouldReturn` ExitSuccess
+
     it "rejects malformed module declarations" $
       withTempSource "bad-module.pll" "(module)" $ \fp ->
         Driver.runFiles [fp] `shouldReturn` ExitFailure 1

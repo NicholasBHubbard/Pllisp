@@ -312,6 +312,77 @@ Examples:
 (str :ok)
 ```
 
+## `CLI` Module
+
+Import `CLI` when you want a small DSL for command-line parsing:
+
+```
+(import CLI)
+```
+
+The core form is the `cli` macro. It takes a sequence of clause forms and
+produces a parser function.
+
+Supported clauses:
+
+- `(flag name "-s" "--long")`
+- `(option name "-s" "--long")`
+- `(required-option name "-s" "--long")`
+- `(arg name)`
+- `(rest name)`
+
+Example:
+
+```
+(import CLI)
+
+(let ((spec (cli
+              (flag verbose "-v" "--verbose")
+              (option output "-o" "--output")
+              (required-option mode "-m" "--mode")
+              (arg input)
+              (rest extras))))
+  (case (CLI.parse spec
+          (Cons "--verbose"
+            (Cons "-o"
+              (Cons "build/out.txt"
+                (Cons "--mode"
+                  (Cons "fast"
+                    (Cons "main.pll"
+                      (Cons "a"
+                        (Cons "b" Empty)))))))))
+    ((Left err) (print err))
+    ((Right parsed)
+      (progn
+        (print (if (CLI.flag-value parsed :verbose) "true" "false"))
+        (print (CLI.required-option-value parsed :mode))
+        (print (CLI.arg-value parsed :input)))))
+```
+
+Runtime entry points:
+
+- `CLI.parse spec args`
+- `CLI.parse-argv spec unit`
+
+`CLI.parse` and `CLI.parse-argv` return `%(Either %STR %(List %ParsedEntry))`.
+On success, inspect the parsed entries with:
+
+- `CLI.flag-value parsed :name`
+- `CLI.option-value parsed :name`
+- `CLI.required-option-value parsed :name`
+- `CLI.arg-value parsed :name`
+- `CLI.rest-value parsed :name`
+
+Notes:
+
+- `flag` produces a boolean.
+- `option` produces `%(Maybe %STR)`.
+- `required-option` fails with `Left` when the option is missing.
+- `arg` consumes one positional argument.
+- `rest` consumes the remaining positional arguments.
+- `--` stops option parsing; everything after it is treated as positional.
+- Unknown options fail with `Left`.
+
 ## Practical Advice
 
 - reach for `fun` and `progn` immediately; they make code much clearer

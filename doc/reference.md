@@ -44,6 +44,7 @@ variables:
 | Let | `(let ((name expr)...) body)` |
 | If | `(if cond then else)` |
 | Case | `(case expr (pattern body)...)` |
+| Syntax-case | `(syntax-case expr (pattern body)...)` |
 | Type | `(type Name (tyvars...) (Ctor args...)...)` |
 | Class | `(cls CLASS (supers...) (tyvars...) (method %types...)...)` |
 | Instance | `(inst CLASS %Type (method impl)...)` |
@@ -57,6 +58,9 @@ variables:
 | FFI struct | `(ffi-struct Name (field %CType)...)` |
 | FFI enum | `(ffi-enum Name (Variant value)...)` |
 | FFI callback | `(ffi-callback name (param-types...) ret-type)` |
+
+`syntax-case` is compile-time only. Use it in macro bodies and
+`eval-when (:compile-toplevel ...)` helper code.
 
 ## Extended Lambda Lists
 
@@ -208,13 +212,14 @@ expansion time.
 
 ### Syntax Inspectors and Predicates
 
-`syntax-car`, `syntax-cdr`, `syntax-length`, `syntax-null?`, `syntax-symbol?`,
-`syntax-list?`, `syntax-string?`, `syntax-number?`, `syntax-bool?`,
-`syntax-type?`, `syntax-int-value`, `syntax-float-value`,
-`syntax-string-value`, `syntax-symbol-name`, `syntax-usym-name`
+`syntax-car`, `syntax-cdr`, `syntax-length`, `syntax-equal?`,
+`syntax-null?`, `syntax-symbol?`, `syntax-list?`, `syntax-string?`,
+`syntax-number?`, `syntax-bool?`, `syntax-type?`, `syntax-int-value`,
+`syntax-float-value`, `syntax-string-value`, `syntax-symbol-name`,
+`syntax-usym-name`
 
 ### Compile-Time Helpers
 
-`append`, `reverse`, `map`, `filter`, `foldl`, `gensym`, `error`
+`append`, `reverse`, `map`, `filter`, `foldl`, `error`
 
 See [Macros](macros.md) for usage patterns.
