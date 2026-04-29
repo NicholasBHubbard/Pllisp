@@ -1,6 +1,6 @@
 # Pllisp
 
-A Lisp programming language that compiles to LLVM.
+A statically typed Lisp programming language.
 
 This project is currently in development.
 
@@ -12,24 +12,20 @@ This project is currently in development.
 - `clang`
 - native libraries for `pcre2`, `libgc`, and `libffi`
 
-The compiler lowers programs to LLVM IR, then invokes `clang` to link an
-executable.
-
 ### Build
 
 ```sh
 cabal build
 ```
 
-### Run the Compiler
+### Build a Program
 
 ```sh
 cabal run pllisp -- example-programs/valid/hello.pllisp
 ./example-programs/valid/hello
 ```
 
-The compiler writes the executable next to the input file, using the same
-basename.
+This writes the executable next to the input file, using the same basename.
 
 The entry file can use any filename you pass on the command line. Imported
 modules are different: they are resolved as exact `MODULE.pll` filenames.
@@ -61,9 +57,9 @@ This project was developed collaboratively by Nicholas B. Hubbard (student) and 
 ### Team Member Roles
 
 **Nicholas B. Hubbard (Student):**
-- Designed the language: syntax, semantics, type system, and compilation strategy
-- Wrote the initial compilation pipeline by hand (parser, type checker, closure conversion, etc)
-- Made all architectural decisions (e.g. dictionary-passing for typeclasses, CL-style procedural macros, positional superclass syntax)
+- Designed the language: syntax, semantics, type system, and overall architecture
+- Wrote the initial implementation by hand
+- Made all architectural decisions (e.g. CL-style procedural macros, positional superclass syntax)
 - Used Q/A sessions with the AI to explore design tradeoffs and refine implementation details before committing to an approach
 - Directed every feature, reviewed all generated code, and debugged issues
 - Defined the standard library (PRELUDE.pll) and example programs
@@ -71,8 +67,8 @@ This project was developed collaboratively by Nicholas B. Hubbard (student) and 
 **Claude (AI Assistant):**
 - Wrote implementation code under the student's direction in an interactive pair-programming workflow
 - Wrote test suites (1000+ tests across 16+ test modules)
-- Applied the student's design decisions to the codebase: extending the type checker, adding FFI support, implementing higher-kinded types, macro interpreter, etc.
+- Applied the student's design decisions to the codebase across the language implementation
 
 ### How to Verify Authorship
 
-The complete git history is included in this repository. Every commit represents a directed collaboration session where the student specified what to build and the AI produced the code. Earlier commits (the initial compilation pipeline) were written directly by the student.
+The complete git history is included in this repository. Every commit represents a directed collaboration session where the student specified what to build and the AI produced the code. Earlier commits (the initial implementation) were written directly by the student.

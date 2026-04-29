@@ -1,8 +1,7 @@
 # Naming Conventions
 
-All identifiers in pllisp are case-insensitive — the compiler uppercases
-everything internally. These conventions govern how names are written in source
-code for readability and consistency.
+All identifiers in pllisp are case-insensitive. These conventions govern how
+names are written in source code for readability and consistency.
 
 ## Three Tiers
 

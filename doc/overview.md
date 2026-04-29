@@ -1,9 +1,8 @@
 # Pllisp
 
-Pllisp is a statically typed Lisp that compiles to LLVM. It combines Lisp's
-s-expression syntax and procedural macro system with Hindley-Milner type
-inference, algebraic data types, pattern matching, and Haskell-style
-typeclasses.
+Pllisp is a statically typed Lisp with s-expression syntax, procedural macros,
+Hindley-Milner type inference, algebraic data types, pattern matching, and
+Haskell-style typeclasses.
 
 ## Quick Taste
 
@@ -32,23 +31,21 @@ result:
 ## Key Features
 
 - **Static typing with inference** — Hindley-Milner type inference means you
-  rarely write type annotations, but the compiler catches type errors at
-  compile time. See [Types](types.md).
+  rarely write type annotations, and type errors are reported before the
+  program runs. See [Types](types.md).
 
 - **Algebraic data types and pattern matching** — Define sum and product types,
-  destructure them with `case`, and the compiler checks exhaustiveness.
+  destructure them with `case`, and cover all constructors explicitly.
   See [Types](types.md#algebraic-data-types).
 
 - **Typeclasses** — Haskell-style ad-hoc polymorphism with superclasses,
-  parametric instances, and higher-kinded types. Compiled to dictionary
-  passing. See [Typeclasses](typeclasses.md).
+  parametric instances, and higher-kinded types. See [Typeclasses](typeclasses.md).
 
-- **Procedural macros** — Common Lisp-style macros that transform syntax before
-  type checking, with quasiquoting and a full macro-time interpreter.
-  See [Macros](macros.md).
+- **Procedural macros** — Common Lisp-style macros that transform syntax, with
+  quasiquoting and a full macro-time interpreter. See [Macros](macros.md).
 
-- **Module system** — Separate compilation with imports, qualified access, and
-  automatic exports. See [Modules](modules.md).
+- **Module system** — Imports, qualified access, and automatic exports.
+  See [Modules](modules.md).
 
 - **C FFI** — Call C functions, define struct layouts, enums, and callbacks
   directly. See [FFI](ffi.md).
@@ -60,15 +57,15 @@ result:
 - **Built-in regex** — First-class regular expressions with literal syntax and
   PCRE2 support. See [Expressions](expressions.md#regular-expressions).
 
-- **Tail call optimization** — Self-recursive tail calls compile to loops
-  automatically. See [Expressions](expressions.md#tail-call-optimization).
+- **Tail call optimization** — Self-recursive tail calls work well even for
+  deep recursion. See [Expressions](expressions.md#tail-call-optimization).
 
 ## Conventions
 
 All identifiers are case-insensitive. `foo`, `Foo`, and `FOO` refer to the
-same name. The compiler uppercases everything internally. By convention:
-lowercase for values/functions, TitleCase for constructors/types, UPPER CASE
-for modules/typeclasses/primitives. See [Naming Conventions](conventions.md).
+same name. By convention: lowercase for values/functions, TitleCase for
+constructors/types, UPPER CASE for modules/typeclasses/primitives.
+See [Naming Conventions](conventions.md).
 
 Comments start with `#`:
 

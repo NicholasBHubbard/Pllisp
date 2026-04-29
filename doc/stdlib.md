@@ -3,8 +3,9 @@
 The `PRELUDE` module is implicitly imported into every program. You do not need
 an explicit `(import PRELUDE)`.
 
-Do not write one anyway. The compiler already injects `PRELUDE`, and an
-explicit `(import PRELUDE)` currently fails with duplicate macro definitions.
+Do not write one anyway. `PRELUDE` is already available in every program, and
+an explicit `(import PRELUDE)` currently fails with duplicate macro
+definitions.
 
 ## Types
 

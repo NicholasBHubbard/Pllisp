@@ -1,7 +1,7 @@
 # Macros
 
 Pllisp has a Common Lisp-style procedural macro system. Macros transform
-syntax before type checking, operating on s-expressions as data.
+syntax, operating on s-expressions as data.
 
 ## Defining Macros
 
@@ -57,7 +57,7 @@ The macro interpreter is a separate evaluation environment. It has its own
 
 For example, `eq` in a macro body compares syntax values — it works on
 symbols, lists, numbers, strings, everything. The runtime `eqi` only compares
-integers. Macro-time `add` does compile-time arithmetic. They live in
+integers. Macro-time `add` does arithmetic on macro arguments. They live in
 different worlds.
 
 ```

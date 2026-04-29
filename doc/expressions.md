@@ -113,8 +113,7 @@ These three forms are mutually exclusive — a lambda uses at most one of
 
 ### Recursion
 
-Lambdas bound with `let` can call themselves recursively. The compiler
-patches the closure environment to make self-reference work:
+Lambdas bound with `let` can call themselves recursively:
 
 ```
 (let ((fact (lam ((n %INT))
@@ -126,7 +125,7 @@ patches the closure environment to make self-reference work:
 
 ### Tail Call Optimization
 
-Self-recursive tail calls are automatically compiled into loops:
+Self-recursive tail calls are handled efficiently:
 
 ```
 (let ((sum (lam ((n %INT) (acc %INT))
@@ -169,8 +168,7 @@ Mutable state is explicit through references:
 
 ## Regular Expressions
 
-Regex literals use `/pattern/flags` syntax and have type `%RX`. They are
-compiled via PCRE2 when evaluated.
+Regex literals use `/pattern/flags` syntax and have type `%RX`.
 
 ```
 (let ((pat /^hello/i))
@@ -202,7 +200,7 @@ capture groups:
   caps)  # List of "user", "host"
 ```
 
-You can also compile a pattern from a string at runtime with `rx-compile`:
+You can also create a pattern from a string at runtime with `rx-compile`:
 
 ```
 (let ((pat (rx-compile (argv 1))))

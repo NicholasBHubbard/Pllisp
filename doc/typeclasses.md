@@ -1,6 +1,6 @@
 # Typeclasses
 
-Typeclasses provide ad-hoc polymorphism, compiled to dictionary passing.
+Typeclasses provide ad-hoc polymorphism.
 
 ## Defining a Class
 
@@ -53,8 +53,7 @@ Instances can be defined for parameterized types:
       (_ "Nothing")))))
 ```
 
-This works for any `Maybe a` where `a` itself has a `SHOW` instance. The
-compiler resolves the inner `(show v)` call through dictionary passing.
+This works for any `Maybe a` where `a` itself has a `SHOW` instance.
 
 ## Higher-Kinded Types
 
@@ -80,24 +79,5 @@ This enables abstractions like `FUNCTOR`:
 
 Here `f` is a type constructor (kind `* -> *`), instantiated to `Maybe` or
 `List`.
-
-## How Typeclasses Compile
-
-Instance resolution happens entirely at compile time. When the compiler can
-see the concrete type at a call site, it inlines the instance method directly —
-`(show 42)` becomes a direct call to the `SHOW %INT` implementation with no
-indirection.
-
-For polymorphic functions, dictionaries are passed as extra arguments. A
-function like:
-
-```
-(let ((print-it (lam (x) (print (show x)))))
-  (print-it 42))
-```
-
-compiles `print-it` to take an additional dictionary parameter. At the call
-site `(print-it 42)`, the compiler passes the `SHOW %INT` dictionary. The
-dictionary is a compile-time-resolved value, not a vtable lookup.
 
 See also: [PRELUDE typeclasses](stdlib.md#typeclasses)

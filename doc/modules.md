@@ -2,12 +2,11 @@
 
 ## Declaring a Module
 
-The compiler scans the whole file for a `module` declaration. It does not
-enforce that `module` is the first form, but keeping it at the top is the
-least confusing style.
+A file may place its `module` declaration anywhere, but keeping it at the top
+is the least confusing style.
 
-For the file being compiled directly, the declared module name must match the
-file basename case-insensitively:
+For the main entry file, the declared module name must match the file basename
+case-insensitively:
 
 ```
 # File: MATH.pll
@@ -19,9 +18,8 @@ file basename case-insensitively:
 
 ## Imports
 
-The compiler scans the whole file for `import` declarations. It does not
-enforce that they appear immediately after `module`, but keeping them grouped
-near the top is recommended.
+Imports may appear anywhere in a file, but keeping them grouped near the top
+is recommended.
 
 ```
 (import MATH)              # qualified access only: MATH.square
@@ -47,7 +45,7 @@ If you use an alias, that alias replaces the original qualifier:
 `MATH.square` is not in scope in that program.
 
 Unqualified import lists are validated. If you request a name the module does
-not export, compilation fails.
+not export, that is an error.
 
 ## Exports
 
@@ -74,8 +72,8 @@ Imported names are accessed through their module name or alias:
 (print (int-to-str (M.square 5)))
 ```
 
-If the same name is unqualified from multiple modules, the compiler reports
-a collision error.
+If the same name is unqualified from multiple modules, you get a collision
+error.
 
 ## The PRELUDE
 
@@ -84,8 +82,8 @@ the standard types (`List`, `Maybe`, `Either`, `Pair`, `Unit`), control flow
 macros (`fun`, `progn`, `if_`, `when`, `unless`, `cond`, etc.), and
 typeclasses (`TRUTHY`, `STRINGY`).
 
-Do not write an explicit `(import PRELUDE)`. The compiler already injects it,
-and an explicit import currently fails with duplicate PRELUDE macro
-definitions.
+Do not write an explicit `(import PRELUDE)`. `PRELUDE` is already available in
+every program, and an explicit import currently fails with duplicate PRELUDE
+macro definitions.
 
 See [Standard Library](stdlib.md) for full details.

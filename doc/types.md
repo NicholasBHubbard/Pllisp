@@ -1,8 +1,8 @@
 # Types
 
 Pllisp uses Hindley-Milner type inference. Most code needs no type annotations
-at all — the compiler infers types from usage. Annotations are available when
-you want them, using the `%` prefix.
+at all — types are inferred from usage. Annotations are available when you
+want them, using the `%` prefix.
 
 ## Type Annotations
 
@@ -33,15 +33,15 @@ arguments:
 | `%STR` | String | pointer |
 | `%BOOL` | Boolean | 1-bit |
 | `%UNIT` | Unit (no meaningful value) | -- |
-| `%RX` | Compiled regular expression | pointer |
+| `%RX` | Regular expression | pointer |
 | `%USYM` | Uninterned symbol | pointer |
 
 ## Type Inference
 
-The compiler infers types through unification. You rarely need annotations:
+Types are inferred through unification. You rarely need annotations:
 
 ```
-# The compiler infers: double : INT -> INT
+# Inferred: double : INT -> INT
 (let ((double (lam (x) (mul x 2))))
   (double 21))
 ```
@@ -49,7 +49,7 @@ The compiler infers types through unification. You rarely need annotations:
 Annotations are needed when there is genuine ambiguity, or for documentation:
 
 ```
-# Without annotation, the compiler can't know which numeric type
+# Without annotation, the type is ambiguous
 (let ((zero %INT 0)) zero)
 ```
 
@@ -116,8 +116,7 @@ Patterns nest:
 
 ### Exhaustiveness Checking
 
-The compiler verifies that `case` expressions cover all constructors. This
-fails to compile:
+`case` expressions must cover all constructors. This is an error:
 
 ```
 # Error: non-exhaustive patterns, missing: Nothing
@@ -133,9 +132,8 @@ Add a wildcard or cover all cases:
   (_ 0))
 ```
 
-Literal types (`INT`, `STR`, `USYM`, etc.) are open-ended — the compiler does
-not require exhaustive literal coverage, but a wildcard catches everything
-else.
+Literal types (`INT`, `STR`, `USYM`, etc.) are open-ended — exhaustive literal
+coverage is not required, but a wildcard catches everything else.
 
 ## Uninterned Symbols
 
