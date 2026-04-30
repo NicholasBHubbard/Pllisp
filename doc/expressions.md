@@ -89,7 +89,7 @@ The special name `_` means “ignore this value”:
   42)
 ```
 
-The [PRELUDE](stdlib.md) `progn` macro is a convenient way to sequence several
+The [PRELUDE](stdlib/PRELUDE.md) `progn` macro is a convenient way to sequence several
 expressions when you only care about the last result:
 
 ```

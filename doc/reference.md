@@ -200,7 +200,7 @@ the implicit `PRELUDE`.
 
 `truthy`, `eq`, `lt`, `gt`, `le`, `ge`, `str`
 
-See [Standard Library](stdlib.md) for details and examples.
+See [Standard Library Overview](stdlib/README.md) for details and examples.
 
 ## Compile-Time Syntax API
 

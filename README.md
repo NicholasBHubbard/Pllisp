@@ -75,15 +75,18 @@ Start with [Overview](doc/overview.md), then use the docs under [`doc/`](doc):
   aliases, compile-time exports, and PRELUDE behavior
 - [FFI](doc/ffi.md) — calling C functions, structs, enums, arrays,
   variadics, and callbacks
-- [Standard Library](doc/stdlib.md) — the implicit `PRELUDE` module:
+- [Standard Library Overview](doc/stdlib/README.md) — the stdlib docs index
+- [PRELUDE](doc/stdlib/PRELUDE.md) — the implicit standard module:
   built-in types, convenience macros, and core typeclasses
+- [CLI](doc/stdlib/CLI.md) — the top-level command-line DSL
+- [FILEIO](doc/stdlib/FILEIO.md) — filesystem and handle-oriented I/O
 - [Reference](doc/reference.md) — quick syntax and builtin cheat sheet
 
 If you are new to the language, the fastest path is:
 
 1. Read [Overview](doc/overview.md).
 2. Read [Expressions](doc/expressions.md) and [Types](doc/types.md).
-3. Skim [Standard Library](doc/stdlib.md).
+3. Skim [Standard Library Overview](doc/stdlib/README.md).
 4. Come back to [Typeclasses](doc/typeclasses.md), [Macros](doc/macros.md),
    [Modules](doc/modules.md), and [FFI](doc/ffi.md) as needed.
 

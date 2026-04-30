@@ -163,7 +163,7 @@ If you want to write ordinary programs first:
 
 1. Read [Expressions](expressions.md).
 2. Read [Types](types.md).
-3. Read [Standard Library](stdlib.md).
+3. Read [Standard Library Overview](stdlib/README.md).
 
 If you are working on larger or more advanced programs:
 

@@ -188,4 +188,4 @@ name itself does not currently behave like an exported value. In practice,
 import the methods you need and keep the class definition in the providing
 module.
 
-See also: [PRELUDE typeclasses](stdlib.md#typeclasses)
+See also: [PRELUDE typeclasses](stdlib/PRELUDE.md#typeclasses)

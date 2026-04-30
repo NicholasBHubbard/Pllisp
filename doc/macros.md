@@ -598,4 +598,4 @@ For the module-level rules around macro imports, aliases, and collisions, see
 [Modules](modules.md#macros-and-compile-time-imports).
 
 For PRELUDE macros such as `fun`, `progn`, `if_`, `when`, and `cond`, see
-[Standard Library](stdlib.md#macros).
+[PRELUDE](stdlib/PRELUDE.md#macros).
