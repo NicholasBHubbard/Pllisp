@@ -80,7 +80,7 @@ typecheckWith importedEnvs importedCtx exprs =
       ffiStructFieldMap = buildFFIStructFieldMap ffiStructDecls
       ffiVarDecls = extractFFIVarDecls exprs
       ffiVarCtx = buildFFIContext ffiVarDecls
-      variadicNames = S.fromList [name | (name, _, _) <- ffiVarDecls]
+      variadicNames = S.fromList [name | (name, _, _, _) <- ffiVarDecls]
       enumCtx = buildEnumContext exprs
       callbackCtx = buildCallbackContext exprs
       -- Build class method schemes and instance env
@@ -228,9 +228,9 @@ data TRExprF
   | TRCase TRExpr [(TRPattern, TRExpr)]
   | TRLoop [(CST.Symbol, Ty.Type)] TRExpr
   | TRRecur [TRExpr]
-  | TRFFI CST.Symbol [Ty.CType] Ty.CType
+  | TRFFI CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | TRFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
-  | TRFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | TRFFIVar CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | TRFFIEnum CST.Symbol [(CST.Symbol, Integer)]
   | TRFFICallback CST.Symbol [Ty.CType] Ty.CType
   deriving (Eq, Show)
@@ -308,9 +308,9 @@ instance Substitutable TRExprF where
   tvs (TRCase scr arms) = tvs scr `S.union` foldr S.union S.empty [tvs p `S.union` tvs e | (p, e) <- arms]
   tvs (TRLoop params body) = foldr (S.union . tvs . snd) S.empty params `S.union` tvs body
   tvs (TRRecur args) = tvs args
-  tvs (TRFFI _ _ _) = S.empty
+  tvs (TRFFI _ _ _ _) = S.empty
   tvs (TRFFIStruct _ _) = S.empty
-  tvs (TRFFIVar _ _ _) = S.empty
+  tvs (TRFFIVar _ _ _ _) = S.empty
   tvs (TRFFIEnum _ _) = S.empty
   tvs (TRFFICallback _ _ _) = S.empty
 
@@ -326,9 +326,9 @@ instance Substitutable TRExprF where
   apply s (TRCase scr arms) = TRCase (apply s scr) [(apply s p, apply s e) | (p, e) <- arms]
   apply s (TRLoop params body) = TRLoop [(n, apply s t) | (n, t) <- params] (apply s body)
   apply s (TRRecur args) = TRRecur (apply s args)
-  apply _ (TRFFI n pts rt) = TRFFI n pts rt
+  apply _ (TRFFI n link pts rt) = TRFFI n link pts rt
   apply _ (TRFFIStruct n fs) = TRFFIStruct n fs
-  apply _ (TRFFIVar n pts rt) = TRFFIVar n pts rt
+  apply _ (TRFFIVar n link pts rt) = TRFFIVar n link pts rt
   apply _ (TRFFIEnum n vs) = TRFFIEnum n vs
   apply _ (TRFFICallback n pts rt) = TRFFICallback n pts rt
 
@@ -352,14 +352,14 @@ collectTypeNames ctx = S.fromList [n | Forall _ ty <- M.elems ctx, n <- headTyCo
     headTyCons (Ty.TyCon n _) = [n]
     headTyCons _ = []
 
-extractFFIDecls :: [Res.RExpr] -> [(CST.Symbol, [Ty.CType], Ty.CType)]
+extractFFIDecls :: [Res.RExpr] -> [(CST.Symbol, Maybe T.Text, [Ty.CType], Ty.CType)]
 extractFFIDecls = foldr go []
   where
-    go (Loc.Located _ (Res.RFFI name paramTys retTy)) acc = (name, paramTys, retTy) : acc
+    go (Loc.Located _ (Res.RFFI name linkName paramTys retTy)) acc = (name, linkName, paramTys, retTy) : acc
     go _ acc = acc
 
-buildFFIContext :: [(CST.Symbol, [Ty.CType], Ty.CType)] -> Context
-buildFFIContext = M.fromList . map (\(name, paramCTys, retCTy) ->
+buildFFIContext :: [(CST.Symbol, Maybe T.Text, [Ty.CType], Ty.CType)] -> Context
+buildFFIContext = M.fromList . map (\(name, _linkName, paramCTys, retCTy) ->
   let -- CPtr parameters become polymorphic type variables so they accept
       -- any pointer type (strings, structs, closures, etc.)
       (paramTys, nextVar) = foldr (\ct (acc, n) -> case ct of
@@ -427,10 +427,10 @@ buildFFIStructFieldMap = M.fromList . concatMap go
 
 -- FFI VARIADIC CONTEXT
 
-extractFFIVarDecls :: [Res.RExpr] -> [(CST.Symbol, [Ty.CType], Ty.CType)]
+extractFFIVarDecls :: [Res.RExpr] -> [(CST.Symbol, Maybe T.Text, [Ty.CType], Ty.CType)]
 extractFFIVarDecls = foldr go []
   where
-    go (Loc.Located _ (Res.RFFIVar name paramTys retTy)) acc = (name, paramTys, retTy) : acc
+    go (Loc.Located _ (Res.RFFIVar name linkName paramTys retTy)) acc = (name, linkName, paramTys, retTy) : acc
     go _ acc = acc
 
 -- FFI ENUM CONTEXT
@@ -454,9 +454,9 @@ validateFFIDecls :: [Res.RExpr] -> [TypeError]
 validateFFIDecls = concatMap go
   where
     go (Loc.Located sp expr) = case expr of
-      Res.RFFI _ paramCTys retCTy ->
+      Res.RFFI _ _ paramCTys retCTy ->
         validateFFISignature sp "ffi" paramCTys retCTy
-      Res.RFFIVar _ paramCTys retCTy ->
+      Res.RFFIVar _ _ paramCTys retCTy ->
         validateFFISignature sp "ffi-var" paramCTys retCTy
       Res.RFFICallback _ paramCTys retCTy ->
         validateFFISignature sp "ffi-callback" paramCTys retCTy
@@ -1221,12 +1221,12 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   Res.RType name params ctors ->
     -- Constructors are registered in context by typecheck, just pass through here
     pure $ Ty.Typed (Ty.TyCon name []) (TRType name params ctors)
-  Res.RFFI name paramTys retTy ->
-    pure $ Ty.Typed Ty.TyUnit (TRFFI name paramTys retTy)
+  Res.RFFI name linkName paramTys retTy ->
+    pure $ Ty.Typed Ty.TyUnit (TRFFI name linkName paramTys retTy)
   Res.RFFIStruct name fields ->
     pure $ Ty.Typed Ty.TyUnit (TRFFIStruct name fields)
-  Res.RFFIVar name paramTys retTy ->
-    pure $ Ty.Typed Ty.TyUnit (TRFFIVar name paramTys retTy)
+  Res.RFFIVar name linkName paramTys retTy ->
+    pure $ Ty.Typed Ty.TyUnit (TRFFIVar name linkName paramTys retTy)
   Res.RFFIEnum name variants ->
     pure $ Ty.Typed Ty.TyUnit (TRFFIEnum name variants)
   Res.RFFICallback name paramTys retTy ->

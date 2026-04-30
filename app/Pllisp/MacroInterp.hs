@@ -243,11 +243,11 @@ evalTyped env (Loc.Located _ (Ty.Typed _ expr)) = case expr of
             Right val -> pure val
   TC.TRRecur _ ->
     throwError "recur outside loop"
-  TC.TRFFI name _ _ ->
+  TC.TRFFI name _ _ _ ->
     pure $ ffiStub name
   TC.TRFFIStruct _ _ ->
     pure (MAtom "UNIT")
-  TC.TRFFIVar name _ _ ->
+  TC.TRFFIVar name _ _ _ ->
     pure $ ffiStub name
   TC.TRFFIEnum _ _ ->
     pure (MAtom "UNIT")
@@ -329,9 +329,9 @@ loadTypedTopLevelForm :: Env -> TC.TRExpr -> InterpM Env
 loadTypedTopLevelForm env trExpr@(Loc.Located _ (Ty.Typed _ expr)) = case expr of
   TC.TRType _ _ ctors ->
     pure $ foldl registerCtor env ctors
-  TC.TRFFI name _ _ ->
+  TC.TRFFI name _ _ _ ->
     pure $ M.insert name (ffiStub name) env
-  TC.TRFFIVar name _ _ ->
+  TC.TRFFIVar name _ _ _ ->
     pure $ M.insert name (ffiStub name) env
   TC.TRFFICallback name _ _ ->
     pure $ M.insert name (ffiStub name) env
@@ -349,9 +349,9 @@ loadTypedTopLevelBinding :: Env -> TC.TRExpr -> InterpM Env
 loadTypedTopLevelBinding env (Loc.Located _ (Ty.Typed _ expr)) = case expr of
   TC.TRType _ _ ctors ->
     pure $ foldl registerCtor env ctors
-  TC.TRFFI name _ _ ->
+  TC.TRFFI name _ _ _ ->
     pure $ M.insert name (ffiStub name) env
-  TC.TRFFIVar name _ _ ->
+  TC.TRFFIVar name _ _ _ ->
     pure $ M.insert name (ffiStub name) env
   TC.TRFFICallback name _ _ ->
     pure $ M.insert name (ffiStub name) env

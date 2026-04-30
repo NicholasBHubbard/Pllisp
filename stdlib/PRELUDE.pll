@@ -146,20 +146,20 @@
       (_
         (error "foldl: third argument must be a list")))))
 
-(ffi pll-print (%STR) %VOID)
-(ffi pll-read-line (%INT) %PTR)
-(ffi pll-is-eof (%INT) %INT)
-(ffi pll-argc (%INT) %INT)
-(ffi pll-argv (%INT) %PTR)
-(ffi pll-int-to-str (%INT) %PTR)
-(ffi pll-flt-to-str (%FLT) %PTR)
-(ffi pll-rx-match (%PTR %STR) %I32)
-(ffi pll-rx-find (%PTR %STR) %PTR)
-(ffi pll-rx-sub (%PTR %STR %STR) %PTR)
-(ffi pll-rx-gsub (%PTR %STR %STR) %PTR)
-(ffi pll-rx-split (%PTR %STR) %PTR)
-(ffi pll-rx-captures (%PTR %STR) %PTR)
-(ffi pll-rx-compile (%STR) %PTR)
+(ffi c-pll-print (:link-name "pll_print") (%STR) %VOID)
+(ffi c-pll-read-line (:link-name "pll_read_line") (%INT) %PTR)
+(ffi c-pll-is-eof (:link-name "pll_is_eof") (%INT) %INT)
+(ffi c-pll-argc (:link-name "pll_argc") (%INT) %INT)
+(ffi c-pll-argv (:link-name "pll_argv") (%INT) %PTR)
+(ffi c-pll-int-to-str (:link-name "pll_int_to_str") (%INT) %PTR)
+(ffi c-pll-flt-to-str (:link-name "pll_flt_to_str") (%FLT) %PTR)
+(ffi c-pll-rx-match (:link-name "pll_rx_match") (%PTR %STR) %I32)
+(ffi c-pll-rx-find (:link-name "pll_rx_find") (%PTR %STR) %PTR)
+(ffi c-pll-rx-sub (:link-name "pll_rx_sub") (%PTR %STR %STR) %PTR)
+(ffi c-pll-rx-gsub (:link-name "pll_rx_gsub") (%PTR %STR %STR) %PTR)
+(ffi c-pll-rx-split (:link-name "pll_rx_split") (%PTR %STR) %PTR)
+(ffi c-pll-rx-captures (:link-name "pll_rx_captures") (%PTR %STR) %PTR)
+(ffi c-pll-rx-compile (:link-name "pll_rx_compile") (%STR) %PTR)
 
 ### TRUTHY
 
@@ -241,11 +241,11 @@
 
 (inst STRINGY %INT
   (str (lam ((x %INT)) %STR
-    (if true (pll-int-to-str x) ""))))
+    (if true (c-pll-int-to-str x) ""))))
 
 (inst STRINGY %FLT
   (str (lam ((x %FLT)) %STR
-    (if true (pll-flt-to-str x) ""))))
+    (if true (c-pll-flt-to-str x) ""))))
 
 (inst STRINGY %STR
   (str (lam ((x %STR)) x)))
@@ -305,46 +305,46 @@
           (go 0))))))
 
 (fun print ((s %STR))
-  (pll-print s))
+  (c-pll-print s))
 
 (fun read-line ((u %UNIT)) %STR
   (let ((_ u))
-    (if true (pll-read-line 0) "")))
+    (if true (c-pll-read-line 0) "")))
 
 (fun is-eof ((u %UNIT)) %BOOL
   (let ((_ u))
-    (if (eqi (pll-is-eof 0) 0) false true)))
+    (if (eqi (c-pll-is-eof 0) 0) false true)))
 
 (fun argc ((u %UNIT)) %INT
   (let ((_ u))
-    (pll-argc 0)))
+    (c-pll-argc 0)))
 
 (fun argv ((i %INT)) %STR
-  (if true (pll-argv i) ""))
+  (if true (c-pll-argv i) ""))
 
 (fun int-to-str ((x %INT)) %STR
-  (if true (pll-int-to-str x) ""))
+  (if true (c-pll-int-to-str x) ""))
 
 (fun flt-to-str ((x %FLT)) %STR
-  (if true (pll-flt-to-str x) ""))
+  (if true (c-pll-flt-to-str x) ""))
 
 (fun rx-match ((re %RX) (subj %STR)) %BOOL
-  (if (eqi (pll-rx-match re subj) 0) false true))
+  (if (eqi (c-pll-rx-match re subj) 0) false true))
 
 (fun rx-find ((re %RX) (subj %STR)) %STR
-  (if true (pll-rx-find re subj) ""))
+  (if true (c-pll-rx-find re subj) ""))
 
 (fun rx-sub ((re %RX) (repl %STR) (subj %STR)) %STR
-  (if true (pll-rx-sub re repl subj) ""))
+  (if true (c-pll-rx-sub re repl subj) ""))
 
 (fun rx-gsub ((re %RX) (repl %STR) (subj %STR)) %STR
-  (if true (pll-rx-gsub re repl subj) ""))
+  (if true (c-pll-rx-gsub re repl subj) ""))
 
 (fun rx-split ((re %RX) (subj %STR)) %(List %STR)
-  (if true (pll-rx-split re subj) Empty))
+  (if true (c-pll-rx-split re subj) Empty))
 
 (fun rx-captures ((re %RX) (subj %STR)) %(List %STR)
-  (if true (pll-rx-captures re subj) Empty))
+  (if true (c-pll-rx-captures re subj) Empty))
 
 (fun rx-compile ((src %STR)) %RX
-  (if true (pll-rx-compile src) //))
+  (if true (c-pll-rx-compile src) //))

@@ -12,6 +12,7 @@ import qualified Pllisp.Type as Ty
 import qualified Control.Monad.RWS as RWS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.Text as T
 
 -- CORE
 
@@ -41,9 +42,9 @@ data RExprF
   | RKeyArg CST.Symbol RExpr
   | RCls CST.Symbol [CST.Symbol] [CST.Symbol] [CST.ClassMethod]
   | RInst CST.Symbol Ty.Type [(CST.Symbol, RExpr)]
-  | RFFI CST.Symbol [Ty.CType] Ty.CType
+  | RFFI CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | RFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
-  | RFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | RFFIVar CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | RFFIEnum CST.Symbol [(CST.Symbol, Integer)]
   | RFFICallback CST.Symbol [Ty.CType] Ty.CType
   deriving (Eq, Show)
@@ -106,9 +107,9 @@ extractClassMethodNames = concatMap go
 extractFFINames :: CST.CST -> [CST.Symbol]
 extractFFINames = concatMap go
   where
-    go (Loc.Located _ (CST.ExprFFI name _ _)) = [name]
+    go (Loc.Located _ (CST.ExprFFI name _ _ _)) = [name]
     go (Loc.Located _ (CST.ExprFFIStruct name _)) = [name]
-    go (Loc.Located _ (CST.ExprFFIVar name _ _)) = [name]
+    go (Loc.Located _ (CST.ExprFFIVar name _ _ _)) = [name]
     go (Loc.Located _ (CST.ExprFFICallback name _ _)) = [name]
     go _ = []
 
@@ -160,12 +161,12 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
       rbody <- resolveExpr body
       pure (mname, rbody)) methods
     pure $ RInst className ty rmethods
-  CST.ExprFFI name paramTys retTy ->
-    pure $ RFFI name paramTys retTy
+  CST.ExprFFI name linkName paramTys retTy ->
+    pure $ RFFI name linkName paramTys retTy
   CST.ExprFFIStruct name fields ->
     pure $ RFFIStruct name fields
-  CST.ExprFFIVar name paramTys retTy ->
-    pure $ RFFIVar name paramTys retTy
+  CST.ExprFFIVar name linkName paramTys retTy ->
+    pure $ RFFIVar name linkName paramTys retTy
   CST.ExprFFIEnum name variants ->
     pure $ RFFIEnum name variants
   CST.ExprFFICallback name paramTys retTy ->

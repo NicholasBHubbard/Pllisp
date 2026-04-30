@@ -590,7 +590,12 @@ toFFIDecl :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
 toFFIDecl _ [Loc.Located _ (SAtom name), Loc.Located _ (SList paramTyExprs), retTyExpr] = do
   paramTys <- mapM toCTypeArg paramTyExprs
   retTy <- toCTypeArg retTyExpr
-  Right $ CST.ExprFFI name paramTys retTy
+  Right $ CST.ExprFFI name Nothing paramTys retTy
+toFFIDecl _ [Loc.Located _ (SAtom name), linkMeta, Loc.Located _ (SList paramTyExprs), retTyExpr] = do
+  linkName <- toFFILinkName linkMeta
+  paramTys <- mapM toCTypeArg paramTyExprs
+  retTy <- toCTypeArg retTyExpr
+  Right $ CST.ExprFFI name (Just linkName) paramTys retTy
 toFFIDecl sp _ = Left $ ConvertError sp "invalid ffi: expected (ffi name (param-types...) return-type)"
 
 toFFIStruct :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
@@ -610,7 +615,12 @@ toFFIVar :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
 toFFIVar _ [Loc.Located _ (SAtom name), Loc.Located _ (SList paramTyExprs), retTyExpr] = do
   paramTys <- mapM toCTypeArg paramTyExprs
   retTy <- toCTypeArg retTyExpr
-  Right $ CST.ExprFFIVar name paramTys retTy
+  Right $ CST.ExprFFIVar name Nothing paramTys retTy
+toFFIVar _ [Loc.Located _ (SAtom name), linkMeta, Loc.Located _ (SList paramTyExprs), retTyExpr] = do
+  linkName <- toFFILinkName linkMeta
+  paramTys <- mapM toCTypeArg paramTyExprs
+  retTy <- toCTypeArg retTyExpr
+  Right $ CST.ExprFFIVar name (Just linkName) paramTys retTy
 toFFIVar sp _ = Left $ ConvertError sp "invalid ffi-var: expected (ffi-var name (fixed-params...) return-type)"
 
 toFFIEnum :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
@@ -631,6 +641,12 @@ toFFICallback _ [Loc.Located _ (SAtom name), Loc.Located _ (SList paramTyExprs),
   retTy <- toCTypeArg retTyExpr
   Right $ CST.ExprFFICallback name paramTys retTy
 toFFICallback sp _ = Left $ ConvertError sp "invalid ffi-callback: expected (ffi-callback name (param-types...) return-type)"
+
+toFFILinkName :: SExpr -> Either ConvertError T.Text
+toFFILinkName (Loc.Located _ (SList [Loc.Located _ (SUSym "LINK-NAME"), Loc.Located _ (SStr name)])) =
+  Right name
+toFFILinkName (Loc.Located sp _) =
+  Left $ ConvertError sp "invalid ffi link-name: expected (:link-name \"symbol\")"
 
 toCTypeArg :: SExpr -> Either ConvertError Ty.CType
 toCTypeArg (Loc.Located _ (SType inner)) = toCType inner

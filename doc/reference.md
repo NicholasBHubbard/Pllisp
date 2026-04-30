@@ -53,8 +53,8 @@ variables:
 | Module | `(module MODULE)` |
 | Import | `(import MODULE [Alias] [(unquals...)])` |
 | Field access | `(.field expr)` |
-| FFI | `(ffi name (param-types...) ret-type)` |
-| FFI variadic | `(ffi-var name (fixed-param-types...) ret-type)` |
+| FFI | `(ffi name [(:link-name "external_symbol")] (param-types...) ret-type)` |
+| FFI variadic | `(ffi-var name [(:link-name "external_symbol")] (fixed-param-types...) ret-type)` |
 | FFI struct | `(ffi-struct Name (field %CType)...)` |
 | FFI enum | `(ffi-enum Name (Variant value)...)` |
 | FFI callback | `(ffi-callback name (param-types...) ret-type)` |
@@ -66,7 +66,8 @@ FFI is unsafe by design. Function and callback signatures support scalar and
 pointer ABI types. Named struct types like `%Point` and array types like
 `(%ARR 8 %I8)` belong in `ffi-struct` field declarations, not in `ffi`,
 `ffi-var`, or `ffi-callback` signatures. Variadic extra arguments are limited
-to `%INT`, `%FLT`, `%STR`, and `%BOOL` values.
+to `%INT`, `%FLT`, `%STR`, and `%BOOL` values. Prefer raw foreign binding
+names like `c-sqrt` plus `:link-name` for the real external symbol.
 
 ## Extended Lambda Lists
 

@@ -1862,53 +1862,68 @@ spec = do
         ]) >>= (`shouldBe` "500000500000")
 
   describe "ffi" $ do
-    it "ffi sqrt (double -> double)" $
-      run (T.unlines
+    it "ffi :link-name targets the external symbol instead of the pllisp binding name" $ do
+      ir <- pipeline (T.unlines
+        [ "(ffi c-sqrt (:link-name \"sqrt\") (%FLT) %FLT)"
+        , "(print \"ok\")"
+        ])
+      T.isInfixOf "declare double @sqrt(double)" ir `shouldBe` True
+      T.isInfixOf "declare double @c_sqrt(double)" ir `shouldBe` False
+
+    it "ffi without :link-name still targets the binding name" $ do
+      ir <- pipeline (T.unlines
         [ "(ffi sqrt (%FLT) %FLT)"
-        , "(print (flt-to-str (sqrt 4.0)))"
+        , "(print \"ok\")"
+        ])
+      T.isInfixOf "declare double @sqrt(double)" ir `shouldBe` True
+
+    it "ffi c-sqrt (:link-name \"sqrt\") (double -> double)" $
+      run (T.unlines
+        [ "(ffi c-sqrt (:link-name \"sqrt\") (%FLT) %FLT)"
+        , "(print (flt-to-str (c-sqrt 4.0)))"
         ]) >>= (`shouldBe` "2")
 
-    it "ffi pow (double, double -> double)" $
+    it "ffi c-pow (:link-name \"pow\") (double, double -> double)" $
       run (T.unlines
-        [ "(ffi pow (%FLT %FLT) %FLT)"
-        , "(print (flt-to-str (pow 2.0 10.0)))"
+        [ "(ffi c-pow (:link-name \"pow\") (%FLT %FLT) %FLT)"
+        , "(print (flt-to-str (c-pow 2.0 10.0)))"
         ]) >>= (`shouldBe` "1024")
 
-    it "ffi labs (long -> long)" $
+    it "ffi c-labs (:link-name \"labs\") (long -> long)" $
       run (T.unlines
-        [ "(ffi labs (%INT) %INT)"
-        , "(print (int-to-str (labs (neg 42))))"
+        [ "(ffi c-labs (:link-name \"labs\") (%INT) %INT)"
+        , "(print (int-to-str (c-labs (neg 42))))"
         ]) >>= (`shouldBe` "42")
 
-    it "ffi atol (string -> long)" $
+    it "ffi c-atol (:link-name \"atol\") (string -> long)" $
       run (T.unlines
-        [ "(ffi atol (%STR) %INT)"
-        , "(print (int-to-str (atol \"123\")))"
+        [ "(ffi c-atol (:link-name \"atol\") (%STR) %INT)"
+        , "(print (int-to-str (c-atol \"123\")))"
         ]) >>= (`shouldBe` "123")
 
   describe "ffi trampolines" $ do
-    it "ffi abs (i32 -> i32) trampoline" $
+    it "ffi c-abs (:link-name \"abs\") (i32 -> i32) trampoline" $
       run (T.unlines
-        [ "(ffi abs (%I32) %I32)"
-        , "(print (int-to-str (abs (neg 42))))"
+        [ "(ffi c-abs (:link-name \"abs\") (%I32) %I32)"
+        , "(print (int-to-str (c-abs (neg 42))))"
         ]) >>= (`shouldBe` "42")
 
-    it "ffi fabsf (f32 -> f32) trampoline" $
+    it "ffi c-fabsf (:link-name \"fabsf\") (f32 -> f32) trampoline" $
       run (T.unlines
-        [ "(ffi fabsf (%F32) %F32)"
-        , "(print (flt-to-str (fabsf (negf 3.5))))"
+        [ "(ffi c-fabsf (:link-name \"fabsf\") (%F32) %F32)"
+        , "(print (flt-to-str (c-fabsf (negf 3.5))))"
         ]) >>= (`shouldBe` "3.5")
 
     it "ffi mixed types: i32 trampoline result usable as i64" $
       run (T.unlines
-        [ "(ffi abs (%I32) %I32)"
-        , "(print (int-to-str (add (abs (neg 100)) 1)))"
+        [ "(ffi c-abs (:link-name \"abs\") (%I32) %I32)"
+        , "(print (int-to-str (add (c-abs (neg 100)) 1)))"
         ]) >>= (`shouldBe` "101")
 
     it "ffi existing types still work without trampoline" $
       run (T.unlines
-        [ "(ffi labs (%INT) %INT)"
-        , "(print (int-to-str (labs (neg 99))))"
+        [ "(ffi c-labs (:link-name \"labs\") (%INT) %INT)"
+        , "(print (int-to-str (c-labs (neg 99))))"
         ]) >>= (`shouldBe` "99")
 
   describe "ffi structs" $ do
@@ -1948,34 +1963,48 @@ spec = do
         ]) >>= (`shouldBe` "300")
 
   describe "ffi variadics" $ do
-    it "variadic printf one arg" $
+    it "ffi-var :link-name targets the external symbol instead of the pllisp binding name" $ do
+      ir <- pipeline (T.unlines
+        [ "(ffi-var c-printf (:link-name \"printf\") (%PTR) %I32)"
+        , "(print \"ok\")"
+        ])
+      T.isInfixOf "declare i32 @printf(ptr, ...)" ir `shouldBe` True
+      T.isInfixOf "declare i32 @c_printf(ptr, ...)" ir `shouldBe` False
+
+    it "variadic c-printf with :link-name" $
       run (T.unlines
-        [ "(ffi-var printf (%PTR) %I32)"
-        , "(printf \"%ld\" 42)"
+        [ "(ffi-var c-printf (:link-name \"printf\") (%PTR) %I32)"
+        , "(c-printf \"%ld\" 42)"
         ]) >>= (`shouldBe` "42")
 
-    it "variadic printf two args" $
+    it "variadic c-printf one arg" $
       run (T.unlines
-        [ "(ffi-var printf (%PTR) %I32)"
-        , "(printf \"%ld+%ld\" 10 20)"
+        [ "(ffi-var c-printf (:link-name \"printf\") (%PTR) %I32)"
+        , "(c-printf \"%ld\" 42)"
+        ]) >>= (`shouldBe` "42")
+
+    it "variadic c-printf two args" $
+      run (T.unlines
+        [ "(ffi-var c-printf (:link-name \"printf\") (%PTR) %I32)"
+        , "(c-printf \"%ld+%ld\" 10 20)"
         ]) >>= (`shouldBe` "10+20")
 
-    it "variadic printf float" $
+    it "variadic c-printf float" $
       run (T.unlines
-        [ "(ffi-var printf (%PTR) %I32)"
-        , "(printf \"%.1f\" 3.5)"
+        [ "(ffi-var c-printf (:link-name \"printf\") (%PTR) %I32)"
+        , "(c-printf \"%.1f\" 3.5)"
         ]) >>= (`shouldBe` "3.5")
 
     it "rejects unsupported variadic fixed parameter types" $
       shouldFailToCompile
-        "(ffi-var bad ((%ARR 4 %I8)) %I32)"
+        "(ffi-var c-bad (:link-name \"bad\") ((%ARR 4 %I8)) %I32)"
         "ffi-var does not support by-value struct or array types"
 
     it "rejects unsupported variadic extra argument types" $
       shouldFailToCompile
         (T.unlines
-          [ "(ffi-var printf (%PTR) %I32)"
-          , "(printf \"%p\" (Cons 1 Empty))"
+          [ "(ffi-var c-printf (:link-name \"printf\") (%PTR) %I32)"
+          , "(c-printf \"%p\" (Cons 1 Empty))"
           ])
         "unsupported variadic argument type"
 
@@ -1983,21 +2012,21 @@ spec = do
   describe "ffi string marshaling" $ do
     it "pass pllisp string to C strlen" $
       run (T.unlines
-        [ "(ffi strlen (%PTR) %I64)"
-        , "(print (int-to-str (strlen \"hello\")))"
+        [ "(ffi c-strlen (:link-name \"strlen\") (%PTR) %I64)"
+        , "(print (int-to-str (c-strlen \"hello\")))"
         ]) >>= (`shouldBe` "5")
 
     it "pass pllisp string to C puts" $
       run (T.unlines
-        [ "(ffi puts (%PTR) %I32)"
-        , "(puts \"world\")"
+        [ "(ffi c-puts (:link-name \"puts\") (%PTR) %I32)"
+        , "(c-puts \"world\")"
         ]) >>= (`shouldBe` "world")
 
     it "receive C string from snprintf into buffer" $
       run (T.unlines
-        [ "(ffi-var snprintf (%PTR %I64 %PTR) %I32)"
+        [ "(ffi-var c-snprintf (:link-name \"snprintf\") (%PTR %I64 %PTR) %I32)"
         , "(let ((buf (substr \"xxxxxxxxxxxxxxxxxxxx\" 0 20)))"
-        , "  (let ((_ (snprintf buf 20 \"%ld\" 42)))"
+        , "  (let ((_ (c-snprintf buf 20 \"%ld\" 42)))"
         , "    (print buf)))"
         ]) >>= (`shouldBe` "42")
 
@@ -2030,9 +2059,9 @@ spec = do
     it "struct with byte array, write and read" $
       run (T.unlines
         [ "(ffi-struct Buf (data (%ARR 8 %I8)) (len %I32))"
-        , "(ffi-var snprintf (%PTR %I64 %PTR) %I32)"
+        , "(ffi-var c-snprintf (:link-name \"snprintf\") (%PTR %I64 %PTR) %I32)"
         , "(let ((b (Buf 4)))"
-        , "  (let ((_ (snprintf (.data b) 8 \"hey\")))"
+        , "  (let ((_ (c-snprintf (.data b) 8 \"hey\")))"
         , "    (print (.data b))))"
         ]) >>= (`shouldBe` "hey")
 
@@ -2069,43 +2098,43 @@ spec = do
   describe "ffi callbacks" $ do
     it "wrap closure as C function pointer" $
       run (T.unlines
-        [ "(ffi pll_test_apply_int (%PTR %I64) %I64)"
+        [ "(ffi c-pll-test-apply-int (:link-name \"pll_test_apply_int\") (%PTR %I64) %I64)"
         , "(ffi-callback int-cb (%I64) %I64)"
         , "(let ((doubler (int-cb (lam (x) (mul x 2)))))"
-        , "  (print (int-to-str (pll_test_apply_int doubler 21))))"
+        , "  (print (int-to-str (c-pll-test-apply-int doubler 21))))"
         ]) >>= (`shouldBe` "42")
 
     it "callback with closure capture" $
       run (T.unlines
-        [ "(ffi pll_test_apply_int (%PTR %I64) %I64)"
+        [ "(ffi c-pll-test-apply-int (:link-name \"pll_test_apply_int\") (%PTR %I64) %I64)"
         , "(ffi-callback int-cb (%I64) %I64)"
         , "(let ((offset 10)"
         , "      (adder (int-cb (lam (x) (add x offset)))))"
-        , "  (print (int-to-str (pll_test_apply_int adder 32))))"
+        , "  (print (int-to-str (c-pll-test-apply-int adder 32))))"
         ]) >>= (`shouldBe` "42")
 
     it "marshals f64 callback arguments and returns" $
       run (T.unlines
-        [ "(ffi pll_test_apply_flt64 (%PTR %F64) %F64)"
+        [ "(ffi c-pll-test-apply-flt64 (:link-name \"pll_test_apply_flt64\") (%PTR %F64) %F64)"
         , "(ffi-callback flt64-cb (%F64) %F64)"
         , "(let ((twice (flt64-cb (lam (x) (mulf x 2.0)))))"
-        , "  (print (flt-to-str (pll_test_apply_flt64 twice 21.25))))"
+        , "  (print (flt-to-str (c-pll-test-apply-flt64 twice 21.25))))"
         ]) >>= (`shouldBe` "42.5")
 
     it "marshals f32 callback arguments and returns" $
       run (T.unlines
-        [ "(ffi pll_test_apply_flt32 (%PTR %F32) %F32)"
+        [ "(ffi c-pll-test-apply-flt32 (:link-name \"pll_test_apply_flt32\") (%PTR %F32) %F32)"
         , "(ffi-callback flt32-cb (%F32) %F32)"
         , "(let ((bump (flt32-cb (lam (x) (addf x 1.25)))))"
-        , "  (print (flt-to-str (pll_test_apply_flt32 bump 41.25))))"
+        , "  (print (flt-to-str (c-pll-test-apply-flt32 bump 41.25))))"
         ]) >>= (`shouldBe` "42.5")
 
     it "marshals mixed numeric callback arguments" $
       run (T.unlines
-        [ "(ffi pll_test_apply_mix_num (%PTR %I64 %F64) %F64)"
+        [ "(ffi c-pll-test-apply-mix-num (:link-name \"pll_test_apply_mix_num\") (%PTR %I64 %F64) %F64)"
         , "(ffi-callback mix-cb (%I64 %F64) %F64)"
         , "(let ((combine (mix-cb (lam (i x) (addf (int-to-flt i) x)))))"
-        , "  (print (flt-to-str (pll_test_apply_mix_num combine 40 2.5))))"
+        , "  (print (flt-to-str (c-pll-test-apply-mix-num combine 40 2.5))))"
         ]) >>= (`shouldBe` "42.5")
 
     it "rejects void callback parameters" $
@@ -2126,19 +2155,19 @@ spec = do
     it "pass struct to C function that reads fields" $
       run (T.unlines
         [ "(ffi-struct Point (x %I32) (y %I32))"
-        , "(ffi pll_point_sum (%PTR) %I64)"
+        , "(ffi c-pll-point-sum (:link-name \"pll_point_sum\") (%PTR) %I64)"
         , "(let ((p (Point 7 11)))"
-        , "  (print (int-to-str (pll_point_sum p))))"
+        , "  (print (int-to-str (c-pll-point-sum p))))"
         ]) >>= (`shouldBe` "18")
 
     it "pass struct to C function that mutates fields" $
       run (T.unlines
         [ "(ffi-struct Point (x %I32) (y %I32))"
-        , "(ffi pll_point_sum (%PTR) %I64)"
-        , "(ffi pll_point_scale (%PTR %I64) %VOID)"
+        , "(ffi c-pll-point-sum (:link-name \"pll_point_sum\") (%PTR) %I64)"
+        , "(ffi c-pll-point-scale (:link-name \"pll_point_scale\") (%PTR %I64) %VOID)"
         , "(let ((p (Point 3 4)))"
-        , "  (let ((_ (pll_point_scale p 10)))"
-        , "    (print (int-to-str (pll_point_sum p)))))"
+        , "  (let ((_ (c-pll-point-scale p 10)))"
+        , "    (print (int-to-str (c-pll-point-sum p)))))"
         ]) >>= (`shouldBe` "70")
 
   describe "ffi enum edge cases" $ do
@@ -2158,9 +2187,9 @@ spec = do
     it "struct with array field accessed after construction" $
       run (T.unlines
         [ "(ffi-struct Msg (tag %I32) (buf (%ARR 16 %I8)))"
-        , "(ffi-var snprintf (%PTR %I64 %PTR) %I32)"
+        , "(ffi-var c-snprintf (:link-name \"snprintf\") (%PTR %I64 %PTR) %I32)"
         , "(let ((m (Msg 42)))"
-        , "  (let ((_ (snprintf (.buf m) 16 \"hello\")))"
+        , "  (let ((_ (c-snprintf (.buf m) 16 \"hello\")))"
         , "    (print (.buf m))))"
         ]) >>= (`shouldBe` "hello")
 
@@ -2168,10 +2197,10 @@ spec = do
     it "rejects duplicate names across ffi declaration forms" $
       shouldFailToCompile
         (T.unlines
-          [ "(ffi foo (%I64) %I64)"
-          , "(ffi-var foo (%PTR) %I32)"
+          [ "(ffi c-foo (:link-name \"foo\") (%I64) %I64)"
+          , "(ffi-var c-foo (:link-name \"foo\") (%PTR) %I32)"
           ])
-        "duplicate ffi definition: FOO"
+        "duplicate ffi definition: C-FOO"
 
     it "rejects duplicate names across ffi struct and enum declarations" $
       shouldFailToCompile
@@ -2185,16 +2214,16 @@ spec = do
       shouldFailToCompile
         (T.unlines
           [ "(ffi-struct Point (x %I32) (y %I32))"
-          , "(ffi bad-point (%Point) %I64)"
+          , "(ffi c-bad-point (:link-name \"bad_point\") (%Point) %I64)"
           ])
         "ffi does not support by-value struct or array types"
 
     it "struct passed to C function via polymorphic ptr" $
       run (T.unlines
         [ "(ffi-struct Point (x %I32) (y %I32))"
-        , "(ffi pll_point_sum (%PTR) %I64)"
+        , "(ffi c-pll-point-sum (:link-name \"pll_point_sum\") (%PTR) %I64)"
         , "(let ((a (Point 100 200)))"
-        , "  (print (int-to-str (pll_point_sum a))))"
+        , "  (print (int-to-str (c-pll-point-sum a))))"
         ]) >>= (`shouldBe` "300")
 
   describe "mutable refs" $ do

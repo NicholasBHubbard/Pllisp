@@ -24,7 +24,7 @@
   (ArgClause %USYM)
   (RestClause %USYM))
 
-(ffi pll-exit (%I32) %UNIT)
+(ffi c-pll-exit (:link-name "pll_exit") (%I32) %UNIT)
 
 (eval-when (:compile-toplevel)
   (fun emit-string-list ((xs %(List %STR))) %SYNTAX
@@ -346,7 +346,7 @@
       ((Right parsed) parsed)
       ((Left err)
         (let ((_ (print err))
-              (_ (pll-exit 1)))
+              (_ (c-pll-exit 1)))
           Empty)))))
 
 (fun flag-value ((entries %(List %ParsedEntry)) (name %USYM)) %BOOL

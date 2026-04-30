@@ -13,6 +13,7 @@ import qualified Pllisp.TypeCheck as TC
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.Text as T
 
 -- ENTRY POINT
 
@@ -42,9 +43,9 @@ data CCExprF
   | CCIf   CCExpr CCExpr CCExpr
   | CCApp  CCExpr [CCExpr]
   | CCType CST.Symbol [CST.Symbol] [CST.DataCon]
-  | CCFFI  CST.Symbol [Ty.CType] Ty.CType
+  | CCFFI  CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | CCFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
-  | CCFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | CCFFIVar CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | CCFFIEnum CST.Symbol [(CST.Symbol, Integer)]
   | CCFFICallback CST.Symbol [Ty.CType] Ty.CType
   | CCCase CCExpr [(CCPattern, CCExpr)]
@@ -75,9 +76,9 @@ convertExpr ctors (Loc.Located _ (Ty.Typed t expr)) = Ty.Typed t $ case expr of
     let ccBinds = [(n, bt, go rhs) | (n, bt, rhs) <- binds]
     in CCLet ccBinds (go body)
   TC.TRType n ps cs -> CCType n ps cs
-  TC.TRFFI n pts rt -> CCFFI n pts rt
+  TC.TRFFI n link pts rt -> CCFFI n link pts rt
   TC.TRFFIStruct n fs -> CCFFIStruct n fs
-  TC.TRFFIVar n pts rt -> CCFFIVar n pts rt
+  TC.TRFFIVar n link pts rt -> CCFFIVar n link pts rt
   TC.TRFFIEnum n vs -> CCFFIEnum n vs
   TC.TRFFICallback n pts rt -> CCFFICallback n pts rt
   TC.TRCase scr arms ->

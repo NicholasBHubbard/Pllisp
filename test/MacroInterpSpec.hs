@@ -202,8 +202,8 @@ spec = do
         Right val -> expectationFailure ("expected error, got: " ++ show val)
 
     it "reports FFI as unavailable at compile time" $
-      case evalSrc "(pll-print \"hello\")" of
-        Left err -> err `shouldContain` "ffi not available at macro expansion time: PLL-PRINT"
+      case evalSrc "(c-pll-print \"hello\")" of
+        Left err -> err `shouldContain` "ffi not available at macro expansion time: C-PLL-PRINT"
         Right val -> expectationFailure ("expected error, got: " ++ show val)
 
   describe "conversion" $ do

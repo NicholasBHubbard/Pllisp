@@ -24,29 +24,38 @@ The important boundaries are:
   pointer to struct or buffer storage.
 - Ownership and lifetime are still manual. If the C side expects memory to
   stay alive, pllisp will not enforce that contract for you.
-- Prefer namespaced runtime helper symbols such as `pll-exit` over raw libc
-  names in stdlib-style code.
+- Prefer raw FFI bindings named with a `c-` prefix, and use `:link-name` to
+  target the real external symbol.
 
 ## Declaring C Functions
 
 Use `ffi` for fixed-arity C functions:
 
 ```
-(ffi sqrt (%FLT) %FLT)
-(print (flt-to-str (sqrt 4.0)))
+(ffi c-sqrt (:link-name "sqrt") (%FLT) %FLT)
+(print (flt-to-str (c-sqrt 4.0)))
 ```
 
 Another example:
 
 ```
-(ffi pow (%FLT %FLT) %FLT)
-(print (flt-to-str (pow 2.0 10.0)))
+(ffi c-pow (:link-name "pow") (%FLT %FLT) %FLT)
+(print (flt-to-str (c-pow 2.0 10.0)))
 ```
 
 Syntax:
 
 ```
-(ffi name (param-types...) return-type)
+(ffi name [(:link-name "external_symbol")] (param-types...) return-type)
+```
+
+`name` is the pllisp binding. `:link-name` is optional, but recommended for
+raw C imports because it decouples the pllisp name from the linked symbol.
+
+Recommended style:
+
+```
+(ffi c-strlen (:link-name "strlen") (%PTR) %I64)
 ```
 
 These declarations are normally written at top level.
@@ -97,13 +106,13 @@ At the pllisp level:
 That is why examples like these work:
 
 ```
-(ffi strlen (%PTR) %I64)
-(print (int-to-str (strlen "hello")))
+(ffi c-strlen (:link-name "strlen") (%PTR) %I64)
+(print (int-to-str (c-strlen "hello")))
 ```
 
 ```
-(ffi puts (%PTR) %I32)
-(puts "world")
+(ffi c-puts (:link-name "puts") (%PTR) %I32)
+(c-puts "world")
 ```
 
 This is a sharp edge worth understanding: pointer-like FFI values are exposed
@@ -114,16 +123,16 @@ through the language’s string/pointer representation.
 Use `ffi-var` for C variadics:
 
 ```
-(ffi-var printf (%PTR) %I32)
-(printf "%ld" 42)
+(ffi-var c-printf (:link-name "printf") (%PTR) %I32)
+(c-printf "%ld" 42)
 ```
 
 The fixed parameter list goes in the declaration. Extra arguments are supplied
 normally at the call site:
 
 ```
-(ffi-var printf (%PTR) %I32)
-(printf "%ld+%ld" 10 20)
+(ffi-var c-printf (:link-name "printf") (%PTR) %I32)
+(c-printf "%ld+%ld" 10 20)
 ```
 
 The compiler rejects variadic signatures that use by-value structs, inline
@@ -203,10 +212,10 @@ struct itself.
 
 ```
 (ffi-struct Buf (data (%ARR 8 %I8)) (len %I32))
-(ffi-var snprintf (%PTR %I64 %PTR) %I32)
+(ffi-var c-snprintf (:link-name "snprintf") (%PTR %I64 %PTR) %I32)
 
 (let ((b (Buf 4)))
-  (let ((_ (snprintf (.data b) 8 "hey")))
+  (let ((_ (c-snprintf (.data b) 8 "hey")))
     (print (.data b))))
 ```
 
@@ -251,17 +260,17 @@ Enum variants are ordinary integer-like values at the pllisp level:
 Pllisp strings can be passed directly to `%PTR` parameters:
 
 ```
-(ffi strlen (%PTR) %I64)
-(print (int-to-str (strlen "hello")))
+(ffi c-strlen (:link-name "strlen") (%PTR) %I64)
+(print (int-to-str (c-strlen "hello")))
 ```
 
 You can also prepare a mutable buffer-like value and let C fill it:
 
 ```
-(ffi-var snprintf (%PTR %I64 %PTR) %I32)
+(ffi-var c-snprintf (:link-name "snprintf") (%PTR %I64 %PTR) %I32)
 
 (let ((buf (substr "xxxxxxxxxxxxxxxxxxxx" 0 20)))
-  (let ((_ (snprintf buf 20 "%ld" 42)))
+  (let ((_ (c-snprintf buf 20 "%ld" 42)))
     (print buf)))
 ```
 
@@ -279,42 +288,42 @@ That declaration produces a wrapper function. Call it on a pllisp closure to
 obtain a C-callable function pointer:
 
 ```
-(ffi pll_test_apply_int (%PTR %I64) %I64)
+(ffi c-pll-test-apply-int (:link-name "pll_test_apply_int") (%PTR %I64) %I64)
 (ffi-callback int-cb (%I64) %I64)
 
 (let ((doubler (int-cb (lam (x) (mul x 2)))))
-  (print (int-to-str (pll_test_apply_int doubler 21))))
+  (print (int-to-str (c-pll-test-apply-int doubler 21))))
 ```
 
 Closures may capture surrounding values:
 
 ```
-(ffi pll_test_apply_int (%PTR %I64) %I64)
+(ffi c-pll-test-apply-int (:link-name "pll_test_apply_int") (%PTR %I64) %I64)
 (ffi-callback int-cb (%I64) %I64)
 
 (let ((offset 10)
       (adder (int-cb (lam (x) (add x offset)))))
-  (print (int-to-str (pll_test_apply_int adder 32))))
+  (print (int-to-str (c-pll-test-apply-int adder 32))))
 ```
 
 Float callbacks are supported too:
 
 ```
-(ffi pll_test_apply_flt64 (%PTR %F64) %F64)
+(ffi c-pll-test-apply-flt64 (:link-name "pll_test_apply_flt64") (%PTR %F64) %F64)
 (ffi-callback flt64-cb (%F64) %F64)
 
 (let ((twice (flt64-cb (lam (x) (mulf x 2.0)))))
-  (print (flt-to-str (pll_test_apply_flt64 twice 21.25))))
+  (print (flt-to-str (c-pll-test-apply-flt64 twice 21.25))))
 ```
 
 So are mixed numeric signatures:
 
 ```
-(ffi pll_test_apply_mix_num (%PTR %I64 %F64) %F64)
+(ffi c-pll-test-apply-mix-num (:link-name "pll_test_apply_mix_num") (%PTR %I64 %F64) %F64)
 (ffi-callback mix-cb (%I64 %F64) %F64)
 
 (let ((combine (mix-cb (lam (i x) (addf (int-to-flt i) x)))))
-  (print (flt-to-str (pll_test_apply_mix_num combine 40 2.5))))
+  (print (flt-to-str (c-pll-test-apply-mix-num combine 40 2.5))))
 ```
 
 The callback boundary is still limited to scalar and pointer ABI types. Use
@@ -326,22 +335,22 @@ Passing a struct value to a `%PTR` parameter lets C code inspect or mutate it:
 
 ```
 (ffi-struct Point (x %I32) (y %I32))
-(ffi pll_point_sum (%PTR) %I64)
+(ffi c-pll-point-sum (:link-name "pll_point_sum") (%PTR) %I64)
 
 (let ((p (Point 7 11)))
-  (print (int-to-str (pll_point_sum p))))
+  (print (int-to-str (c-pll-point-sum p))))
 ```
 
 And mutation:
 
 ```
 (ffi-struct Point (x %I32) (y %I32))
-(ffi pll_point_sum (%PTR) %I64)
-(ffi pll_point_scale (%PTR %I64) %VOID)
+(ffi c-pll-point-sum (:link-name "pll_point_sum") (%PTR) %I64)
+(ffi c-pll-point-scale (:link-name "pll_point_scale") (%PTR %I64) %VOID)
 
 (let ((p (Point 3 4)))
-  (let ((_ (pll_point_scale p 10)))
-    (print (int-to-str (pll_point_sum p)))))
+  (let ((_ (c-pll-point-scale p 10)))
+    (print (int-to-str (c-pll-point-sum p)))))
 ```
 
 ## Practical Advice
@@ -353,6 +362,7 @@ And mutation:
 - use `%PTR`, not `%Point` or `(%ARR ...)`, in function and callback signatures
 - keep variadic calls boring: ints, floats, strings, booleans
 - keep FFI declarations near the top of the file
+- name raw foreign bindings with `c-` and use `:link-name` for the real symbol
 - do not expect FFI declarations to export cleanly across modules right now
 
 ## What FFI Does Not Change

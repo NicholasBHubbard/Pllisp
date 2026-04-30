@@ -359,6 +359,24 @@ spec = do
         [Loc.Located _ (CST.ExprLam (CST.LamList [CST.TSymbol "X" (Just (Ty.TyCon "LIST" [Ty.TyInt]))] CST.NoExtra) Nothing _)] -> pure ()
         other -> expectationFailure (show other)
 
+    it "ffi with :link-name metadata parses" $ do
+      prog <- viaSExpr "(ffi c-exit (:link-name \"exit\") (%I32) %VOID)"
+      length (CST.progExprs prog) `shouldBe` 1
+
+    it "ffi without :link-name still parses" $ do
+      prog <- viaSExpr "(ffi sqrt (%FLT) %FLT)"
+      length (CST.progExprs prog) `shouldBe` 1
+
+    it "ffi-var with :link-name metadata parses" $ do
+      prog <- viaSExpr "(ffi-var c-printf (:link-name \"printf\") (%PTR) %I32)"
+      length (CST.progExprs prog) `shouldBe` 1
+
+    it "rejects ffi :link-name metadata without a string" $
+      shouldFailSExpr "(ffi c-exit (:link-name exit) (%I32) %VOID)"
+
+    it "rejects ffi-var :link-name metadata without a string" $
+      shouldFailSExpr "(ffi-var c-printf (:link-name printf) (%PTR) %I32)"
+
   describe "record types" $ do
     it "record type declaration" $ do
       prog <- viaSExpr "(type Person () (Person (name %STR) (age %INT)))"

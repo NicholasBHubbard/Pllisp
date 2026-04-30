@@ -140,8 +140,8 @@ See [Modules](modules.md).
 Pllisp can call C functions and describe C structs directly:
 
 ```
-(ffi sqrt (%FLT) %FLT)
-(print (flt-to-str (sqrt 9.0)))
+(ffi c-sqrt (:link-name "sqrt") (%FLT) %FLT)
+(print (flt-to-str (c-sqrt 9.0)))
 ```
 
 See [FFI](ffi.md).

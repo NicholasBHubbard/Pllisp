@@ -25,7 +25,8 @@ data CtorInfo = CtorInfo
   } deriving (Show)
 
 data FFIInfo = FFIInfo
-  { ffiParamCTys :: [Ty.CType]
+  { ffiExternSym :: T.Text
+  , ffiParamCTys :: [Ty.CType]
   , ffiRetCTy    :: Ty.CType
   , ffiIsVariadic :: !Bool
   } deriving (Show)
@@ -62,7 +63,7 @@ codegen prog = evalState go initState
     callbacks = collectCallbacks (LL.llExprs prog)
     defMap    = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
     initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis structs callbacks
-    ffiList = filter (not . isBuiltinExtern . fst) (M.toList ffis)
+    ffiList = filter (not . isBuiltinExtern . ffiExternSym . snd) (M.toList ffis)
     ffiDecls = map genFFIDecl ffiList
 
     go :: CgM T.Text
@@ -95,7 +96,7 @@ codegenRepl roundNum priorGlobals importedMeta prog = evalState go initState
     callbacks = collectCallbacks metaExprs
     defMap    = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
     initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis structs callbacks
-    ffiList = filter (not . isBuiltinExtern . fst) (M.toList ffis)
+    ffiList = filter (not . isBuiltinExtern . ffiExternSym . snd) (M.toList ffis)
     ffiDecls = map genFFIDecl ffiList
     prefix = "__r" <> tshow roundNum <> "_"
 
@@ -287,17 +288,17 @@ builtinExterns = S.fromList
   , "PCRE2_COMPILE_8", "PCRE2_MATCH_DATA_CREATE_FROM_PATTERN_8"
   , "PCRE2_MATCH_8", "PCRE2_GET_OVECTOR_POINTER_8", "PCRE2_GET_OVECTOR_COUNT_8"
   , "PCRE2_MATCH_DATA_FREE_8", "PCRE2_CODE_FREE_8", "PCRE2_SUBSTITUTE_8"
-  , "PLL-PRINT", "PLL-READ-LINE", "PLL-IS-EOF", "PLL-ARGC", "PLL-ARGV", "PLL-EXIT"
-  , "PLL-INT-TO-STR", "PLL-FLT-TO-STR"
-  , "PLL-RX-MATCH", "PLL-RX-FIND", "PLL-RX-SUB", "PLL-RX-GSUB"
-  , "PLL-RX-SPLIT", "PLL-RX-CAPTURES", "PLL-RX-COMPILE"
+  , "PLL_PRINT", "PLL_READ_LINE", "PLL_IS_EOF", "PLL_ARGC", "PLL_ARGV", "PLL_EXIT"
+  , "PLL_INT_TO_STR", "PLL_FLT_TO_STR"
+  , "PLL_RX_MATCH", "PLL_RX_FIND", "PLL_RX_SUB", "PLL_RX_GSUB"
+  , "PLL_RX_SPLIT", "PLL_RX_CAPTURES", "PLL_RX_COMPILE"
   , "PLL_FFI_CALL", "PLL_FFI_CALL_VAR"
   , "PLL_MAKE_CALLBACK", "PLL_TEST_APPLY_INT", "PLL_TEST_APPLY_FLT64"
   , "PLL_TEST_APPLY_FLT32", "PLL_TEST_APPLY_MIX_NUM"
   , "PLL_POINT_SUM", "PLL_POINT_SCALE"
   ]
 
-isBuiltinExtern :: CST.Symbol -> Bool
+isBuiltinExtern :: T.Text -> Bool
 isBuiltinExtern name = S.member (T.toUpper name) builtinExterns
 
 fmtConstants :: T.Text
@@ -352,11 +353,14 @@ isConcretePtr _      _               = False
 collectFFI :: [LL.LLExpr] -> M.Map CST.Symbol FFIInfo
 collectFFI = foldl' go M.empty
   where
-    go acc (Ty.Typed _ (LL.LLFFI name paramCTys retCTy)) =
-      M.insert name (FFIInfo paramCTys retCTy False) acc
-    go acc (Ty.Typed _ (LL.LLFFIVar name paramCTys retCTy)) =
-      M.insert name (FFIInfo paramCTys retCTy True) acc
+    go acc (Ty.Typed _ (LL.LLFFI name linkName paramCTys retCTy)) =
+      M.insert name (FFIInfo (effectiveFFISymbol name linkName) paramCTys retCTy False) acc
+    go acc (Ty.Typed _ (LL.LLFFIVar name linkName paramCTys retCTy)) =
+      M.insert name (FFIInfo (effectiveFFISymbol name linkName) paramCTys retCTy True) acc
     go acc _ = acc
+
+effectiveFFISymbol :: CST.Symbol -> Maybe T.Text -> T.Text
+effectiveFFISymbol name = maybe (sanitize (T.toLower name)) id
 
 collectFFIStructs :: [LL.LLExpr] -> M.Map CST.Symbol Ty.StructLayout
 collectFFIStructs = foldl' go M.empty
@@ -375,13 +379,13 @@ collectCallbacks = foldl' go M.empty
 genFFIDecl :: (CST.Symbol, FFIInfo) -> T.Text
 genFFIDecl (name, ffi)
   | ffiIsVariadic ffi =
-    let cName = sanitize (T.toLower name)
+    let cName = ffiExternSym ffi
         retTyStr = if ffiRetCTy ffi == Ty.CVoid then "void" else Ty.cTypeLlvm (ffiRetCTy ffi)
         paramTyStrs = T.intercalate ", " (map Ty.cTypeLlvm (ffiParamCTys ffi))
         sep = if null (ffiParamCTys ffi) then "" else ", "
     in "declare " <> retTyStr <> " @" <> cName <> "(" <> paramTyStrs <> sep <> "...)"
   | otherwise =
-    let cName = sanitize (T.toLower name)
+    let cName = ffiExternSym ffi
         retTyStr = if ffiRetCTy ffi == Ty.CVoid then "void" else Ty.cTypeLlvm (ffiRetCTy ffi)
         paramTyStrs = T.intercalate ", " (map Ty.cTypeLlvm (ffiParamCTys ffi))
     in "declare " <> retTyStr <> " @" <> cName <> "(" <> paramTyStrs <> ")"
@@ -448,7 +452,7 @@ lookupVar name = do
         _ -> do
           ffis <- gets csFFI
           case M.lookup name ffis of
-            Just _ -> pure ("@" <> sanitize (T.toLower name))
+            Just ffi -> pure ("@" <> ffiExternSym ffi)
             Nothing -> error ("Codegen: unbound variable: " <> T.unpack name)
 
 tshow :: Show a => a -> T.Text
@@ -777,7 +781,7 @@ genFFICall name ffi argResults
 -- Variadic FFI: direct LLVM call with all args
 genFFICallVar :: CST.Symbol -> FFIInfo -> [(Ty.Type, T.Text)] -> CgM T.Text
 genFFICallVar name ffi argResults = do
-  let cName = sanitize (T.toLower name)
+  let cName = ffiExternSym ffi
       fixedCTys = ffiParamCTys ffi
       retCTy = ffiRetCTy ffi
       nFixed = length fixedCTys
@@ -856,7 +860,7 @@ pllispToCType _         = Ty.CPtr  -- pointers for everything else
 
 genFFICallFixed :: CST.Symbol -> FFIInfo -> [(Ty.Type, T.Text)] -> CgM T.Text
 genFFICallFixed name ffi argResults = do
-  let cName = sanitize (T.toLower name)
+  let cName = ffiExternSym ffi
       paramCTys = ffiParamCTys ffi
       retCTy = ffiRetCTy ffi
       nargs = length paramCTys

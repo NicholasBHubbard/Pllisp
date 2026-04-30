@@ -221,7 +221,7 @@ collectDeclarationExports envs typed =
     , TC.buildFFIContext ffiVarDecls
     , TC.buildFFIStructCtorContext ffiStructDecls
     , ffiEnumCtx
-    , TC.buildFFIContext ffiCallbackDecls
+    , TC.buildFFIContext [(name, Nothing, paramTys, retTy) | (name, paramTys, retTy) <- ffiCallbackDecls]
     ]
   where
     typeDecls =
@@ -230,12 +230,12 @@ collectDeclarationExports envs typed =
       ]
     ctorExports = TC.buildCtorContext typeDecls
     ffiDecls =
-      [ (name, paramTys, retTy)
-      | Loc.Located _ (Ty.Typed _ (TC.TRFFI name paramTys retTy)) <- typed
+      [ (name, linkName, paramTys, retTy)
+      | Loc.Located _ (Ty.Typed _ (TC.TRFFI name linkName paramTys retTy)) <- typed
       ]
     ffiVarDecls =
-      [ (name, paramTys, retTy)
-      | Loc.Located _ (Ty.Typed _ (TC.TRFFIVar name paramTys retTy)) <- typed
+      [ (name, linkName, paramTys, retTy)
+      | Loc.Located _ (Ty.Typed _ (TC.TRFFIVar name linkName paramTys retTy)) <- typed
       ]
     ffiStructDecls =
       [ (name, fields)
@@ -578,11 +578,11 @@ analyzeCtExpr st local (Loc.Located _ (Ty.Typed _ expr)) = case expr of
     analyzeCtExpr st (foldl (\acc (name, _) -> M.insert name Nothing acc) local params) body
   TC.TRRecur args ->
     mapM_ (analyzeCtExpr st local) args
-  TC.TRFFI name _ _ ->
+  TC.TRFFI name _ _ _ ->
     Left ("ffi not available at macro expansion time: " ++ T.unpack name)
   TC.TRFFIStruct _ _ ->
     Right ()
-  TC.TRFFIVar name _ _ ->
+  TC.TRFFIVar name _ _ _ ->
     Left ("ffi not available at macro expansion time: " ++ T.unpack name)
   TC.TRFFIEnum _ _ ->
     Right ()

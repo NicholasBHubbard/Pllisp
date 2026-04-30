@@ -47,9 +47,9 @@ data LLExprF
   | LLIf   LLExpr LLExpr LLExpr
   | LLApp  LLExpr [LLExpr]
   | LLType CST.Symbol [CST.Symbol] [CST.DataCon]
-  | LLFFI  CST.Symbol [Ty.CType] Ty.CType
+  | LLFFI  CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | LLFFIStruct CST.Symbol [(CST.Symbol, Ty.CType)]
-  | LLFFIVar CST.Symbol [Ty.CType] Ty.CType
+  | LLFFIVar CST.Symbol (Maybe T.Text) [Ty.CType] Ty.CType
   | LLFFIEnum CST.Symbol [(CST.Symbol, Integer)]
   | LLFFICallback CST.Symbol [Ty.CType] Ty.CType
   | LLCase LLExpr [(LLPattern, LLExpr)]
@@ -123,9 +123,9 @@ liftExpr (Ty.Typed t expr) = case expr of
     pure (Ty.Typed t (LLApp f' args'))
 
   CC.CCType n ps cs -> pure (Ty.Typed t (LLType n ps cs))
-  CC.CCFFI n pts rt -> pure (Ty.Typed t (LLFFI n pts rt))
+  CC.CCFFI n link pts rt -> pure (Ty.Typed t (LLFFI n link pts rt))
   CC.CCFFIStruct n fs -> pure (Ty.Typed t (LLFFIStruct n fs))
-  CC.CCFFIVar n pts rt -> pure (Ty.Typed t (LLFFIVar n pts rt))
+  CC.CCFFIVar n link pts rt -> pure (Ty.Typed t (LLFFIVar n link pts rt))
   CC.CCFFIEnum n vs -> pure (Ty.Typed t (LLFFIEnum n vs))
   CC.CCFFICallback n pts rt -> pure (Ty.Typed t (LLFFICallback n pts rt))
 

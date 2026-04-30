@@ -173,10 +173,10 @@ validateRuntimeSyntaxTypes = firstJust checkExpr
           `orElse` checkExpr body
       TC.TRRecur args ->
         firstJust checkExpr args
-      TC.TRFFI _ _ _ -> Nothing
+      TC.TRFFI _ _ _ _ -> Nothing
       TC.TRFFIStruct _ fields ->
         firstJust (checkCType sp . snd) fields
-      TC.TRFFIVar _ _ _ -> Nothing
+      TC.TRFFIVar _ _ _ _ -> Nothing
       TC.TRFFIEnum _ _ -> Nothing
       TC.TRFFICallback _ _ _ -> Nothing
 
