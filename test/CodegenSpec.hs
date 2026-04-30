@@ -1276,6 +1276,35 @@ spec = do
             ]
       runWithModules [("BASE", modBase), ("LIB", modLib)] mainSrc >>= (`shouldBe` "x\nx\nx\nx")
 
+    it "imports val and var bindings exported from another module" $ do
+      let modState = T.unlines
+            [ "(module STATE)"
+            , "(val banner \"ready\")"
+            , "(var counter 41)"
+            ]
+          mainSrc = T.unlines
+            [ "(import STATE (banner counter))"
+            , "(print banner)"
+            , "(let ((_ (set! counter (add (deref counter) 1))))"
+            , "  (print (int-to-str (deref counter))))"
+            ]
+      runWithModules [("STATE", modState)] mainSrc >>= (`shouldBe` "ready\n42")
+
+    it "rejects set! on an imported val binding" $
+      shouldFailToCompileModules
+        [ ("STATE", T.unlines
+            [ "(module STATE)"
+            , "(val banner \"ready\")"
+            , "(var counter 0)"
+            ])
+        ]
+        (T.unlines
+          [ "(import STATE (banner counter))"
+          , "(let ((_ (set! counter 1)))"
+          , "  (set! banner \"nope\"))"
+          ])
+        "cannot unify"
+
   describe "macros" $ do
     it "when macro" $ do
       run "(when true (print \"yes\"))"
@@ -1320,6 +1349,19 @@ spec = do
         [ "(fun inc ((x %INT)) %INT"
         , "  (add x 1))"
         , "(print (int-to-str (inc 41)))"
+        ]) >>= (`shouldBe` "42")
+
+    it "val introduces a top-level immutable binding" $ do
+      run (T.unlines
+        [ "(val answer 42)"
+        , "(print (int-to-str answer))"
+        ]) >>= (`shouldBe` "42")
+
+    it "var introduces a top-level mutable ref binding" $ do
+      run (T.unlines
+        [ "(var counter 0)"
+        , "(let ((_ (set! counter 41)))"
+        , "  (print (int-to-str (add (deref counter) 1))))"
         ]) >>= (`shouldBe` "42")
 
     it "macro with type annotations" $ do

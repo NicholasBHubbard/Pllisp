@@ -11,6 +11,16 @@
     (_
       (error "fun expects (fun name params body) or (fun name params %type body)"))))
 
+(mac val (name expr)
+  (let ((_ (syntax-symbol-name name)))
+    `(SPLICE-TOPLEVEL
+       (let ((,name ,expr)) unit))))
+
+(mac var (name expr)
+  (let ((_ (syntax-symbol-name name)))
+    `(SPLICE-TOPLEVEL
+       (let ((,name (ref ,expr))) unit))))
+
 (type List (a)
   (Empty)
   (Cons a %(List a)))

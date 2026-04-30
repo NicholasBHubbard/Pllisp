@@ -1,0 +1,6 @@
+(import STATE (banner counter))
+
+(print banner)
+
+(let ((_ (set! counter (add (deref counter) 1))))
+  (print (int-to-str (deref counter))))

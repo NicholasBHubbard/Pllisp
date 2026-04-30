@@ -23,7 +23,7 @@ spec = do
       let actual = S.fromList (specials ++ preludeMacros)
       mapM_ (\name -> S.member name actual `shouldBe` True)
         [ "eval-when", "syntax-case", "fun", "progn", "if_", "when", "unless"
-        , "cond", "if-let", "when-let", "unless-let", "and", "or"
+        , "cond", "if-let", "when-let", "unless-let", "and", "or", "val", "var"
         ]
 
   describe "pllisp-mode builtin surface" $ do
@@ -72,7 +72,7 @@ expectedKeywordNames = S.fromList
   , "module", "import", "mac", "eval-when", "syntax-case", "ffi", "ffi-struct"
   , "ffi-var", "ffi-enum", "ffi-callback"
   , "fun", "progn", "if_", "when", "unless", "cond"
-  , "if-let", "when-let", "unless-let", "and", "or"
+  , "if-let", "when-let", "unless-let", "and", "or", "val", "var"
   ]
 
 expectedBuiltinNames :: S.Set T.Text

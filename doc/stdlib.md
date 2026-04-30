@@ -127,6 +127,31 @@ If you need multiple expressions in the body, use `progn` inside the body:
     (print (concat "hello " name))))
 ```
 
+### `val`
+
+Creates a top-level immutable binding:
+
+```
+(val answer 42)
+(print (int-to-str answer))
+```
+
+This is declaration-style sugar for an exported top-level binding. Use `val`
+when you want a named module constant without writing a full `let`.
+
+### `var`
+
+Creates a top-level mutable reference binding:
+
+```
+(var counter 0)
+(set! counter (add (deref counter) 1))
+(print (int-to-str (deref counter)))
+```
+
+`var` binds a `REF` value. Reads still use `deref`, and writes still use
+`set!`.
+
 ### `progn`
 
 Sequences expressions and returns the last one:

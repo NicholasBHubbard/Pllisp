@@ -13,7 +13,7 @@
   "Special forms and declaration keywords.")
 
 (defconst pllisp-prelude-macros
-  '("fun" "progn" "if_" "when" "unless" "cond"
+  '("fun" "val" "var" "progn" "if_" "when" "unless" "cond"
     "if-let" "when-let" "unless-let" "and" "or")
   "Implicit PRELUDE macros.")
 
