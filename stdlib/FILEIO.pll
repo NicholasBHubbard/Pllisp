@@ -1,0 +1,367 @@
+(module FILEIO)
+
+(type FileError ()
+  (FileError %USYM %STR %STR))
+
+(type InFile ()
+  (InFile %INT %STR))
+
+(type OutFile ()
+  (OutFile %INT %STR))
+
+(type AppendFile ()
+  (AppendFile %INT %STR))
+
+(type FileKind ()
+  (RegularFile)
+  (Directory)
+  (Other))
+
+(type FileInfo ()
+  (FileInfo %STR %FileKind %INT))
+
+(eval-when (:compile-toplevel)
+  (fun emit-either-seq ((forms %SYNTAX)) %SYNTAX
+    (syntax-case forms
+      ((expr)
+        expr)
+      ((expr &rest rest)
+        `(case ,expr
+           ((Left err) (Left err))
+           ((Right _) ,(emit-either-seq rest))))
+      (_
+        (error "with-input, with-output, and with-append expect at least one body form"))))
+
+  (mac with-input ((fh path) &rest body)
+    (let ((fh-name (syntax-symbol-name fh)))
+      (let ((fh-sym (syntax-raw-symbol fh-name)))
+        `(case (,(syntax-raw-symbol "FILEIO.OPEN-IN") ,path)
+           ((Left err) (Left err))
+           ((Right ,fh-sym)
+             (let ((result ,(emit-either-seq body)))
+               (case (,(syntax-raw-symbol "FILEIO.CLOSE-IN") ,fh-sym)
+                 ((Left close-err)
+                   (case result
+                     ((Left err) (Left err))
+                     ((Right _) (Left close-err))))
+                 ((Right _) result))))))))
+
+  (mac with-output ((fh path) &rest body)
+    (let ((fh-name (syntax-symbol-name fh)))
+      (let ((fh-sym (syntax-raw-symbol fh-name)))
+        `(case (,(syntax-raw-symbol "FILEIO.OPEN-OUT") ,path)
+           ((Left err) (Left err))
+           ((Right ,fh-sym)
+             (let ((result ,(emit-either-seq body)))
+               (case (,(syntax-raw-symbol "FILEIO.CLOSE-OUT") ,fh-sym)
+                 ((Left close-err)
+                   (case result
+                     ((Left err) (Left err))
+                     ((Right _) (Left close-err))))
+                 ((Right _) result))))))))
+
+  (mac with-append ((fh path) &rest body)
+    (let ((fh-name (syntax-symbol-name fh)))
+      (let ((fh-sym (syntax-raw-symbol fh-name)))
+        `(case (,(syntax-raw-symbol "FILEIO.OPEN-APPEND") ,path)
+           ((Left err) (Left err))
+           ((Right ,fh-sym)
+             (let ((result ,(emit-either-seq body)))
+               (case (,(syntax-raw-symbol "FILEIO.CLOSE-APPEND") ,fh-sym)
+                 ((Left close-err)
+                   (case result
+                     ((Left err) (Left err))
+                     ((Right _) (Left close-err))))
+                 ((Right _) result))))))))
+
+  (mac foreach-line ((line path) &rest body)
+    `(,(syntax-raw-symbol "WITH-INPUT") (fh ,path)
+       (let ((loop (fun loop () %(Either %FileError %UNIT)
+                     (case (,(syntax-raw-symbol "FILEIO.NEXT-LINE") fh)
+                       ((Left err) (Left err))
+                       ((Right maybe-line)
+                         (case maybe-line
+                           ((Nothing) (Right unit))
+                           ((Just ,line)
+                             (progn
+                               ,@body
+                               (loop)))))))))
+         (loop)))))
+
+(ffi c-pll-file-open-in (:link-name "pll_file_open_in") (%PTR) %I64)
+(ffi c-pll-file-open-out (:link-name "pll_file_open_out") (%PTR) %I64)
+(ffi c-pll-file-open-append (:link-name "pll_file_open_append") (%PTR) %I64)
+(ffi c-pll-file-close (:link-name "pll_file_close") (%I64) %I64)
+(ffi c-pll-file-read-line (:link-name "pll_file_read_line") (%I64) %PTR)
+(ffi c-pll-file-read-all (:link-name "pll_file_read_all") (%I64) %PTR)
+(ffi c-pll-file-eof (:link-name "pll_file_eof") (%I64) %I64)
+(ffi c-pll-file-write (:link-name "pll_file_write") (%I64 %PTR) %I64)
+(ffi c-pll-file-flush (:link-name "pll_file_flush") (%I64) %I64)
+(ffi c-pll-file-last-error (:link-name "pll_file_last_error") () %PTR)
+(ffi c-pll-file-last-status (:link-name "pll_file_last_status") () %I64)
+(ffi c-pll-file-read-status (:link-name "pll_file_read_status") () %I64)
+(ffi c-pll-file-exists (:link-name "pll_file_exists") (%PTR) %I64)
+(ffi c-pll-file-is-file (:link-name "pll_file_is_file") (%PTR) %I64)
+(ffi c-pll-file-is-dir (:link-name "pll_file_is_dir") (%PTR) %I64)
+(ffi c-pll-file-stat (:link-name "pll_file_stat") (%PTR) %I64)
+(ffi c-pll-file-last-stat-kind (:link-name "pll_file_last_stat_kind") () %I64)
+(ffi c-pll-file-last-stat-size (:link-name "pll_file_last_stat_size") () %I64)
+(ffi c-pll-file-readdir-count (:link-name "pll_file_readdir_count") (%PTR) %I64)
+(ffi c-pll-file-readdir-item (:link-name "pll_file_readdir_item") (%I64) %PTR)
+(ffi c-pll-file-mkdir (:link-name "pll_file_mkdir") (%PTR) %I64)
+(ffi c-pll-file-mkdir-p (:link-name "pll_file_mkdir_p") (%PTR) %I64)
+(ffi c-pll-file-unlink (:link-name "pll_file_unlink") (%PTR) %I64)
+(ffi c-pll-file-rename (:link-name "pll_file_rename") (%PTR %PTR) %I64)
+(ffi c-pll-file-copy (:link-name "pll_file_copy") (%PTR %PTR) %I64)
+
+(fun kind-from-code ((n %INT)) %FileKind
+  (if (eqi n 1)
+    RegularFile
+    (if (eqi n 2)
+      Directory
+      Other)))
+
+(fun error-op ((err %FileError)) %USYM
+  (case err
+    ((FileError op _ _) op)))
+
+(fun error-path ((err %FileError)) %STR
+  (case err
+    ((FileError _ path _) path)))
+
+(fun error-message ((err %FileError)) %STR
+  (case err
+    ((FileError _ _ message) message)))
+
+(fun info-path ((info %FileInfo)) %STR
+  (case info
+    ((FileInfo path _ _) path)))
+
+(fun info-kind ((info %FileInfo)) %FileKind
+  (case info
+    ((FileInfo _ kind _) kind)))
+
+(fun info-size ((info %FileInfo)) %INT
+  (case info
+    ((FileInfo _ _ size) size)))
+
+(fun in-token ((fh %InFile)) %INT
+  (case fh
+    ((InFile token _) token)))
+
+(fun in-path ((fh %InFile)) %STR
+  (case fh
+    ((InFile _ path) path)))
+
+(fun out-token ((fh %OutFile)) %INT
+  (case fh
+    ((OutFile token _) token)))
+
+(fun out-path ((fh %OutFile)) %STR
+  (case fh
+    ((OutFile _ path) path)))
+
+(fun append-token ((fh %AppendFile)) %INT
+  (case fh
+    ((AppendFile token _) token)))
+
+(fun append-path ((fh %AppendFile)) %STR
+  (case fh
+    ((AppendFile _ path) path)))
+
+(fun readdir-items-from ((i %INT) (n %INT)) %(List %STR)
+  (if (lti i n)
+    (Cons (c-pll-file-readdir-item i) (readdir-items-from (add i 1) n))
+    Empty))
+
+(fun trim-final-empty ((xs %(List %STR))) %(List %STR)
+  (case xs
+    ((Empty) Empty)
+    ((Cons x rest)
+      (case rest
+        ((Empty)
+          (if (eqs x "")
+            Empty
+            (Cons x Empty)))
+        (_
+          (Cons x (trim-final-empty rest)))))))
+
+(fun join-lines ((xs %(List %STR))) %STR
+  (case xs
+    ((Empty) "")
+    ((Cons line rest)
+      (concat line (concat "\n" (join-lines rest))))))
+
+(fun open-in ((path %STR)) %(Either %FileError %InFile)
+  (let ((token (c-pll-file-open-in path)))
+    (if (eqi token 0)
+      (Left (FileError :open-in path (c-pll-file-last-error)))
+      (Right (InFile token path)))))
+
+(fun open-out ((path %STR)) %(Either %FileError %OutFile)
+  (let ((token (c-pll-file-open-out path)))
+    (if (eqi token 0)
+      (Left (FileError :open-out path (c-pll-file-last-error)))
+      (Right (OutFile token path)))))
+
+(fun open-append ((path %STR)) %(Either %FileError %AppendFile)
+  (let ((token (c-pll-file-open-append path)))
+    (if (eqi token 0)
+      (Left (FileError :open-append path (c-pll-file-last-error)))
+      (Right (AppendFile token path)))))
+
+(fun close-in ((fh %InFile)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-close (in-token fh)) 0)
+    (Left (FileError :close-in (in-path fh) (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun close-out ((fh %OutFile)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-close (out-token fh)) 0)
+    (Left (FileError :close-out (out-path fh) (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun close-append ((fh %AppendFile)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-close (append-token fh)) 0)
+    (Left (FileError :close-append (append-path fh) (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun next-line ((fh %InFile)) %(Either %FileError %(Maybe %STR))
+  (let ((line (c-pll-file-read-line (in-token fh)))
+        (status (c-pll-file-read-status)))
+    (if (eqi status 2)
+      (Left (FileError :next-line (in-path fh) (c-pll-file-last-error)))
+      (if (eqi status 1)
+        (Right Nothing)
+        (Right (Just line))))))
+
+(fun read-all ((fh %InFile)) %(Either %FileError %STR)
+  (let ((text (c-pll-file-read-all (in-token fh))))
+    (if (eqi (c-pll-file-last-status) 0)
+      (Left (FileError :read-all (in-path fh) (c-pll-file-last-error)))
+      (Right text))))
+
+(fun eof? ((fh %InFile)) %(Either %FileError %BOOL)
+  (let ((value (c-pll-file-eof (in-token fh))))
+    (if (lti value 0)
+      (Left (FileError :eof? (in-path fh) (c-pll-file-last-error)))
+      (Right (eqi value 1)))))
+
+(fun write ((fh %OutFile) (text %STR)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-write (out-token fh) text) 0)
+    (Left (FileError :write (out-path fh) (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun write-append ((fh %AppendFile) (text %STR)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-write (append-token fh) text) 0)
+    (Left (FileError :write-append (append-path fh) (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun say ((fh %OutFile) (text %STR)) %(Either %FileError %UNIT)
+  (write fh (concat text "\n")))
+
+(fun say-append ((fh %AppendFile) (text %STR)) %(Either %FileError %UNIT)
+  (write-append fh (concat text "\n")))
+
+(fun flush-out ((fh %OutFile)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-flush (out-token fh)) 0)
+    (Left (FileError :flush-out (out-path fh) (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun flush-append ((fh %AppendFile)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-flush (append-token fh)) 0)
+    (Left (FileError :flush-append (append-path fh) (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun slurp ((path %STR)) %(Either %FileError %STR)
+  (case (open-in path)
+    ((Left err) (Left err))
+    ((Right fh)
+      (let ((result (read-all fh)))
+        (case (close-in fh)
+          ((Left close-err)
+            (case result
+              ((Left err) (Left err))
+              ((Right _) (Left close-err))))
+          ((Right _) result))))))
+
+(fun lines ((path %STR)) %(Either %FileError %(List %STR))
+  (case (slurp path)
+    ((Left err) (Left err))
+    ((Right text) (Right (trim-final-empty (rx-split /\n/ text))))))
+
+(fun spurt ((path %STR) (contents %STR)) %(Either %FileError %UNIT)
+  (case (open-out path)
+    ((Left err) (Left err))
+    ((Right fh)
+      (let ((result (write fh contents)))
+        (case (close-out fh)
+          ((Left close-err)
+            (case result
+              ((Left err) (Left err))
+              ((Right _) (Left close-err))))
+          ((Right _) result))))))
+
+(fun append-file ((path %STR) (contents %STR)) %(Either %FileError %UNIT)
+  (case (open-append path)
+    ((Left err) (Left err))
+    ((Right fh)
+      (let ((result (write-append fh contents)))
+        (case (close-append fh)
+          ((Left close-err)
+            (case result
+              ((Left err) (Left err))
+              ((Right _) (Left close-err))))
+          ((Right _) result))))))
+
+(fun spurt-lines ((path %STR) (xs %(List %STR))) %(Either %FileError %UNIT)
+  (spurt path (join-lines xs)))
+
+(fun append-lines ((path %STR) (xs %(List %STR))) %(Either %FileError %UNIT)
+  (append-file path (join-lines xs)))
+
+(fun exists? ((path %STR)) %BOOL
+  (eqi (c-pll-file-exists path) 1))
+
+(fun is-file? ((path %STR)) %BOOL
+  (eqi (c-pll-file-is-file path) 1))
+
+(fun is-dir? ((path %STR)) %BOOL
+  (eqi (c-pll-file-is-dir path) 1))
+
+(fun stat ((path %STR)) %(Either %FileError %FileInfo)
+  (if (eqi (c-pll-file-stat path) 0)
+    (Left (FileError :stat path (c-pll-file-last-error)))
+    (Right (FileInfo path
+                     (kind-from-code (c-pll-file-last-stat-kind))
+                     (c-pll-file-last-stat-size)))))
+
+(fun readdir ((path %STR)) %(Either %FileError %(List %STR))
+  (let ((count (c-pll-file-readdir-count path)))
+    (if (lti count 0)
+      (Left (FileError :readdir path (c-pll-file-last-error)))
+      (Right (readdir-items-from 0 count)))))
+
+(fun mkdir ((path %STR)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-mkdir path) 0)
+    (Left (FileError :mkdir path (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun mkdir-p ((path %STR)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-mkdir-p path) 0)
+    (Left (FileError :mkdir-p path (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun unlink ((path %STR)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-unlink path) 0)
+    (Left (FileError :unlink path (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun rename ((from %STR) (to %STR)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-rename from to) 0)
+    (Left (FileError :rename from (c-pll-file-last-error)))
+    (Right unit)))
+
+(fun copy ((from %STR) (to %STR)) %(Either %FileError %UNIT)
+  (if (eqi (c-pll-file-copy from to) 0)
+    (Left (FileError :copy from (c-pll-file-last-error)))
+    (Right unit)))

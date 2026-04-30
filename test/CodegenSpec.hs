@@ -9,9 +9,17 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set        as S
 import qualified Data.Text       as T
 import qualified Data.Text.IO as T.IO
-import Control.Exception (ErrorCall(..), try, evaluate)
+import Control.Exception (ErrorCall(..), bracket, try, evaluate)
 import Data.List (isInfixOf)
+import System.Directory
+  ( createDirectoryIfMissing
+  , getTemporaryDirectory
+  , removeFile
+  , removePathForcibly
+  )
 import System.Exit (ExitCode(..))
+import System.FilePath ((</>))
+import System.IO (hClose, openTempFile)
 import System.Process (readProcessWithExitCode)
 
 import qualified Pllisp.Codegen        as Codegen
@@ -863,6 +871,183 @@ spec = do
         ]
         src
         >>= (`shouldBe` "release\ndist/app.bundle\n2\nverbose\ndry-run\nsrc/main.pll")
+
+  describe "FILEIO stdlib module" $ do
+    it "slurps a file" $
+      withTempTextFile "pllisp-fileio-slurp.txt" "alpha\nbeta" $ \path ->
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO (slurp error-message))"
+          , "(case (slurp " <> quoted path <> ")"
+          , "  ((Right text) (print text))"
+          , "  ((Left err) (print (error-message err))))"
+          ])
+          >>= (`shouldBe` "alpha\nbeta")
+
+    it "reads lines from a file" $
+      withTempTextFile "pllisp-fileio-lines.txt" "one\ntwo\nthree\n" $ \path ->
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO (lines error-message))"
+          , "(case (lines " <> quoted path <> ")"
+          , "  ((Right xs)"
+          , "    (foreach (line xs)"
+          , "      (print line)))"
+          , "  ((Left err) (print (error-message err))))"
+          ])
+          >>= (`shouldBe` "one\ntwo\nthree")
+
+    it "with-output sequences write, say, and flush" $
+      withTempPath "pllisp-fileio-write.txt" $ \path -> do
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO (write say flush-out error-message))"
+          , "(case (with-output (fh " <> quoted path <> ")"
+          , "        (write fh \"alpha\")"
+          , "        (say fh \"beta\")"
+          , "        (flush-out fh))"
+          , "  ((Right _) (print \"ok\"))"
+          , "  ((Left err) (print (error-message err))))"
+          ])
+          >>= (`shouldBe` "ok")
+        readFile path >>= (`shouldBe` "alphabeta\n")
+
+    it "with-input reads lines and reaches eof cleanly" $
+      withTempTextFile "pllisp-fileio-readline.txt" "first\nsecond\n" $ \path ->
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO (next-line eof? error-message))"
+          , "(fun tap-line (result)"
+          , "  (case result"
+          , "    ((Left err) (Left err))"
+          , "    ((Right maybe-line)"
+          , "      (case maybe-line"
+          , "        ((Nothing) (Right unit))"
+          , "        ((Just line)"
+          , "          (progn"
+          , "            (print line)"
+          , "            (Right unit)))))))"
+          , "(case (with-input (fh " <> quoted path <> ")"
+          , "        (tap-line (next-line fh))"
+          , "        (tap-line (next-line fh))"
+          , "        (case (next-line fh)"
+          , "          ((Left err) (Left err))"
+          , "          ((Right maybe-line)"
+          , "            (case maybe-line"
+          , "              ((Nothing)"
+          , "                (case (eof? fh)"
+          , "                  ((Left err) (Left err))"
+          , "                  ((Right done)"
+          , "                    (progn"
+          , "                      (print (if done \"true\" \"false\"))"
+          , "                      (Right unit)))))"
+          , "              ((Just third)"
+          , "                (progn"
+          , "                  (print third)"
+          , "                  (Right unit)))))))"
+          , "  ((Right _) unit)"
+          , "  ((Left err) (print (error-message err))))"
+          ])
+          >>= (`shouldBe` "first\nsecond\ntrue")
+
+    it "foreach-line iterates a file line by line" $
+      withTempTextFile "pllisp-fileio-foreach.txt" "red\nblue\n" $ \path ->
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO (error-message))"
+          , "(case (foreach-line (line " <> quoted path <> ")"
+          , "        (print (concat \"[\" (concat line \"]\"))))"
+          , "  ((Right _) unit)"
+          , "  ((Left err) (print (error-message err))))"
+          ])
+          >>= (`shouldBe` "[red]\n[blue]")
+
+    it "reports forged invalid handles as runtime errors instead of crashing" $
+      runWithFileIOModule (T.unlines
+        [ "(import FILEIO (next-line error-message InFile))"
+        , "(case (next-line (InFile 999 \"/tmp/forged\"))"
+        , "  ((Left err) (print (error-message err)))"
+        , "  ((Right _) (print \"unexpected\")))"
+        ])
+        >>= (`shouldContain` "invalid")
+
+    it "reports file info and sorted directory entries" $
+      withTempDir "pllisp-fileio-stat" $ \dir -> do
+        let bigFile = dir </> "b.txt"
+            smallFile = dir </> "a.txt"
+            subDir = dir </> "sub"
+        writeFile bigFile "bbb"
+        writeFile smallFile "aaaaa"
+        createDirectoryIfMissing True subDir
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO (exists? is-file? is-dir? stat readdir error-message info-kind info-size RegularFile Directory))"
+          , "(fun print-entries ((xs %(List %STR))) %UNIT"
+          , "  (case xs"
+          , "    ((Empty) unit)"
+          , "    ((Cons x rest)"
+          , "      (progn"
+          , "        (print x)"
+          , "        (print-entries rest)))))"
+          , "(print (int-to-str (if (exists? " <> quoted bigFile <> ") 1 0)))"
+          , "(print (int-to-str (if (is-file? " <> quoted bigFile <> ") 1 0)))"
+          , "(print (int-to-str (if (is-dir? " <> quoted subDir <> ") 1 0)))"
+          , "(case (stat " <> quoted smallFile <> ")"
+          , "  ((Right info)"
+          , "    (progn"
+          , "      (case (info-kind info)"
+          , "        ((RegularFile) (print \"file\"))"
+          , "        ((Directory) (print \"dir\"))"
+          , "        (_ (print \"other\")))"
+          , "      (print (int-to-str (info-size info)))))"
+          , "  ((Left err) (print (error-message err))))"
+          , "(case (readdir " <> quoted dir <> ")"
+          , "  ((Right xs) (print-entries xs))"
+          , "  ((Left err) (print (error-message err))))"
+          ])
+          >>= (`shouldBe` "1\n1\n1\nfile\n5\na.txt\nb.txt\nsub")
+
+    it "creates directories, copies, renames, appends, and unlinks files" $
+      withTempDir "pllisp-fileio-mutate" $ \dir ->
+        let nested = dir </> "nested" </> "deep"
+            single = dir </> "single"
+            src = dir </> "source.txt"
+            copyPath = dir </> "copy.txt"
+            finalPath = dir </> "final.txt"
+        in runWithFileIOModule (T.unlines
+          [ "(import FILEIO (mkdir mkdir-p spurt copy rename append-file slurp unlink exists? error-message))"
+          , "(let ((run-all (lam ()"
+          , "                 (case (mkdir " <> quoted single <> ")"
+          , "                   ((Left err) (Left err))"
+          , "                   ((Right _)"
+          , "                     (case (mkdir-p " <> quoted nested <> ")"
+          , "                       ((Left err) (Left err))"
+          , "                       ((Right _)"
+          , "                         (case (spurt " <> quoted src <> " \"hello\")"
+          , "                           ((Left err) (Left err))"
+          , "                           ((Right _)"
+          , "                             (case (copy " <> quoted src <> " " <> quoted copyPath <> ")"
+          , "                               ((Left err) (Left err))"
+          , "                               ((Right _)"
+          , "                                 (case (rename " <> quoted copyPath <> " " <> quoted finalPath <> ")"
+          , "                                   ((Left err) (Left err))"
+          , "                                   ((Right _)"
+          , "                                     (case (append-file " <> quoted finalPath <> " \"\\nworld\")"
+          , "                                       ((Left err) (Left err))"
+          , "                                       ((Right _)"
+          , "                                         (case (slurp " <> quoted finalPath <> ")"
+          , "                                           ((Left err) (Left err))"
+          , "                                           ((Right text)"
+          , "                                             (progn"
+          , "                                               (print text)"
+          , "                                               (case (unlink " <> quoted src <> ")"
+          , "                                                 ((Left err) (Left err))"
+          , "                                                 ((Right _)"
+          , "                                                   (case (unlink " <> quoted finalPath <> ")"
+          , "                                                     ((Left err) (Left err))"
+          , "                                                     ((Right _)"
+          , "                                                       (progn"
+          , "                                                         (print (int-to-str (if (exists? " <> quoted finalPath <> ") 1 0)))"
+          , "                                                         (Right unit))))))))))))))))))))))))"
+          , "  (case (run-all)"
+          , "    ((Left err) (print (error-message err)))"
+          , "    ((Right _) unit)))"
+          ])
+          >>= (`shouldBe` "hello\nworld\n0")
 
   describe "built-in List type" $ do
     it "constructs Empty" $
@@ -2697,6 +2882,11 @@ runWithCLIArgsRaw extraArgs mainSrc = do
       (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" extraArgs ""
       pure (ec2, reverse . dropWhile (== '\n') . reverse $ out, err2)
 
+runWithFileIOModule :: T.Text -> IO String
+runWithFileIOModule mainSrc = do
+  fileioSrc <- T.IO.readFile "stdlib/FILEIO.pll"
+  runWithModules [("FILEIO", fileioSrc)] mainSrc
+
 multiModulePipeline :: [(CST.Symbol, T.Text)] -> T.Text -> IO T.Text
 multiModulePipeline modules mainSrc = do
   preludeSexprs <- Stdlib.loadPrelude
@@ -2831,3 +3021,44 @@ shouldFailToCompileModules modules src msg = do
           ("expected error containing " ++ show msg ++ " but got:\n" ++ e)
     Right _ -> expectationFailure
       ("expected compilation to fail with: " ++ msg ++ " but it succeeded")
+
+quoted :: FilePath -> T.Text
+quoted = T.pack . show
+
+withTempTextFile :: String -> String -> (FilePath -> IO a) -> IO a
+withTempTextFile template contents action =
+  withTempPath template $ \path -> do
+    writeFile path contents
+    action path
+
+withTempPath :: String -> (FilePath -> IO a) -> IO a
+withTempPath template action = do
+  tmp <- getTemporaryDirectory
+  bracket (openTempFile tmp template) cleanup $ \(path, h) -> do
+    hClose h
+    removeFile path
+    action path
+  where
+    cleanup (path, h) = do
+      ignoreIO (hClose h)
+      ignoreIO (removeFile path)
+      ignoreIO (removePathForcibly path)
+
+withTempDir :: String -> (FilePath -> IO a) -> IO a
+withTempDir template action = do
+  tmp <- getTemporaryDirectory
+  bracket (openTempFile tmp template) cleanup $ \(path, h) -> do
+    hClose h
+    removeFile path
+    createDirectoryIfMissing True path
+    action path
+  where
+    cleanup (path, h) = do
+      ignoreIO (hClose h)
+      ignoreIO (removeFile path)
+      ignoreIO (removePathForcibly path)
+
+ignoreIO :: IO () -> IO ()
+ignoreIO io = do
+  _ <- try io :: IO (Either IOError ())
+  pure ()

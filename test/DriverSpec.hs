@@ -47,6 +47,15 @@ spec = do
             ]) $ \fp ->
               Driver.runFiles [fp] `shouldReturn` ExitSuccess
 
+    it "falls back to the workspace for FILEIO too" $
+      withRepoRoot $ do
+        withEnvVar "pllisp_datadir" "/definitely/missing" $
+          withTempSource "fallback-fileio.pll" (unlines
+            [ "(import FILEIO)"
+            , "(print \"ok\")"
+            ]) $ \fp ->
+              Driver.runFiles [fp] `shouldReturn` ExitSuccess
+
     it "rejects malformed module declarations" $
       withTempSource "bad-module.pll" "(module)" $ \fp ->
         Driver.runFiles [fp] `shouldReturn` ExitFailure 1

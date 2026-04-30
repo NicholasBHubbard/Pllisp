@@ -49,7 +49,8 @@ build-type:         Simple
 extra-doc-files:    README.md
 data-dir:           stdlib
 data-files:         PRELUDE.pll,
-                    CLI.pll
+                    CLI.pll,
+                    FILEIO.pll
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:

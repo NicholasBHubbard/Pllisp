@@ -1,0 +1,12 @@
+(import FILEIO (spurt unlink error-message))
+
+(case (spurt "/tmp/pllisp-fileio-example.txt" "red\nblue\n")
+  ((Left err) (print (error-message err)))
+  ((Right _)
+    (case (foreach-line (line "/tmp/pllisp-fileio-example.txt")
+            (print line))
+      ((Left err) (print (error-message err)))
+      ((Right _)
+        (case (unlink "/tmp/pllisp-fileio-example.txt")
+          ((Left err) (print (error-message err)))
+          ((Right _) unit))))))

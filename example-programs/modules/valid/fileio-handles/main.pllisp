@@ -1,0 +1,42 @@
+(import FILEIO (say flush-out next-line eof? unlink error-message))
+
+(fun tap-line (result)
+  (case result
+    ((Left err) (Left err))
+    ((Right maybe-line)
+      (case maybe-line
+        ((Nothing) (Right unit))
+        ((Just line)
+          (progn
+            (print line)
+            (Right unit)))))))
+
+(case (with-output (fh "/tmp/pllisp-fileio-handles-example.txt")
+        (say fh "alpha")
+        (say fh "beta")
+        (flush-out fh))
+  ((Left err) (print (error-message err)))
+  ((Right _)
+    (case (with-input (fh "/tmp/pllisp-fileio-handles-example.txt")
+            (tap-line (next-line fh))
+            (tap-line (next-line fh))
+            (case (next-line fh)
+              ((Left err) (Left err))
+              ((Right maybe-line)
+                (case maybe-line
+                  ((Nothing)
+                    (case (eof? fh)
+                      ((Left err) (Left err))
+                      ((Right done)
+                        (progn
+                          (print (if done "true" "false"))
+                          (Right unit)))))
+                  ((Just third)
+                    (progn
+                      (print third)
+                      (Right unit)))))))
+      ((Left err) (print (error-message err)))
+      ((Right _)
+        (case (unlink "/tmp/pllisp-fileio-handles-example.txt")
+          ((Left err) (print (error-message err)))
+          ((Right _) unit))))))
