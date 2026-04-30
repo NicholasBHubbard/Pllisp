@@ -90,6 +90,7 @@ compileTimeBuiltins = M.fromList
   , ("SYNTAX-LIFT", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0] Ty.TySyntax))
   , ("SYNTAX-SYMBOL", syntaxFun [Ty.TyStr] Ty.TySyntax)
   , ("SYNTAX-RAW-SYMBOL", syntaxFun [Ty.TyStr] Ty.TySyntax)
+  , ("__MODULE-SYMBOL", syntaxFun [Ty.TyStr, Ty.TyStr] Ty.TySyntax)
   , ("SYNTAX-INT", syntaxFun [Ty.TyInt] Ty.TySyntax)
   , ("SYNTAX-FLOAT", syntaxFun [Ty.TyFlt] Ty.TySyntax)
   , ("SYNTAX-STRING", syntaxFun [Ty.TyStr] Ty.TySyntax)
@@ -269,12 +270,13 @@ expandWith base sexprs =
 
 expandModuleWith :: T.Text -> CompileState -> [SExpr.SExpr] -> Either String ModuleResult
 expandModuleWith modName base sexprs =
-  State.evalStateT (go base [] sexprs) 0
+  State.evalStateT (go importAliases base [] sexprs) 0
   where
-    go st out [] = pure $ ModuleResult (reverse out) st
-    go st out (sx : rest) = do
-      (st', emitted) <- processTopLevel modName st sx
-      go st' (reverse emitted ++ out) rest
+    importAliases = moduleImportAliases modName sexprs
+    go _ st out [] = pure $ ModuleResult (reverse out) st
+    go aliases st out (sx : rest) = do
+      (st', emitted) <- processTopLevel aliases modName st sx
+      go aliases st' (reverse emitted ++ out) rest
 
 mergeCompileStates :: [CompileState] -> Either String CompileState
 mergeCompileStates = foldM mergeOne emptyState
@@ -330,19 +332,19 @@ mergeCompileStates = foldM mergeOne emptyState
                         ++ " and "
                         ++ T.unpack origin)
 
-processTopLevel :: T.Text -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
-processTopLevel modName st sx = case Loc.locVal sx of
+processTopLevel :: M.Map T.Text T.Text -> T.Text -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processTopLevel importAliases modName st sx = case Loc.locVal sx of
   SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : macRest) -> do
     st' <- defineMacro modName st macRest
     pure (st', [])
   SExpr.SList (Loc.Located _ (SExpr.SAtom "EVAL-WHEN") : phaseSx : bodyForms) ->
-    processEvalWhen modName st phaseSx bodyForms
+    processEvalWhen importAliases modName st phaseSx bodyForms
   _ -> do
-    expanded <- expandExpr (csMacros st) 0 sx
-    processExpandedTopLevel modName st expanded
+    expanded <- expandExpr importAliases modName (csMacros st) 0 sx
+    processExpandedTopLevel importAliases modName st expanded
 
-processEvalWhen :: T.Text -> CompileState -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
-processEvalWhen modName st phaseSx bodyForms = do
+processEvalWhen :: M.Map T.Text T.Text -> T.Text -> CompileState -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
+processEvalWhen importAliases modName st phaseSx bodyForms = do
   phases <- liftEither (parseEvalPhases phaseSx)
   let doCompile = PhaseCompileTop `elem` phases
       doEmit = PhaseLoadTop `elem` phases || PhaseExecute `elem` phases
@@ -350,36 +352,36 @@ processEvalWhen modName st phaseSx bodyForms = do
   where
     go cur out _ _ [] = pure (cur, reverse out)
     go cur out doCompile doEmit (form : rest) = do
-      (cur', emitted) <- processEvalWhenBody modName doCompile doEmit cur form
+      (cur', emitted) <- processEvalWhenBody importAliases modName doCompile doEmit cur form
       go cur' (reverse emitted ++ out) doCompile doEmit rest
 
-processEvalWhenBody :: T.Text -> Bool -> Bool -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
-processEvalWhenBody modName doCompile doEmit st sx = case Loc.locVal sx of
+processEvalWhenBody :: M.Map T.Text T.Text -> T.Text -> Bool -> Bool -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processEvalWhenBody importAliases modName doCompile doEmit st sx = case Loc.locVal sx of
   SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : macRest)
     | doCompile -> do
         st' <- defineMacro modName st macRest
         pure (st', [])
     | otherwise -> pure (st, [])
   SExpr.SList (Loc.Located _ (SExpr.SAtom "EVAL-WHEN") : phaseSx : bodyForms) ->
-    processEvalWhen modName st phaseSx bodyForms
+    processEvalWhen importAliases modName st phaseSx bodyForms
   _ -> do
-    expanded <- expandExpr (csMacros st) 0 sx
-    processExpandedEvalWhenBody modName doCompile doEmit st expanded
+    expanded <- expandExpr importAliases modName (csMacros st) 0 sx
+    processExpandedEvalWhenBody importAliases modName doCompile doEmit st expanded
 
-processExpandedTopLevel :: T.Text -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
-processExpandedTopLevel modName st expanded =
+processExpandedTopLevel :: M.Map T.Text T.Text -> T.Text -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processExpandedTopLevel importAliases modName st expanded =
   case topLevelSpliceForms expanded of
-    Just forms -> foldTopLevelForms modName st forms
+    Just forms -> foldTopLevelForms importAliases modName st forms
     Nothing -> do
       st' <- if isCompileVisibleRuntimeForm expanded
         then registerRuntimeDeclForm modName st expanded
         else pure st
       pure (st', [expanded])
 
-processExpandedEvalWhenBody :: T.Text -> Bool -> Bool -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
-processExpandedEvalWhenBody modName doCompile doEmit st expanded =
+processExpandedEvalWhenBody :: M.Map T.Text T.Text -> T.Text -> Bool -> Bool -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processExpandedEvalWhenBody importAliases modName doCompile doEmit st expanded =
   case topLevelSpliceForms expanded of
-    Just forms -> foldEvalWhenForms modName doCompile doEmit st forms
+    Just forms -> foldEvalWhenForms importAliases modName doCompile doEmit st forms
     Nothing -> do
       st' <- if doCompile then compileTopLevelForm modName st expanded else pure st
       st'' <- if doEmit && not doCompile && isCompileVisibleRuntimeForm expanded
@@ -387,20 +389,20 @@ processExpandedEvalWhenBody modName doCompile doEmit st expanded =
         else pure st'
       pure (st'', if doEmit then [expanded] else [])
 
-foldTopLevelForms :: T.Text -> CompileState -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
-foldTopLevelForms modName = go []
+foldTopLevelForms :: M.Map T.Text T.Text -> T.Text -> CompileState -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
+foldTopLevelForms importAliases modName = go []
   where
     go out st [] = pure (st, reverse out)
     go out st (form : rest) = do
-      (st', emitted) <- processTopLevel modName st form
+      (st', emitted) <- processTopLevel importAliases modName st form
       go (reverse emitted ++ out) st' rest
 
-foldEvalWhenForms :: T.Text -> Bool -> Bool -> CompileState -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
-foldEvalWhenForms modName doCompile doEmit = go []
+foldEvalWhenForms :: M.Map T.Text T.Text -> T.Text -> Bool -> Bool -> CompileState -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
+foldEvalWhenForms importAliases modName doCompile doEmit = go []
   where
     go out st [] = pure (st, reverse out)
     go out st (form : rest) = do
-      (st', emitted) <- processEvalWhenBody modName doCompile doEmit st form
+      (st', emitted) <- processEvalWhenBody importAliases modName doCompile doEmit st form
       go (reverse emitted ++ out) st' rest
 
 topLevelSpliceForms :: SExpr.SExpr -> Maybe [SExpr.SExpr]
@@ -669,39 +671,42 @@ parseEvalPhases (Loc.Located _ (SExpr.SList phases)) = mapM toPhase phases
     toPhase _ = Left "invalid eval-when phase"
 parseEvalPhases _ = Left "invalid eval-when phase list"
 
-expandExpr :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
-expandExpr macros depth sx
+expandExpr :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandExpr importAliases currentModule macros depth sx
   | depth > maxDepth = throwExpandError "macro expansion depth limit exceeded"
   | otherwise = case Loc.locVal sx of
       SExpr.SList (Loc.Located _ (SExpr.SAtom name) : args)
         | Just clause <- M.lookup name macros -> do
-            expanded <- applyMacro clause args name
-            expandExpr macros (depth + 1) expanded
+            expanded <- applyMacro importAliases currentModule clause args name
+            expandExpr importAliases currentModule macros (depth + 1) expanded
       SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "LET")) : rest) ->
-        expandLet macros depth sx kw rest
+        expandLet importAliases currentModule macros depth sx kw rest
       SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "LAM")) : rest) ->
-        expandLam macros depth sx kw rest
+        expandLam importAliases currentModule macros depth sx kw rest
       SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "CASE")) : rest) ->
-        expandCase macros depth sx kw rest
+        expandCase importAliases currentModule macros depth sx kw rest
       SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "INST")) : rest) ->
-        expandInst macros depth sx kw rest
+        expandInst importAliases currentModule macros depth sx kw rest
       SExpr.SList (Loc.Located _ (SExpr.SAtom tag) : _)
         | tag `elem` nonRecursiveForms ->
             pure sx
       SExpr.SList elems -> do
-        elems' <- mapM (expandExpr macros depth) elems
+        elems' <- mapM (expandExpr importAliases currentModule macros depth) elems
         pure (Loc.Located (Loc.locSpan sx) (SExpr.SList elems'))
       _ -> pure sx
 
-applyMacro :: MacroClause -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
-applyMacro clause args name =
+applyMacro :: M.Map T.Text T.Text -> T.Text -> MacroClause -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
+applyMacro importAliases currentModule clause args name =
   case matchClause clause args of
     Just bindings -> do
       mark <- State.get
       State.put (mark + 1)
       let mvalBinds = M.map MI.sexprToVal bindings
           env = M.union mvalBinds (mcEnv clause)
-      result <- liftEither (firstLeft id (MI.runInterpMWithMark mark (MI.evalTyped env (mcTypedBody clause))))
+      result <- liftEither
+        (firstLeft id
+          (MI.runInterpMInModule currentModule importAliases (Just mark)
+            (MI.evalTyped env (mcTypedBody clause))))
       case MI.valToSExprHygienic result of
         Left err -> throwExpandError err
         Right sexpr -> pure sexpr
@@ -752,6 +757,13 @@ extractMacroDefs = filter isMacDef
   where
     isMacDef (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom "MAC") : _))) = True
     isMacDef _ = False
+
+moduleImportAliases :: T.Text -> [SExpr.SExpr] -> M.Map T.Text T.Text
+moduleImportAliases modName sexprs =
+  let aliases = M.fromList [(CST.impModule imp, CST.impAlias imp) | imp <- SExpr.preScanImports sexprs]
+  in if modName == "PRELUDE"
+       then aliases
+       else M.insertWith (\_ old -> old) "PRELUDE" "PRELUDE" aliases
 
 moduleNameOrUser :: [SExpr.SExpr] -> T.Text
 moduleNameOrUser sexprs = maybe "USER" id (SExpr.preScanModuleName sexprs)
@@ -830,85 +842,89 @@ isCompileVisibleRuntimeLet (Loc.Located _ (SExpr.SList
     collect _ acc = acc
 isCompileVisibleRuntimeLet _ = False
 
-expandLet :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
-expandLet macros depth sx kw [Loc.Located bindSp (SExpr.SList binds), body] = do
-  binds' <- mapM (expandLetBinding macros depth) binds
-  body' <- expandExpr macros depth body
+expandLet :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandLet importAliases currentModule macros depth sx kw [Loc.Located bindSp (SExpr.SList binds), body] = do
+  binds' <- mapM (expandLetBinding importAliases currentModule macros depth) binds
+  body' <- expandExpr importAliases currentModule macros depth body
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, Loc.Located bindSp (SExpr.SList binds'), body'])
-expandLet macros depth sx _ elems = expandListElems macros depth sx elems
+expandLet importAliases currentModule macros depth sx _ elems =
+  expandListElems importAliases currentModule macros depth sx elems
 
-expandLetBinding :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
-expandLetBinding macros depth (Loc.Located sp (SExpr.SList [name, val])) = do
-  val' <- expandExpr macros depth val
+expandLetBinding :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandLetBinding importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [name, val])) = do
+  val' <- expandExpr importAliases currentModule macros depth val
   pure $ Loc.Located sp (SExpr.SList [name, val'])
-expandLetBinding macros depth (Loc.Located sp (SExpr.SList [name, ty@(Loc.Located _ (SExpr.SType _)), val])) = do
-  val' <- expandExpr macros depth val
+expandLetBinding importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [name, ty@(Loc.Located _ (SExpr.SType _)), val])) = do
+  val' <- expandExpr importAliases currentModule macros depth val
   pure $ Loc.Located sp (SExpr.SList [name, ty, val'])
-expandLetBinding _ _ binding = pure binding
+expandLetBinding _ _ _ _ binding = pure binding
 
-expandLam :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
-expandLam macros depth sx kw [params@(Loc.Located _ (SExpr.SList _)), body] = do
-  params' <- expandLamParams macros depth params
-  body' <- expandExpr macros depth body
+expandLam :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandLam importAliases currentModule macros depth sx kw [params@(Loc.Located _ (SExpr.SList _)), body] = do
+  params' <- expandLamParams importAliases currentModule macros depth params
+  body' <- expandExpr importAliases currentModule macros depth body
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, params', body'])
-expandLam macros depth sx kw [params@(Loc.Located _ (SExpr.SList _)), retTy@(Loc.Located _ (SExpr.SType _)), body] = do
-  params' <- expandLamParams macros depth params
-  body' <- expandExpr macros depth body
+expandLam importAliases currentModule macros depth sx kw [params@(Loc.Located _ (SExpr.SList _)), retTy@(Loc.Located _ (SExpr.SType _)), body] = do
+  params' <- expandLamParams importAliases currentModule macros depth params
+  body' <- expandExpr importAliases currentModule macros depth body
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, params', retTy, body'])
-expandLam macros depth sx _ elems = expandListElems macros depth sx elems
+expandLam importAliases currentModule macros depth sx _ elems =
+  expandListElems importAliases currentModule macros depth sx elems
 
-expandLamParams :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
-expandLamParams macros depth (Loc.Located sp (SExpr.SList params)) = do
+expandLamParams :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandLamParams importAliases currentModule macros depth (Loc.Located sp (SExpr.SList params)) = do
   params' <- go params
   pure $ Loc.Located sp (SExpr.SList params')
   where
     go [] = pure []
     go (marker@(Loc.Located _ (SExpr.SType (Loc.Located _ (SExpr.SAtom "OPT")))) : defs) = do
-      defs' <- mapM (expandDefaultParam macros depth) defs
+      defs' <- mapM (expandDefaultParam importAliases currentModule macros depth) defs
       pure (marker : defs')
     go (marker@(Loc.Located _ (SExpr.SAtom "&KEY")) : defs) = do
-      defs' <- mapM (expandDefaultParam macros depth) defs
+      defs' <- mapM (expandDefaultParam importAliases currentModule macros depth) defs
       pure (marker : defs')
     go (param : rest) = do
       rest' <- go rest
       pure (param : rest')
-expandLamParams _ _ params = pure params
+expandLamParams _ _ _ _ params = pure params
 
-expandDefaultParam :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
-expandDefaultParam macros depth (Loc.Located sp (SExpr.SList [name, val])) = do
-  val' <- expandExpr macros depth val
+expandDefaultParam :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandDefaultParam importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [name, val])) = do
+  val' <- expandExpr importAliases currentModule macros depth val
   pure $ Loc.Located sp (SExpr.SList [name, val'])
-expandDefaultParam macros depth (Loc.Located sp (SExpr.SList [name, ty@(Loc.Located _ (SExpr.SType _)), val])) = do
-  val' <- expandExpr macros depth val
+expandDefaultParam importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [name, ty@(Loc.Located _ (SExpr.SType _)), val])) = do
+  val' <- expandExpr importAliases currentModule macros depth val
   pure $ Loc.Located sp (SExpr.SList [name, ty, val'])
-expandDefaultParam _ _ param = pure param
+expandDefaultParam _ _ _ _ param = pure param
 
-expandCase :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
-expandCase macros depth sx kw (scrutinee : arms) = do
-  scrutinee' <- expandExpr macros depth scrutinee
-  arms' <- mapM (expandCaseArm macros depth) arms
+expandCase :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandCase importAliases currentModule macros depth sx kw (scrutinee : arms) = do
+  scrutinee' <- expandExpr importAliases currentModule macros depth scrutinee
+  arms' <- mapM (expandCaseArm importAliases currentModule macros depth) arms
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList (kw : scrutinee' : arms'))
-expandCase macros depth sx _ elems = expandListElems macros depth sx elems
+expandCase importAliases currentModule macros depth sx _ elems =
+  expandListElems importAliases currentModule macros depth sx elems
 
-expandCaseArm :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
-expandCaseArm macros depth (Loc.Located sp (SExpr.SList [pat, body])) = do
-  body' <- expandExpr macros depth body
+expandCaseArm :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandCaseArm importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [pat, body])) = do
+  body' <- expandExpr importAliases currentModule macros depth body
   pure $ Loc.Located sp (SExpr.SList [pat, body'])
-expandCaseArm _ _ arm = pure arm
+expandCaseArm _ _ _ _ arm = pure arm
 
-expandInst :: MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
-expandInst macros depth sx kw (className : ty : methods) = do
-  methods' <- mapM (expandInstMethod macros depth) methods
+expandInst :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandInst importAliases currentModule macros depth sx kw (className : ty : methods) = do
+  methods' <- mapM (expandInstMethod importAliases currentModule macros depth) methods
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList (kw : className : ty : methods'))
-expandInst macros depth sx _ elems = expandListElems macros depth sx elems
+expandInst importAliases currentModule macros depth sx _ elems =
+  expandListElems importAliases currentModule macros depth sx elems
 
-expandInstMethod :: MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
-expandInstMethod macros depth (Loc.Located sp (SExpr.SList [name, body])) = do
-  body' <- expandExpr macros depth body
+expandInstMethod :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
+expandInstMethod importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [name, body])) = do
+  body' <- expandExpr importAliases currentModule macros depth body
   pure $ Loc.Located sp (SExpr.SList [name, body'])
-expandInstMethod _ _ method = pure method
+expandInstMethod _ _ _ _ method = pure method
 
-expandListElems :: MacroTable -> Int -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
-expandListElems macros depth sx elems = do
-  elems' <- mapM (expandExpr macros depth) elems
+expandListElems :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM SExpr.SExpr
+expandListElems importAliases currentModule macros depth sx elems = do
+  elems' <- mapM (expandExpr importAliases currentModule macros depth) elems
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList elems')

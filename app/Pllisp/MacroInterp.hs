@@ -10,6 +10,7 @@ module Pllisp.MacroInterp
   , evalTyped
   , runInterpM
   , runInterpMWithMark
+  , runInterpMInModule
   , defaultEnv
   , loadTypedTopLevelBindings
   , loadTypedTopLevelForms
@@ -103,6 +104,8 @@ data InterpState = InterpState
   { isNextRef :: Int
   , isRefs :: M.Map Int MVal
   , isCurrentIntro :: Maybe Int
+  , isCurrentModule :: T.Text
+  , isModuleAliases :: M.Map T.Text T.Text
   }
 
 type InterpM = State.StateT InterpState (Either String)
@@ -111,11 +114,14 @@ throwError :: String -> InterpM a
 throwError = State.StateT . const . Left
 
 runInterpM :: InterpM a -> Either String a
-runInterpM m = State.evalStateT m (InterpState 0 M.empty Nothing)
+runInterpM = runInterpMInModule "USER" M.empty Nothing
 
 runInterpMWithMark :: Int -> InterpM a -> Either String a
-runInterpMWithMark mark m =
-  State.evalStateT m (InterpState 0 M.empty (Just mark))
+runInterpMWithMark mark = runInterpMInModule "USER" M.empty (Just mark)
+
+runInterpMInModule :: T.Text -> M.Map T.Text T.Text -> Maybe Int -> InterpM a -> Either String a
+runInterpMInModule modName modAliases mark m =
+  State.evalStateT m (InterpState 0 M.empty mark modName modAliases)
 
 -- CONVERSION: SExpr <-> MVal
 
@@ -472,6 +478,7 @@ primitiveEnv = M.fromList
   , ("RX-CAPTURES",     MBuiltin "RX-CAPTURES" bRxCaptures)
   , ("SYNTAX-SYMBOL",   MBuiltin "SYNTAX-SYMBOL" bSyntaxSymbol)
   , ("SYNTAX-RAW-SYMBOL", MBuiltin "SYNTAX-RAW-SYMBOL" bSyntaxRawSymbol)
+  , ("__MODULE-SYMBOL", MBuiltin "__MODULE-SYMBOL" bModuleSymbol)
   , ("SYNTAX-INT",      MBuiltin "SYNTAX-INT" bSyntaxInt)
   , ("SYNTAX-FLOAT",    MBuiltin "SYNTAX-FLOAT" bSyntaxFloat)
   , ("SYNTAX-STRING",   MBuiltin "SYNTAX-STRING" bSyntaxString)
@@ -790,6 +797,17 @@ bSyntaxRawSymbol :: [MVal] -> InterpM MVal
 bSyntaxRawSymbol [MStr t] = pure $ MSyntax (SyAtom (T.toUpper t))
 bSyntaxRawSymbol [_]      = throwError "syntax-raw-symbol: expected a string"
 bSyntaxRawSymbol args     = throwError $ "syntax-raw-symbol: expected 1 argument, got " ++ show (length args)
+
+bModuleSymbol :: [MVal] -> InterpM MVal
+bModuleSymbol [MStr modName, MStr name] = do
+  st <- State.get
+  let qual
+        | T.toUpper modName == T.toUpper (isCurrentModule st) = name
+        | Just alias <- M.lookup modName (isModuleAliases st) = alias <> "." <> name
+        | otherwise = modName <> "." <> name
+  pure $ MSyntax (SyAtom (T.toUpper qual))
+bModuleSymbol [_, _] = throwError "__module-symbol: expected (string string)"
+bModuleSymbol args = throwError $ "__module-symbol: expected 2 arguments, got " ++ show (length args)
 
 bSyntaxInt :: [MVal] -> InterpM MVal
 bSyntaxInt [MInt n] = pure $ MSyntax (SyInt n)

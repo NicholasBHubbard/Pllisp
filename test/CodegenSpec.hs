@@ -909,6 +909,18 @@ spec = do
           >>= (`shouldBe` "ok")
         readFile path >>= (`shouldBe` "alphabeta\n")
 
+    it "with-output works under aliased qualified import" $
+      withTempPath "pllisp-fileio-write-alias.txt" $ \path -> do
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO F)"
+          , "(case (with-output (fh " <> quoted path <> ")"
+          , "        (F.say fh \"alpha\"))"
+          , "  ((Right _) (print \"ok\"))"
+          , "  ((Left err) (print (F.error-message err))))"
+          ])
+          >>= (`shouldBe` "ok")
+        readFile path >>= (`shouldBe` "alpha\n")
+
     it "with-input reads lines and reaches eof cleanly" $
       withTempTextFile "pllisp-fileio-readline.txt" "first\nsecond\n" $ \path ->
         runWithFileIOModule (T.unlines
@@ -946,6 +958,25 @@ spec = do
           ])
           >>= (`shouldBe` "first\nsecond\ntrue")
 
+    it "with-input works under aliased qualified import" $
+      withTempTextFile "pllisp-fileio-readline-alias.txt" "first\n" $ \path ->
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO F)"
+          , "(case (with-input (fh " <> quoted path <> ")"
+          , "        (case (F.next-line fh)"
+          , "          ((Left err) (Left err))"
+          , "          ((Right maybe-line)"
+          , "            (case maybe-line"
+          , "              ((Nothing) (Right unit))"
+          , "              ((Just line)"
+          , "                (progn"
+          , "                  (print line)"
+          , "                  (Right unit)))))))"
+          , "  ((Right _) unit)"
+          , "  ((Left err) (print (F.error-message err))))"
+          ])
+          >>= (`shouldBe` "first")
+
     it "foreach-line iterates a file line by line" $
       withTempTextFile "pllisp-fileio-foreach.txt" "red\nblue\n" $ \path ->
         runWithFileIOModule (T.unlines
@@ -956,6 +987,29 @@ spec = do
           , "  ((Left err) (print (error-message err))))"
           ])
           >>= (`shouldBe` "[red]\n[blue]")
+
+    it "with-append works under aliased qualified import" $
+      withTempPath "pllisp-fileio-append-alias.txt" $ \path -> do
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO F)"
+          , "(case (with-append (fh " <> quoted path <> ")"
+          , "        (F.say-append fh \"beta\"))"
+          , "  ((Right _) (print \"ok\"))"
+          , "  ((Left err) (print (F.error-message err))))"
+          ])
+          >>= (`shouldBe` "ok")
+        readFile path >>= (`shouldBe` "beta\n")
+
+    it "foreach-line works under aliased qualified import" $
+      withTempTextFile "pllisp-fileio-foreach-alias.txt" "red\nblue\n" $ \path ->
+        runWithFileIOModule (T.unlines
+          [ "(import FILEIO F)"
+          , "(case (foreach-line (line " <> quoted path <> ")"
+          , "        (print (concat \"<\" (concat line \">\"))))"
+          , "  ((Right _) unit)"
+          , "  ((Left err) (print (F.error-message err))))"
+          ])
+          >>= (`shouldBe` "<red>\n<blue>")
 
     it "reports forged invalid handles as runtime errors instead of crashing" $
       runWithFileIOModule (T.unlines
