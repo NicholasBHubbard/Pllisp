@@ -19,6 +19,7 @@ This project is currently in development.
 - Module system
 - Built-in regular expressions
 - C FFI
+- Compiles to LLVM
 - Standard library
 
 ## Getting Started
