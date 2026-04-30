@@ -40,7 +40,7 @@
     "truthy" "eq" "lt" "gt" "le" "ge" "str"
     "append" "reverse" "map" "filter" "foldl"
     "syntax-lift"
-    "syntax-symbol" "syntax-int" "syntax-float" "syntax-string"
+    "syntax-symbol" "syntax-raw-symbol" "syntax-int" "syntax-float" "syntax-string"
     "syntax-bool" "syntax-usym" "syntax-rx" "syntax-type"
     "syntax-cons" "syntax-append"
     "syntax-car" "syntax-cdr" "syntax-length" "syntax-equal?"

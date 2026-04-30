@@ -471,6 +471,7 @@ primitiveEnv = M.fromList
   , ("RX-SPLIT",        MBuiltin "RX-SPLIT" bRxSplit)
   , ("RX-CAPTURES",     MBuiltin "RX-CAPTURES" bRxCaptures)
   , ("SYNTAX-SYMBOL",   MBuiltin "SYNTAX-SYMBOL" bSyntaxSymbol)
+  , ("SYNTAX-RAW-SYMBOL", MBuiltin "SYNTAX-RAW-SYMBOL" bSyntaxRawSymbol)
   , ("SYNTAX-INT",      MBuiltin "SYNTAX-INT" bSyntaxInt)
   , ("SYNTAX-FLOAT",    MBuiltin "SYNTAX-FLOAT" bSyntaxFloat)
   , ("SYNTAX-STRING",   MBuiltin "SYNTAX-STRING" bSyntaxString)
@@ -785,6 +786,11 @@ bSyntaxSymbol [MStr t] = MSyntax . SyAtom <$> markIntroName t
 bSyntaxSymbol [_]      = throwError "syntax-symbol: expected a string"
 bSyntaxSymbol args     = throwError $ "syntax-symbol: expected 1 argument, got " ++ show (length args)
 
+bSyntaxRawSymbol :: [MVal] -> InterpM MVal
+bSyntaxRawSymbol [MStr t] = pure $ MSyntax (SyAtom (T.toUpper t))
+bSyntaxRawSymbol [_]      = throwError "syntax-raw-symbol: expected a string"
+bSyntaxRawSymbol args     = throwError $ "syntax-raw-symbol: expected 1 argument, got " ++ show (length args)
+
 bSyntaxInt :: [MVal] -> InterpM MVal
 bSyntaxInt [MInt n] = pure $ MSyntax (SyInt n)
 bSyntaxInt [_]      = throwError "syntax-int: expected an integer"
@@ -1036,7 +1042,7 @@ hygienizeSyntax stx = State.evalState (goExpr [] stx) (0 :: Int)
     freshName encoded = do
       n <- State.get
       State.put (n + 1)
-      pure ("__H" <> T.pack (show n) <> "_" <> stripIntroName encoded)
+      pure ("__H" <> T.pack (show n) <> "_" <> encoded)
 
 mapSyntaxAtoms :: (T.Text -> T.Text) -> SyntaxVal -> SyntaxVal
 mapSyntaxAtoms f stx = case stx of

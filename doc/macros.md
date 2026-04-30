@@ -508,6 +508,27 @@ This is practical lexical hygiene, not a full scoped-syntax system. The useful
 rule is simple: write normal temporary names in macro output and let the
 expander protect them automatically.
 
+## Intentional User-Visible Names
+
+Sometimes a macro really does need to introduce a binding that later ordinary
+code should refer to by that exact name. That is what `syntax-raw-symbol` is
+for.
+
+Example:
+
+```lisp
+(mac define-result (expr)
+  `(let ((,(syntax-raw-symbol "result") ,expr))
+     unit))
+
+(define-result 42)
+(print (int-to-str result))
+```
+
+`syntax-raw-symbol` bypasses automatic lexical renaming for that symbol.
+Use it narrowly. Most macro-introduced temporary names should still be written
+with ordinary syntax and left to hygiene.
+
 ## Failing Deliberately
 
 Use the compile-time `error` function when a macro detects invalid input:

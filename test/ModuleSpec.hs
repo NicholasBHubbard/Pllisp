@@ -246,6 +246,17 @@ spec = do
         Left err  -> err `shouldContain` "module A does not export Y"
         Right _ -> expectationFailure "expected missing export error"
 
+    it "allows repeated unqualified imports from the same module" $ do
+      let exports = M.singleton "CLI" (M.fromList
+            [ ("PARSE-ARGV!", TC.Forall S.empty Ty.TyUnit)
+            , ("FLAG-VALUE", TC.Forall S.empty Ty.TyBool)
+            ])
+          imports =
+            [ CST.Import "CLI" "CLI" ["PARSE-ARGV!", "FLAG-VALUE"]
+            , CST.Import "CLI" "CLI" ["PARSE-ARGV!", "FLAG-VALUE"]
+            ]
+      Mod.checkImportCollisions exports imports `shouldBe` Right ()
+
   describe "validateProgramNames" $ do
     it "rejects top-level definitions that collide with protected names" $ do
       let prog = parse "(let ((just (lam ((x %INT)) x))) just)"

@@ -133,6 +133,10 @@ spec = do
       "(syntax-symbol-name (syntax-symbol \"foo\"))"
         `shouldEvalTo` MI.MStr "foo"
 
+    it "allows explicit raw symbols for intentional binding introduction" $
+      "(syntax-symbol-name (syntax-raw-symbol \"foo\"))"
+        `shouldEvalTo` MI.MStr "FOO"
+
     it "extracts integer syntax values directly" $
       "(syntax-int-value (syntax-int 42))"
         `shouldEvalTo` MI.MInt 42

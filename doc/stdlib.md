@@ -314,74 +314,76 @@ Examples:
 
 ## `CLI` Module
 
-Import `CLI` when you want a small DSL for command-line parsing:
+Import `CLI` when you want top-level command-line bindings generated from a
+declarative spec:
 
 ```
 (import CLI)
 ```
 
-The core form is the `cli` macro. It takes a sequence of clause forms and
-produces a parser function.
+The core form is the `CLI` macro. It is a top-level declaration form, not a
+parser-building function.
 
 Supported clauses:
 
-- `(flag name "-s" "--long")`
-- `(option name "-s" "--long")`
-- `(required-option name "-s" "--long")`
-- `(arg name)`
-- `(rest name)`
+- `(:flag :name "-s" "--long")`
+- `(:option :name "-s" "--long")`
+- `(:arg :name)`
+- `(:rest :name)`
+
+Each clause name is a usym. `CLI` derives an ordinary top-level binding from
+that usym:
+
+- `:flag` binds a `%BOOL`
+- `:option` binds a `%(Maybe %STR)`
+- `:arg` binds a `%STR`
+- `:rest` binds a `%(List %STR)`
 
 Example:
 
-```
+```lisp
 (import CLI)
 
-(let ((spec (cli
-              (flag verbose "-v" "--verbose")
-              (option output "-o" "--output")
-              (required-option mode "-m" "--mode")
-              (arg input)
-              (rest extras))))
-  (case (CLI.parse spec
-          (Cons "--verbose"
-            (Cons "-o"
-              (Cons "build/out.txt"
-                (Cons "--mode"
-                  (Cons "fast"
-                    (Cons "main.pll"
-                      (Cons "a"
-                        (Cons "b" Empty)))))))))
-    ((Left err) (print err))
-    ((Right parsed)
-      (progn
-        (print (if (CLI.flag-value parsed :verbose) "true" "false"))
-        (print (CLI.required-option-value parsed :mode))
-        (print (CLI.arg-value parsed :input)))))
+(fun list-len ((xs %(List %STR))) %INT
+  (case xs
+    ((Empty) 0)
+    ((Cons _ rest) (add 1 (list-len rest)))))
+
+(CLI
+  (:flag :verbose "-v" "--verbose")
+  (:option :output "-o" "--output")
+  (:arg :mode)
+  (:arg :input)
+  (:rest :extras))
+
+(print (if verbose "true" "false"))
+(case output
+  ((Just path) (print path))
+  (_ (print "missing")))
+(print mode)
+(print input)
+(print (int-to-str (list-len extras)))
 ```
 
-Runtime entry points:
+At expansion time, `CLI` splices in:
 
-- `CLI.parse spec args`
-- `CLI.parse-argv spec unit`
+- one hidden binding that parses `argv`
+- one visible top-level binding per declared clause
 
-`CLI.parse` and `CLI.parse-argv` return `%(Either %STR %(List %ParsedEntry))`.
-On success, inspect the parsed entries with:
-
-- `CLI.flag-value parsed :name`
-- `CLI.option-value parsed :name`
-- `CLI.required-option-value parsed :name`
-- `CLI.arg-value parsed :name`
-- `CLI.rest-value parsed :name`
+That means later top-level forms in the same file can use `verbose`, `output`,
+`mode`, `input`, and `extras` directly.
 
 Notes:
 
-- `flag` produces a boolean.
-- `option` produces `%(Maybe %STR)`.
-- `required-option` fails with `Left` when the option is missing.
-- `arg` consumes one positional argument.
-- `rest` consumes the remaining positional arguments.
+- there is no `required-option`; if a value is required, make it a positional
+  `:arg`
+- `:flag` produces a boolean
+- `:option` produces `%(Maybe %STR)`
+- `:arg` consumes one positional argument
+- `:rest` consumes the remaining positional arguments and must be last
 - `--` stops option parsing; everything after it is treated as positional.
-- Unknown options fail with `Left`.
+- unknown options terminate the program with a parse error
+- missing positional arguments terminate the program with a parse error
 
 ## Practical Advice
 

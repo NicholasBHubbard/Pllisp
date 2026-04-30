@@ -206,7 +206,7 @@ expansion time.
 
 ### Syntax Constructors and Conversions
 
-`syntax-lift`, `syntax-symbol`, `syntax-int`, `syntax-float`, `syntax-string`,
+`syntax-lift`, `syntax-symbol`, `syntax-raw-symbol`, `syntax-int`, `syntax-float`, `syntax-string`,
 `syntax-bool`, `syntax-usym`, `syntax-rx`, `syntax-type`, `syntax-empty`, `syntax-cons`,
 `syntax-append`
 
@@ -223,3 +223,6 @@ expansion time.
 `append`, `reverse`, `map`, `filter`, `foldl`, `error`
 
 See [Macros](macros.md) for usage patterns.
+
+`syntax-symbol` participates in automatic hygiene. Use `syntax-raw-symbol`
+only when you intentionally need to introduce a user-visible binding name.

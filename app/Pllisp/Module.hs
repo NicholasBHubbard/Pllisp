@@ -248,12 +248,12 @@ checkImportCollisions exports imports =
   let missing = concatMap getMissing imports
       unqualPairs = concatMap getUnquals imports
       grouped = M.fromListWith (++) [(n, [m]) | (n, m) <- unqualPairs]
-      collisions = M.filter (\ms -> length ms > 1) grouped
+      collisions = M.filter (\ms -> S.size (S.fromList ms) > 1) grouped
   in if not (null missing) then Left (unlines missing)
      else if M.null collisions then Right ()
      else Left $ unlines
        [ "ambiguous import: " ++ T.unpack name ++ " is imported unqualified from "
-         ++ T.unpack (T.intercalate ", " mods)
+         ++ T.unpack (T.intercalate ", " (S.toList (S.fromList mods)))
        | (name, mods) <- M.toList collisions]
   where
     getMissing (CST.Import modName _ unquals) =

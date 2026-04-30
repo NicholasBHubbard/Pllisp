@@ -89,6 +89,7 @@ compileTimeBuiltins = M.fromList
   , ("ERROR", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyStr] (Ty.TyVar 0)))
   , ("SYNTAX-LIFT", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0] Ty.TySyntax))
   , ("SYNTAX-SYMBOL", syntaxFun [Ty.TyStr] Ty.TySyntax)
+  , ("SYNTAX-RAW-SYMBOL", syntaxFun [Ty.TyStr] Ty.TySyntax)
   , ("SYNTAX-INT", syntaxFun [Ty.TyInt] Ty.TySyntax)
   , ("SYNTAX-FLOAT", syntaxFun [Ty.TyFlt] Ty.TySyntax)
   , ("SYNTAX-STRING", syntaxFun [Ty.TyStr] Ty.TySyntax)
@@ -338,10 +339,7 @@ processTopLevel modName st sx = case Loc.locVal sx of
     processEvalWhen modName st phaseSx bodyForms
   _ -> do
     expanded <- expandExpr (csMacros st) 0 sx
-    st' <- if isCompileVisibleRuntimeForm expanded
-      then registerRuntimeDeclForm modName st expanded
-      else pure st
-    pure (st', [expanded])
+    processExpandedTopLevel modName st expanded
 
 processEvalWhen :: T.Text -> CompileState -> SExpr.SExpr -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
 processEvalWhen modName st phaseSx bodyForms = do
@@ -366,11 +364,49 @@ processEvalWhenBody modName doCompile doEmit st sx = case Loc.locVal sx of
     processEvalWhen modName st phaseSx bodyForms
   _ -> do
     expanded <- expandExpr (csMacros st) 0 sx
-    st' <- if doCompile then compileTopLevelForm modName st expanded else pure st
-    st'' <- if doEmit && not doCompile && isCompileVisibleRuntimeForm expanded
-      then registerRuntimeDeclForm modName st' expanded
-      else pure st'
-    pure (st'', if doEmit then [expanded] else [])
+    processExpandedEvalWhenBody modName doCompile doEmit st expanded
+
+processExpandedTopLevel :: T.Text -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processExpandedTopLevel modName st expanded =
+  case topLevelSpliceForms expanded of
+    Just forms -> foldTopLevelForms modName st forms
+    Nothing -> do
+      st' <- if isCompileVisibleRuntimeForm expanded
+        then registerRuntimeDeclForm modName st expanded
+        else pure st
+      pure (st', [expanded])
+
+processExpandedEvalWhenBody :: T.Text -> Bool -> Bool -> CompileState -> SExpr.SExpr -> ExpandM (CompileState, [SExpr.SExpr])
+processExpandedEvalWhenBody modName doCompile doEmit st expanded =
+  case topLevelSpliceForms expanded of
+    Just forms -> foldEvalWhenForms modName doCompile doEmit st forms
+    Nothing -> do
+      st' <- if doCompile then compileTopLevelForm modName st expanded else pure st
+      st'' <- if doEmit && not doCompile && isCompileVisibleRuntimeForm expanded
+        then registerRuntimeDeclForm modName st' expanded
+        else pure st'
+      pure (st'', if doEmit then [expanded] else [])
+
+foldTopLevelForms :: T.Text -> CompileState -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
+foldTopLevelForms modName = go []
+  where
+    go out st [] = pure (st, reverse out)
+    go out st (form : rest) = do
+      (st', emitted) <- processTopLevel modName st form
+      go (reverse emitted ++ out) st' rest
+
+foldEvalWhenForms :: T.Text -> Bool -> Bool -> CompileState -> [SExpr.SExpr] -> ExpandM (CompileState, [SExpr.SExpr])
+foldEvalWhenForms modName doCompile doEmit = go []
+  where
+    go out st [] = pure (st, reverse out)
+    go out st (form : rest) = do
+      (st', emitted) <- processEvalWhenBody modName doCompile doEmit st form
+      go (reverse emitted ++ out) st' rest
+
+topLevelSpliceForms :: SExpr.SExpr -> Maybe [SExpr.SExpr]
+topLevelSpliceForms (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom "SPLICE-TOPLEVEL") : forms))) =
+  Just forms
+topLevelSpliceForms _ = Nothing
 
 compileTopLevelForm :: T.Text -> CompileState -> SExpr.SExpr -> ExpandM CompileState
 compileTopLevelForm modName st sx = do

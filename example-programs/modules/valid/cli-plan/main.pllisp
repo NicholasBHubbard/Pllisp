@@ -1,0 +1,48 @@
+(import CLI)
+
+(type BuildPlan ()
+  (BuildPlan (profile %STR)
+             (output %STR)
+             (inputs %(List %STR))
+             (verbose %BOOL)
+             (dry-run %BOOL)))
+
+(fun maybe-str ((m %(Maybe %STR)) (fallback %STR)) %STR
+  (case m
+    ((Just value) value)
+    (_ fallback)))
+
+(fun list-len ((xs %(List %STR))) %INT
+  (case xs
+    ((Empty) 0)
+    ((Cons _ rest) (add 1 (list-len rest)))))
+
+(fun first-input ((xs %(List %STR))) %STR
+  (case xs
+    ((Empty) "(none)")
+    ((Cons x _) x)))
+
+(CLI
+  (:flag :verbose "-v" "--verbose")
+  (:flag :dry-run "-n" "--dry-run")
+  (:option :profile "-p" "--profile")
+  (:option :output "-o" "--output")
+  (:rest :inputs))
+
+(fun make-plan ((u %UNIT)) %BuildPlan
+  (let ((_ u))
+    (BuildPlan
+      (maybe-str profile "debug")
+      (maybe-str output "stdout")
+      inputs
+      verbose
+      dry-run)))
+
+(let ((plan (make-plan unit)))
+  (progn
+    (print (.profile plan))
+    (print (.output plan))
+    (print (int-to-str (list-len (.inputs plan))))
+    (print (if (.verbose plan) "verbose" "quiet"))
+    (print (if (.dry-run plan) "dry-run" "live"))
+    (print (first-input (.inputs plan)))))

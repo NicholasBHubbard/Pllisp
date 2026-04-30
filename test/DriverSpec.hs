@@ -40,11 +40,10 @@ spec = do
         withEnvVar "pllisp_datadir" "/definitely/missing" $
           withTempSource "fallback-cli.pll" (unlines
             [ "(import CLI)"
-            , "(let ((spec (cli (flag verbose \"-v\" \"--verbose\")"
-            , "                  (arg input))))"
-            , "  (case (CLI.parse spec (Cons \"main.pll\" Empty))"
-            , "    ((Left err) (print err))"
-            , "    ((Right parsed) (print (CLI.arg-value parsed :input)))))"
+            , "(CLI"
+            , "  (:flag :verbose \"-v\" \"--verbose\")"
+            , "  (:arg :input))"
+            , "(print input)"
             ]) $ \fp ->
               Driver.runFiles [fp] `shouldReturn` ExitSuccess
 

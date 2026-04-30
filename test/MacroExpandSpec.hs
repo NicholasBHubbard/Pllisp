@@ -549,6 +549,21 @@ spec = do
                             bodyName `shouldBe` bindName
         _ -> expectationFailure (show r)
 
+    it "syntax-raw-symbol intentionally introduces user-visible bindings" $ do
+      r <- either fail pure $ expandSrc
+        (T.unlines [ "(mac define-result (x)"
+                   , "  `(let ((,(syntax-raw-symbol \"result\") ,x)) result))"
+                   , "(define-result 42)"
+                   ])
+      case r of
+        [SExpr.SList [Loc.Located _ (SExpr.SAtom "LET"),
+                      Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SList [Loc.Located _ (SExpr.SAtom bindName), _])]),
+                      Loc.Located _ (SExpr.SAtom bodyName)]]
+                        -> do
+                            bindName `shouldBe` "RESULT"
+                            bodyName `shouldBe` "RESULT"
+        _ -> expectationFailure (show r)
+
     it "macro error propagates" $ do
       case expandSrc "(mac bad () (error \"intentional\")) (bad)" of
         Left msg -> msg `shouldContain` "intentional"
