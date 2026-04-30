@@ -152,8 +152,8 @@ At call sites, keyword arguments are written as:
 
 ## Implicit PRELUDE Macros
 
-`fun`, `progn`, `if_`, `when`, `unless`, `cond`, `if-let`, `when-let`,
-`unless-let`, `and`, `or`
+`fun`, `progn`, `foreach`, `if_`, `when`, `unless`, `cond`, `if-let`,
+`when-let`, `unless-let`, `and`, `or`
 
 ## Implicit PRELUDE Functions and Methods
 

@@ -25,3 +25,8 @@
 (if-let (s "hello")
   (print (concat "got: " s))
   (print "empty"))
+
+# foreach - iterate a list for side effects
+(foreach (x (Cons 1 (Cons 2 (Cons 3 Empty))))
+  (print "item")
+  (print (int-to-str x)))

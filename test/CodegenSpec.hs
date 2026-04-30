@@ -1394,6 +1394,20 @@ spec = do
         , "(print (int-to-str (typed-id (add 1 2))))"
         ]) >>= (`shouldBe` "3")
 
+    it "foreach iterates a list and runs all body forms" $ do
+      run (T.unlines
+        [ "(foreach (x (Cons 1 (Cons 2 (Cons 3 Empty))))"
+        , "  (print \"value:\")"
+        , "  (print (int-to-str x)))"
+        ]) >>= (`shouldBe` "value:\n1\nvalue:\n2\nvalue:\n3")
+
+    it "foreach over Empty does nothing" $ do
+      run (T.unlines
+        [ "(foreach (x Empty)"
+        , "  (print (int-to-str x)))"
+        , "(print \"done\")"
+        ]) >>= (`shouldBe` "done")
+
     it "macro in nested position" $ do
       run (T.unlines
         [ "(mac double (x) `(add ,x ,x))"

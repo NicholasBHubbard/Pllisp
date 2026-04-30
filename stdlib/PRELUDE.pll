@@ -53,6 +53,18 @@
     (_
       (error "progn expects at least one argument"))))
 
+(mac foreach ((name xs) &rest body)
+  (let ((_ (syntax-symbol-name name)))
+    `(let ((seq ,xs))
+       (let ((loop (fun loop (rest)
+                     (case rest
+                       ((Empty) unit)
+                       ((Cons ,name more)
+                         (progn
+                           ,@body
+                           (loop more)))))))
+         (loop seq)))))
+
 (mac if_ (cond then else)
   `(if (truthy ,cond) ,then ,else))
 

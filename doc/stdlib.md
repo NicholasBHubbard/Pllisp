@@ -173,6 +173,22 @@ Sequences expressions and returns the last one:
 
 It is the normal way to write “do these things in order” code.
 
+### `foreach`
+
+Iterates a `List` for side effects:
+
+```
+(foreach (x xs)
+  (print "value:")
+  (print (int-to-str x)))
+```
+
+`foreach` evaluates the list once, binds the loop variable for each `Cons`
+element, and returns `unit` when it reaches `Empty`.
+
+Use it for side-effecting iteration. If you want to build a result, prefer
+`map`, `filter`, or `foldl`.
+
 ### `if_`
 
 Like `if`, but first converts the condition through the `TRUTHY` typeclass:
