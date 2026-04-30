@@ -6,12 +6,14 @@ import Test.Hspec
 
 import Control.Exception (bracket, finally)
 import qualified Data.Text as T
+import Control.Exception (evaluate, try, IOException)
 import System.Directory
   ( createDirectoryIfMissing
   , getCurrentDirectory
   , getTemporaryDirectory
   , doesFileExist
   , copyFile
+  , removeFile
   , removePathForcibly
   , setCurrentDirectory
   )
@@ -19,6 +21,8 @@ import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeDirectory, dropExtension, takeFileName)
 import qualified Data.Text.IO as T.IO
+import System.IO (BufferMode(..), hClose, hFlush, hSetBuffering, openTempFile, stdout)
+import qualified GHC.IO.Handle as IOHandle
 
 import qualified Pllisp.Driver as Driver
 
@@ -28,6 +32,17 @@ spec = do
     it "returns failure for semantic errors" $
       withTempSource "semantic-error.pll" "(add x 1)" $ \fp ->
         Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
+    it "reports macro-expanded type errors at a real source location" $
+      withTempSource "macro-type-location.pll" (unlines
+        [ "(when (add 1 \"x\")"
+        , "  unit)"
+        ]) $ \fp -> do
+          (out, ec) <- captureStdout (Driver.runFiles [fp])
+          ec `shouldBe` ExitFailure 1
+          out `shouldContain` "type error: cannot unify"
+          out `shouldContain` ":1:"
+          out `shouldNotContain` ":0:0"
 
     it "falls back to the workspace stdlib when cabal data lookup is missing" $
       withRepoRoot $ do
@@ -191,3 +206,34 @@ preloadStdlib runDir = do
   repoRoot <- findRepoRoot cwd
   let preludePath = repoRoot </> "stdlib" </> "PRELUDE.pll"
   copyFile preludePath (runDir </> takeFileName preludePath)
+
+captureStdout :: IO a -> IO (String, a)
+captureStdout action = do
+  tmp <- getTemporaryDirectory
+  bracket (openTempFile tmp "pllisp-driver-spec.out") cleanup $ \(fp, h) -> do
+    old <- IOHandle.hDuplicate stdout
+    hSetBuffering stdout LineBuffering
+    result <-
+      (`finally` restoreStdout old h) $ do
+        IOHandle.hDuplicateTo h stdout
+        value <- action
+        hFlush stdout
+        pure value
+    out <- readFile fp
+    _ <- evaluate (length out)
+    pure (out, result)
+  where
+    restoreStdout old h = do
+      hFlush stdout
+      IOHandle.hDuplicateTo old stdout
+      ignoreIO (hClose old)
+      ignoreIO (hClose h)
+
+    cleanup (fp, h) = do
+      ignoreIO (hClose h)
+      ignoreIO (removeFile fp)
+
+ignoreIO :: IO () -> IO ()
+ignoreIO io = do
+  _ <- try io :: IO (Either IOException ())
+  pure ()

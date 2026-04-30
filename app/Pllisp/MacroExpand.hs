@@ -677,7 +677,7 @@ expandExpr importAliases currentModule macros depth sx
   | otherwise = case Loc.locVal sx of
       SExpr.SList (Loc.Located _ (SExpr.SAtom name) : args)
         | Just clause <- M.lookup name macros -> do
-            expanded <- applyMacro importAliases currentModule clause args name
+            expanded <- applyMacro importAliases currentModule clause (Loc.locSpan sx) args name
             expandExpr importAliases currentModule macros (depth + 1) expanded
       SExpr.SList (kw@(Loc.Located _ (SExpr.SAtom "LET")) : rest) ->
         expandLet importAliases currentModule macros depth sx kw rest
@@ -695,8 +695,8 @@ expandExpr importAliases currentModule macros depth sx
         pure (Loc.Located (Loc.locSpan sx) (SExpr.SList elems'))
       _ -> pure sx
 
-applyMacro :: M.Map T.Text T.Text -> T.Text -> MacroClause -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
-applyMacro importAliases currentModule clause args name =
+applyMacro :: M.Map T.Text T.Text -> T.Text -> MacroClause -> Loc.Span -> [SExpr.SExpr] -> T.Text -> ExpandM SExpr.SExpr
+applyMacro importAliases currentModule clause callSp args name =
   case matchClause clause args of
     Just bindings -> do
       mark <- State.get
@@ -709,7 +709,7 @@ applyMacro importAliases currentModule clause args name =
             (MI.evalTyped env (mcTypedBody clause))))
       case MI.valToSExprHygienic result of
         Left err -> throwExpandError err
-        Right sexpr -> pure sexpr
+        Right sexpr -> pure (attachMacroSpan callSp sexpr)
     Nothing ->
       throwExpandError ("macro " ++ T.unpack name
         ++ " does not accept " ++ show (length args) ++ " argument(s)")
@@ -770,6 +770,18 @@ moduleNameOrUser sexprs = maybe "USER" id (SExpr.preScanModuleName sexprs)
 
 dummySpan :: Loc.Span
 dummySpan = Loc.Span (Loc.Pos "" 0 0) (Loc.Pos "" 0 0)
+
+attachMacroSpan :: Loc.Span -> SExpr.SExpr -> SExpr.SExpr
+attachMacroSpan callSp (Loc.Located sp sexprF) =
+  let sp' = if sp == dummySpan then callSp else sp
+      go = attachMacroSpan callSp
+  in Loc.Located sp' $ case sexprF of
+    SExpr.SList xs   -> SExpr.SList (map go xs)
+    SExpr.SType x    -> SExpr.SType (go x)
+    SExpr.SQuasi x   -> SExpr.SQuasi (go x)
+    SExpr.SUnquote x -> SExpr.SUnquote (go x)
+    SExpr.SSplice x  -> SExpr.SSplice (go x)
+    other            -> other
 
 nonRecursiveForms :: [T.Text]
 nonRecursiveForms =
