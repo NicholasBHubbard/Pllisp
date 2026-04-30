@@ -121,7 +121,7 @@ This project was developed collaboratively by Nicholas B. Hubbard (student) and 
 
 ### Team Member Roles
 
-**Nicholas B. Hubbard (Student):**
+**ME:**
 - Designed the language: syntax, semantics, type system, and overall architecture
 - Wrote the initial implementation by hand
 - Made all architectural decisions (e.g. CL-style procedural macros, positional superclass syntax)
@@ -129,10 +129,10 @@ This project was developed collaboratively by Nicholas B. Hubbard (student) and 
 - Directed every feature, reviewed all generated code, and debugged issues
 - Defined the standard library (PRELUDE.pll) and example programs
 
-**Claude (AI Assistant):**
-- Wrote implementation code under the student's direction in an interactive pair-programming workflow
+**Claude-Code/Codex (AI Assistant):**
+- Wrote implementation code under my direction in an interactive pair-programming workflow
 - Wrote test suites (1000+ tests across 16+ test modules)
-- Applied the student's design decisions to the codebase across the language implementation
+- Applied my design decisions to the codebase across the language implementation
 
 ### How to Verify Authorship
 
