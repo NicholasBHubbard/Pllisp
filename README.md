@@ -14,6 +14,7 @@ This project is currently in development.
 - Record types
 - Pattern matching
 - Typeclasses
+- Tail call optimization
 - Hygienic macro system
 - Mutable references
 - Module system
