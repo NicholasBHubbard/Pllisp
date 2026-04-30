@@ -25,6 +25,7 @@ This project is currently in development.
 ## Future Work
 
 - [ ] Documentation system
+- [ ] Strong unicode support
 - [ ] Heredoc strings
 - [ ] Comprehensive test library
 
