@@ -1,9 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 -- MODULE
 
 module Pllisp.MacroInterp
   ( SyntaxVal(..)
+  , pattern SyAtom
+  , pattern SyStr
+  , pattern SyInt
+  , pattern SyFlt
+  , pattern SyList
+  , pattern SyBool
+  , pattern SyRx
+  , pattern SyUSym
+  , pattern SyType
   , MVal(..)
   , Env
   , InterpM
@@ -35,17 +45,60 @@ import Text.Regex.TDFA ((=~))
 
 -- CORE TYPES
 
-data SyntaxVal
-  = SyAtom T.Text
-  | SyStr T.Text
-  | SyInt Integer
-  | SyFlt Double
-  | SyList [SyntaxVal]
-  | SyBool Bool
-  | SyRx T.Text T.Text
-  | SyUSym T.Text
-  | SyType SyntaxVal
-  deriving (Eq, Show)
+data SyntaxVal = SyntaxVal
+  { syntaxSpan :: Loc.Span
+  , syntaxForm :: SyntaxForm
+  } deriving (Show)
+
+data SyntaxForm
+  = SyAtomF T.Text
+  | SyStrF T.Text
+  | SyIntF Integer
+  | SyFltF Double
+  | SyListF [SyntaxVal]
+  | SyBoolF Bool
+  | SyRxF T.Text T.Text
+  | SyUSymF T.Text
+  | SyTypeF SyntaxVal
+  deriving (Show)
+
+pattern SyAtom :: T.Text -> SyntaxVal
+pattern SyAtom t <- SyntaxVal _ (SyAtomF t) where
+  SyAtom t = SyntaxVal dummySpan (SyAtomF t)
+
+pattern SyStr :: T.Text -> SyntaxVal
+pattern SyStr t <- SyntaxVal _ (SyStrF t) where
+  SyStr t = SyntaxVal dummySpan (SyStrF t)
+
+pattern SyInt :: Integer -> SyntaxVal
+pattern SyInt n <- SyntaxVal _ (SyIntF n) where
+  SyInt n = SyntaxVal dummySpan (SyIntF n)
+
+pattern SyFlt :: Double -> SyntaxVal
+pattern SyFlt f <- SyntaxVal _ (SyFltF f) where
+  SyFlt f = SyntaxVal dummySpan (SyFltF f)
+
+pattern SyList :: [SyntaxVal] -> SyntaxVal
+pattern SyList xs <- SyntaxVal _ (SyListF xs) where
+  SyList xs = SyntaxVal dummySpan (SyListF xs)
+
+pattern SyBool :: Bool -> SyntaxVal
+pattern SyBool b <- SyntaxVal _ (SyBoolF b) where
+  SyBool b = SyntaxVal dummySpan (SyBoolF b)
+
+pattern SyRx :: T.Text -> T.Text -> SyntaxVal
+pattern SyRx p f <- SyntaxVal _ (SyRxF p f) where
+  SyRx p f = SyntaxVal dummySpan (SyRxF p f)
+
+pattern SyUSym :: T.Text -> SyntaxVal
+pattern SyUSym t <- SyntaxVal _ (SyUSymF t) where
+  SyUSym t = SyntaxVal dummySpan (SyUSymF t)
+
+pattern SyType :: SyntaxVal -> SyntaxVal
+pattern SyType inner <- SyntaxVal _ (SyTypeF inner) where
+  SyType inner = SyntaxVal dummySpan (SyTypeF inner)
+
+{-# COMPLETE SyAtom, SyStr, SyInt, SyFlt, SyList, SyBool, SyRx, SyUSym, SyType #-}
 
 data MVal
   = MAtom T.Text
@@ -64,6 +117,9 @@ data MVal
   | MUnavailable T.Text String
   | MTypedClosure Env [T.Text] TC.TRExpr
   | MBuiltin T.Text ([MVal] -> InterpM MVal)
+
+instance Eq SyntaxVal where
+  a == b = syntaxEq a b
 
 instance Show MVal where
   show (MAtom t)   = "MAtom " ++ show t
@@ -123,26 +179,35 @@ runInterpMInModule :: T.Text -> M.Map T.Text T.Text -> Maybe Int -> InterpM a ->
 runInterpMInModule modName modAliases mark m =
   State.evalStateT m (InterpState 0 M.empty mark modName modAliases)
 
+mkSyntax :: Loc.Span -> SyntaxForm -> SyntaxVal
+mkSyntax = SyntaxVal
+
+rebuildSyntax :: SyntaxVal -> SyntaxForm -> SyntaxVal
+rebuildSyntax stx form = SyntaxVal (syntaxSpan stx) form
+
 -- CONVERSION: SExpr <-> MVal
 
 sexprToVal :: SExpr.SExpr -> MVal
 sexprToVal = MSyntax . sexprToSyntax
 
 sexprToSyntax :: SExpr.SExpr -> SyntaxVal
-sexprToSyntax (Loc.Located _ sf) = case sf of
-  SExpr.SAtom "TRUE"  -> SyBool True
-  SExpr.SAtom "FALSE" -> SyBool False
-  SExpr.SAtom t       -> SyAtom t
-  SExpr.SStr t        -> SyStr t
-  SExpr.SInt n        -> SyInt n
-  SExpr.SFlt f        -> SyFlt f
-  SExpr.SRx p f       -> SyRx p f
-  SExpr.SUSym t       -> SyUSym t
-  SExpr.SList xs      -> SyList (map sexprToSyntax xs)
-  SExpr.SType inner   -> SyType (sexprToSyntax inner)
-  SExpr.SQuasi inner  -> SyList [SyAtom "%QUASI", sexprToSyntax inner]
-  SExpr.SUnquote inner -> SyList [SyAtom "%UNQUOTE", sexprToSyntax inner]
-  SExpr.SSplice inner -> SyList [SyAtom "%SPLICE", sexprToSyntax inner]
+sexprToSyntax (Loc.Located sp sf) = case sf of
+  SExpr.SAtom "TRUE"  -> mkSyntax sp (SyBoolF True)
+  SExpr.SAtom "FALSE" -> mkSyntax sp (SyBoolF False)
+  SExpr.SAtom t       -> mkSyntax sp (SyAtomF t)
+  SExpr.SStr t        -> mkSyntax sp (SyStrF t)
+  SExpr.SInt n        -> mkSyntax sp (SyIntF n)
+  SExpr.SFlt f        -> mkSyntax sp (SyFltF f)
+  SExpr.SRx p f       -> mkSyntax sp (SyRxF p f)
+  SExpr.SUSym t       -> mkSyntax sp (SyUSymF t)
+  SExpr.SList xs      -> mkSyntax sp (SyListF (map sexprToSyntax xs))
+  SExpr.SType inner   -> mkSyntax sp (SyTypeF (sexprToSyntax inner))
+  SExpr.SQuasi inner  ->
+    mkSyntax sp (SyListF [mkSyntax sp (SyAtomF "%QUASI"), sexprToSyntax inner])
+  SExpr.SUnquote inner ->
+    mkSyntax sp (SyListF [mkSyntax sp (SyAtomF "%UNQUOTE"), sexprToSyntax inner])
+  SExpr.SSplice inner ->
+    mkSyntax sp (SyListF [mkSyntax sp (SyAtomF "%SPLICE"), sexprToSyntax inner])
 
 valToSExpr :: MVal -> Either String SExpr.SExpr
 valToSExpr val = case val of
@@ -178,32 +243,32 @@ valToSExprHygienic other =
   valToSExpr other
 
 syntaxToSExpr :: SyntaxVal -> Either String SExpr.SExpr
-syntaxToSExpr stx = case stx of
-  SyAtom t -> Right $ loc $ SExpr.SAtom t
-  SyStr t -> Right $ loc $ SExpr.SStr t
-  SyInt n -> Right $ loc $ SExpr.SInt n
-  SyFlt f -> Right $ loc $ SExpr.SFlt f
-  SyBool True -> Right $ loc $ SExpr.SAtom "TRUE"
-  SyBool False -> Right $ loc $ SExpr.SAtom "FALSE"
-  SyRx p f -> Right $ loc $ SExpr.SRx p f
-  SyUSym t -> Right $ loc $ SExpr.SUSym t
-  SyType inner -> do
+syntaxToSExpr (SyntaxVal sp form) = case form of
+  SyAtomF t -> Right $ loc $ SExpr.SAtom t
+  SyStrF t -> Right $ loc $ SExpr.SStr t
+  SyIntF n -> Right $ loc $ SExpr.SInt n
+  SyFltF f -> Right $ loc $ SExpr.SFlt f
+  SyBoolF True -> Right $ loc $ SExpr.SAtom "TRUE"
+  SyBoolF False -> Right $ loc $ SExpr.SAtom "FALSE"
+  SyRxF p f -> Right $ loc $ SExpr.SRx p f
+  SyUSymF t -> Right $ loc $ SExpr.SUSym t
+  SyTypeF inner -> do
     inner' <- syntaxToSExpr inner
     Right $ loc $ SExpr.SType inner'
-  SyList [SyAtom "%QUASI", inner] -> do
+  SyListF [SyntaxVal _ (SyAtomF "%QUASI"), inner] -> do
     inner' <- syntaxToSExpr inner
     Right $ loc $ SExpr.SQuasi inner'
-  SyList [SyAtom "%UNQUOTE", inner] -> do
+  SyListF [SyntaxVal _ (SyAtomF "%UNQUOTE"), inner] -> do
     inner' <- syntaxToSExpr inner
     Right $ loc $ SExpr.SUnquote inner'
-  SyList [SyAtom "%SPLICE", inner] -> do
+  SyListF [SyntaxVal _ (SyAtomF "%SPLICE"), inner] -> do
     inner' <- syntaxToSExpr inner
     Right $ loc $ SExpr.SSplice inner'
-  SyList xs -> do
+  SyListF xs -> do
     xs' <- mapM syntaxToSExpr xs
     Right $ loc $ SExpr.SList xs'
   where
-    loc = Loc.Located dummySpan
+    loc = Loc.Located sp
 
 -- TYPED EVALUATOR
 
@@ -504,13 +569,13 @@ bCar [_] = throwError "syntax-car: not a list"
 bCar args           = throwError $ "syntax-car: expected 1 argument, got " ++ show (length args)
 
 bCdr :: [MVal] -> InterpM MVal
-bCdr [MSyntax (SyList (_:xs))] = pure $ MSyntax (SyList xs)
+bCdr [MSyntax stx@(SyList (_:xs))] = pure $ MSyntax (rebuildSyntax stx (SyListF xs))
 bCdr [MSyntax (SyList [])] = throwError "syntax-cdr: empty list"
 bCdr [_] = throwError "syntax-cdr: not a list"
 bCdr args            = throwError $ "syntax-cdr: expected 1 argument, got " ++ show (length args)
 
 bCons :: [MVal] -> InterpM MVal
-bCons [MSyntax x, MSyntax (SyList xs)] = pure $ MSyntax (SyList (x : xs))
+bCons [MSyntax x, MSyntax stx@(SyList xs)] = pure $ MSyntax (rebuildSyntax stx (SyListF (x : xs)))
 bCons [_, _]         = throwError "syntax-cons: second argument must be a list"
 bCons args           = throwError $ "syntax-cons: expected 2 arguments, got " ++ show (length args)
 
@@ -840,12 +905,13 @@ bSyntaxRx [_, _]           = throwError "syntax-rx: expected (string string)"
 bSyntaxRx args             = throwError $ "syntax-rx: expected 2 arguments, got " ++ show (length args)
 
 bSyntaxType :: [MVal] -> InterpM MVal
-bSyntaxType [MSyntax v] = pure $ MSyntax (SyType v)
+bSyntaxType [MSyntax v] = pure $ MSyntax (mkSyntax (syntaxSpan v) (SyTypeF v))
 bSyntaxType [_] = throwError "syntax-type: expected syntax"
 bSyntaxType args = throwError $ "syntax-type: expected 1 argument, got " ++ show (length args)
 
 bSyntaxAppend :: [MVal] -> InterpM MVal
-bSyntaxAppend [MSyntax (SyList xs), MSyntax (SyList ys)] = pure $ MSyntax (SyList (xs ++ ys))
+bSyntaxAppend [MSyntax stx@(SyList xs), MSyntax (SyList ys)] =
+  pure $ MSyntax (rebuildSyntax stx (SyListF (xs ++ ys)))
 bSyntaxAppend [_, _]               = throwError "syntax-append: arguments must be lists"
 bSyntaxAppend args                 = throwError $ "syntax-append: expected 2 arguments, got " ++ show (length args)
 
@@ -930,35 +996,42 @@ syntaxEq a b = case (a, b) of
 hygienizeSyntax :: SyntaxVal -> SyntaxVal
 hygienizeSyntax stx = State.evalState (goExpr [] stx) (0 :: Int)
   where
-    goExpr env val = case val of
-      SyAtom name -> pure $ SyAtom (rewriteName env name)
-      SyType inner -> SyType <$> goExpr env inner
-      SyList (SyAtom headName : SyList binds : [body])
+    goExpr env val@(SyntaxVal sp form) = case form of
+      SyAtomF name -> pure $ rebuildSyntax val (SyAtomF (rewriteName env name))
+      SyTypeF inner -> mkSyntax sp . SyTypeF <$> goExpr env inner
+      SyListF (headVal@(SyntaxVal _ (SyAtomF headName)) : SyntaxVal bindsSp (SyListF binds) : [body])
         | stripIntroName headName == "LET" -> do
-        frame <- bindFrame (mapMaybe bindingName binds)
-        let env' = frame : env
-        binds' <- mapM (renameLetBinding env') binds
-        body' <- goExpr env' body
-        pure $ SyList [SyAtom "LET", SyList binds', body']
-      SyList (SyAtom headName : SyList params : rest)
-        | stripIntroName headName == "LAM" -> do
-        frame <- bindFrame (mapMaybe paramName params)
-        let env' = frame : env
-        params' <- mapM (renameLamParam env') params
-        rest' <- case rest of
-          [body] -> (:[]) <$> goExpr env' body
-          [retTy, body] -> do
-            retTy' <- goExpr env retTy
+            frame <- bindFrame (mapMaybe bindingName binds)
+            let env' = frame : env
+            binds' <- mapM (renameLetBinding env') binds
             body' <- goExpr env' body
-            pure [retTy', body']
-          _ -> pure rest
-        pure $ SyList (SyAtom "LAM" : SyList params' : rest')
-      SyList (SyAtom headName : scrutinee : arms)
+            pure $ mkSyntax sp (SyListF
+              [ rebuildSyntax headVal (SyAtomF "LET")
+              , mkSyntax bindsSp (SyListF binds')
+              , body'
+              ])
+      SyListF (headVal@(SyntaxVal _ (SyAtomF headName)) : SyntaxVal paramsSp (SyListF params) : rest)
+        | stripIntroName headName == "LAM" -> do
+            frame <- bindFrame (mapMaybe paramName params)
+            let env' = frame : env
+            params' <- mapM (renameLamParam env') params
+            rest' <- case rest of
+              [body] -> (:[]) <$> goExpr env' body
+              [retTy, body] -> do
+                retTy' <- goExpr env retTy
+                body' <- goExpr env' body
+                pure [retTy', body']
+              _ -> pure rest
+            pure $ mkSyntax sp (SyListF
+              (rebuildSyntax headVal (SyAtomF "LAM")
+                : mkSyntax paramsSp (SyListF params')
+                : rest'))
+      SyListF (headVal@(SyntaxVal _ (SyAtomF headName)) : scrutinee : arms)
         | stripIntroName headName == "CASE" -> do
-        scrutinee' <- goExpr env scrutinee
-        arms' <- mapM (renameCaseArm env) arms
-        pure $ SyList (SyAtom "CASE" : scrutinee' : arms')
-      SyList xs -> SyList <$> mapM (goExpr env) xs
+            scrutinee' <- goExpr env scrutinee
+            arms' <- mapM (renameCaseArm env) arms
+            pure $ mkSyntax sp (SyListF (rebuildSyntax headVal (SyAtomF "CASE") : scrutinee' : arms'))
+      SyListF xs -> mkSyntax sp . SyListF <$> mapM (goExpr env) xs
       _ -> pure val
 
     mapMaybe f = foldr (\x acc -> maybe acc (:acc) (f x)) []
@@ -985,77 +1058,73 @@ hygienizeSyntax stx = State.evalState (goExpr [] stx) (0 :: Int)
         M.empty
         names
 
-    renameLetBinding env' binding = case binding of
-      SyList [SyAtom name, rhs] -> do
-        rhs' <- goExpr env' rhs
-        pure $ SyList [SyAtom (rewriteName env' name), rhs']
-      other -> goExpr env' other
+    renameLetBinding env' (SyntaxVal sp (SyListF [nameStx@(SyntaxVal _ (SyAtomF name)), rhs])) = do
+      rhs' <- goExpr env' rhs
+      pure $ mkSyntax sp (SyListF [rebuildSyntax nameStx (SyAtomF (rewriteName env' name)), rhs'])
+    renameLetBinding env' other = goExpr env' other
 
-    renameLamParam env' val = case val of
-      SyAtom marker | stripIntroName marker == "&REST" -> pure (SyAtom "&REST")
-      SyAtom marker | stripIntroName marker == "&KEY" -> pure (SyAtom "&KEY")
-      SyType inner -> SyType <$> goExpr env' inner
-      SyAtom name ->
-        pure $ SyAtom (rewriteName env' name)
-      SyList [SyAtom name, ty] -> do
+    renameLamParam env' val@(SyntaxVal sp form) = case form of
+      SyAtomF marker | stripIntroName marker == "&REST" -> pure (rebuildSyntax val (SyAtomF "&REST"))
+      SyAtomF marker | stripIntroName marker == "&KEY" -> pure (rebuildSyntax val (SyAtomF "&KEY"))
+      SyTypeF inner -> mkSyntax sp . SyTypeF <$> goExpr env' inner
+      SyAtomF name ->
+        pure $ rebuildSyntax val (SyAtomF (rewriteName env' name))
+      SyListF [nameStx@(SyntaxVal _ (SyAtomF name)), ty] -> do
         ty' <- goExpr env' ty
-        pure $ SyList [SyAtom (rewriteName env' name), ty']
-      SyList [param, defExpr] -> do
+        pure $ mkSyntax sp (SyListF [rebuildSyntax nameStx (SyAtomF (rewriteName env' name)), ty'])
+      SyListF [param, defExpr] -> do
         defExpr' <- goExpr env' defExpr
-        pure $ SyList [renameLamParamPure env' param, defExpr']
-      SyList [param, ty, defExpr] -> do
+        pure $ mkSyntax sp (SyListF [renameLamParamPure env' param, defExpr'])
+      SyListF [param, ty, defExpr] -> do
         defExpr' <- goExpr env' defExpr
         ty' <- goExpr env' ty
-        pure $ SyList [renameLamParamPure env' param, ty', defExpr']
+        pure $ mkSyntax sp (SyListF [renameLamParamPure env' param, ty', defExpr'])
       _ -> goExpr env' val
 
-    renameLamParamPure env' param = case param of
-      SyAtom name -> SyAtom (rewriteName env' name)
-      SyList [SyAtom name, ty] ->
-        SyList [SyAtom (rewriteName env' name), mapSyntaxAtoms stripIntroName ty]
-      other -> mapSyntaxAtoms stripIntroName other
+    renameLamParamPure env' param@(SyntaxVal sp form) = case form of
+      SyAtomF name -> rebuildSyntax param (SyAtomF (rewriteName env' name))
+      SyListF [nameStx@(SyntaxVal _ (SyAtomF name)), ty] ->
+        mkSyntax sp (SyListF [rebuildSyntax nameStx (SyAtomF (rewriteName env' name)), mapSyntaxAtoms stripIntroName ty])
+      _ -> mapSyntaxAtoms stripIntroName param
 
-    renameCaseArm env arm = case arm of
-      SyList [pat, body] -> do
-        (frame, pat') <- renamePattern pat
-        body' <- goExpr (frame : env) body
-        pure $ SyList [pat', body']
-      _ -> goExpr env arm
+    renameCaseArm env (SyntaxVal sp (SyListF [pat, body])) = do
+      (frame, pat') <- renamePattern pat
+      body' <- goExpr (frame : env) body
+      pure $ mkSyntax sp (SyListF [pat', body'])
+    renameCaseArm env arm = goExpr env arm
 
-    renamePattern pat = case pat of
-      SyAtom "_" -> pure (M.empty, pat)
-      SyAtom "TRUE" -> pure (M.empty, pat)
-      SyAtom "FALSE" -> pure (M.empty, pat)
-      SyAtom marker | stripIntroName marker == "_" -> pure (M.empty, SyAtom "_")
-      SyAtom marker | stripIntroName marker == "TRUE" -> pure (M.empty, SyAtom "TRUE")
-      SyAtom marker | stripIntroName marker == "FALSE" -> pure (M.empty, SyAtom "FALSE")
-      SyAtom name
+    renamePattern pat@(SyntaxVal sp form) = case form of
+      SyAtomF "_" -> pure (M.empty, pat)
+      SyAtomF "TRUE" -> pure (M.empty, pat)
+      SyAtomF "FALSE" -> pure (M.empty, pat)
+      SyAtomF marker | stripIntroName marker == "_" -> pure (M.empty, rebuildSyntax pat (SyAtomF "_"))
+      SyAtomF marker | stripIntroName marker == "TRUE" -> pure (M.empty, rebuildSyntax pat (SyAtomF "TRUE"))
+      SyAtomF marker | stripIntroName marker == "FALSE" -> pure (M.empty, rebuildSyntax pat (SyAtomF "FALSE"))
+      SyAtomF name
         | isIntroName name -> do
             fresh <- freshName name
-            pure (M.singleton name fresh, SyAtom fresh)
-        | otherwise -> pure (M.empty, SyAtom name)
-      SyList (SyAtom ctor : subPats) -> do
+            pure (M.singleton name fresh, rebuildSyntax pat (SyAtomF fresh))
+        | otherwise -> pure (M.empty, pat)
+      SyListF (ctorStx@(SyntaxVal _ (SyAtomF ctor)) : subPats) -> do
         renamed <- mapM renamePattern subPats
         let (frames, pats') = unzip renamed
-        pure (M.unions frames, SyList (SyAtom (stripIntroName ctor) : pats'))
-      SyType inner -> do
+        pure (M.unions frames, mkSyntax sp (SyListF (rebuildSyntax ctorStx (SyAtomF (stripIntroName ctor)) : pats')))
+      SyTypeF inner -> do
         (frame, inner') <- renamePattern inner
-        pure (frame, SyType inner')
-      other -> pure (M.empty, other)
+        pure (frame, mkSyntax sp (SyTypeF inner'))
+      _ -> pure (M.empty, pat)
 
-    bindingName val = case val of
-      SyList [SyAtom name, _] -> Just name
-      _ -> Nothing
+    bindingName (SyntaxVal _ (SyListF [SyntaxVal _ (SyAtomF name), _])) = Just name
+    bindingName _ = Nothing
 
-    paramName val = case val of
-      SyAtom marker | stripIntroName marker == "&REST" -> Nothing
-      SyAtom marker | stripIntroName marker == "&KEY" -> Nothing
-      SyType _ -> Nothing
-      SyAtom name -> Just name
-      SyList [SyAtom name, _] -> Just name
-      SyList [param, _] -> paramName param
-      SyList [param, _, _] -> paramName param
-      _ -> Nothing
+    paramName (SyntaxVal _ (SyAtomF marker)) | stripIntroName marker == "&REST" = Nothing
+    paramName (SyntaxVal _ (SyAtomF marker)) | stripIntroName marker == "&KEY" = Nothing
+    paramName (SyntaxVal _ (SyTypeF _)) = Nothing
+    paramName (SyntaxVal _ (SyAtomF name)) = Just name
+    paramName (SyntaxVal _ (SyListF [SyntaxVal _ (SyAtomF name), _])) = Just name
+    paramName (SyntaxVal _ (SyListF [param, _])) = paramName param
+    paramName (SyntaxVal _ (SyListF [param, _, _])) = paramName param
+    paramName _ = Nothing
 
     freshName encoded = do
       n <- State.get
@@ -1063,11 +1132,11 @@ hygienizeSyntax stx = State.evalState (goExpr [] stx) (0 :: Int)
       pure ("__H" <> T.pack (show n) <> "_" <> encoded)
 
 mapSyntaxAtoms :: (T.Text -> T.Text) -> SyntaxVal -> SyntaxVal
-mapSyntaxAtoms f stx = case stx of
-  SyAtom name -> SyAtom (f name)
-  SyType inner -> SyType (mapSyntaxAtoms f inner)
-  SyList xs -> SyList (map (mapSyntaxAtoms f) xs)
-  other -> other
+mapSyntaxAtoms f stx@(SyntaxVal sp form) = case form of
+  SyAtomF name -> rebuildSyntax stx (SyAtomF (f name))
+  SyTypeF inner -> mkSyntax sp (SyTypeF (mapSyntaxAtoms f inner))
+  SyListF xs -> mkSyntax sp (SyListF (map (mapSyntaxAtoms f) xs))
+  _ -> stx
 
 showBrief :: MVal -> String
 showBrief (MAtom t)    = T.unpack t

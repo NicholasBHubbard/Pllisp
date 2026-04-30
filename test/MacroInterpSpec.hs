@@ -211,6 +211,10 @@ spec = do
       MI.sexprToVal (parseSExpr "(quote (a 1))")
         `shouldBe` MI.MSyntax (MI.SyList [MI.SyAtom "QUOTE", MI.SyList [MI.SyAtom "A", MI.SyInt 1]])
 
+    it "valToSExpr preserves spans from parsed syntax" $ do
+      let sx = parseSExpr "(foo (bar 1) baz)"
+      MI.valToSExpr (MI.sexprToVal sx) `shouldBe` Right sx
+
     it "valToSExpr round-trips atoms" $
       MI.valToSExpr (MI.MAtom "FOO")
         `shouldBe` Right (Loc.Located dummySpan (SExpr.SAtom "FOO"))
@@ -227,18 +231,7 @@ spec = do
 
     it "valToSExpr round-trips quasiquote syntax forms" $
       MI.valToSExpr (MI.sexprToVal (parseSExpr "`(a ,x ,@xs)"))
-        `shouldBe`
-          Right
-            (Loc.Located dummySpan
-              (SExpr.SQuasi
-                (Loc.Located dummySpan
-                  (SExpr.SList
-                    [ Loc.Located dummySpan (SExpr.SAtom "A")
-                    , Loc.Located dummySpan
-                        (SExpr.SUnquote (Loc.Located dummySpan (SExpr.SAtom "X")))
-                    , Loc.Located dummySpan
-                        (SExpr.SSplice (Loc.Located dummySpan (SExpr.SAtom "XS")))
-                    ]))))
+        `shouldBe` Right (parseSExpr "`(a ,x ,@xs)")
 
     it "valToSExpr rejects typed closures" $
       case compileExpr "1" of
