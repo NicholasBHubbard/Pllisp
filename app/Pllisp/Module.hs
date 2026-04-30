@@ -94,6 +94,11 @@ checkDuplicateDecls = go S.empty
 
     declInfo (CST.ExprType name _ _)  = Just ("type", name)
     declInfo (CST.ExprCls name _ _ _) = Just ("typeclass", name)
+    declInfo (CST.ExprFFI name _ _) = Just ("ffi", name)
+    declInfo (CST.ExprFFIStruct name _) = Just ("ffi", name)
+    declInfo (CST.ExprFFIVar name _ _) = Just ("ffi", name)
+    declInfo (CST.ExprFFIEnum name _) = Just ("ffi", name)
+    declInfo (CST.ExprFFICallback name _ _) = Just ("ffi", name)
     declInfo _                        = Nothing
 
 validateProgramNames :: S.Set CST.Symbol -> CST.CST -> Either String ()

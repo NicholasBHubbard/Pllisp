@@ -1,9 +1,31 @@
 # FFI
 
 Pllisp can call C functions and work with C-facing data layouts directly.
+That power is intentionally unsafe. The compiler checks the pllisp-side shape
+of your declaration, but it does not prove that your declaration matches the
+real C ABI.
 
 This page describes the user-facing FFI surface: declarations, C type names,
 structs, arrays, enums, variadic functions, and callbacks.
+
+## Safety First
+
+The important boundaries are:
+
+- `ffi` is usable for fixed-arity scalar and pointer signatures.
+- `ffi-var` is intentionally narrow. Fixed parameters must still be scalar or
+  pointer types, and extra variadic arguments must have pllisp type `%INT`,
+  `%FLT`, `%STR`, or `%BOOL`.
+- `ffi-callback` supports scalar and pointer arguments and returns, including
+  float callbacks.
+- Named struct types like `%Point` and inline array types like `(%ARR 8 %I8)`
+  are for `ffi-struct` field declarations only. They are not supported in
+  `ffi`, `ffi-var`, or `ffi-callback` signatures. Use `%PTR` when C expects a
+  pointer to struct or buffer storage.
+- Ownership and lifetime are still manual. If the C side expects memory to
+  stay alive, pllisp will not enforce that contract for you.
+- Prefer namespaced runtime helper symbols such as `pll-exit` over raw libc
+  names in stdlib-style code.
 
 ## Declaring C Functions
 
@@ -57,8 +79,11 @@ ABI types.
 
 | FFI type | Meaning |
 |----------|---------|
-| `%Point` | named struct type defined with `ffi-struct` |
+| `%Point` | named struct field type defined with `ffi-struct` |
 | `(%ARR 8 %I8)` | inline fixed-size array field |
+
+`%Point` and `(%ARR ...)` belong in `ffi-struct` field lists. They are not
+valid function, variadic, or callback ABI types. Use `%PTR` for those cases.
 
 ## User-Level Value Behavior
 
@@ -100,6 +125,19 @@ normally at the call site:
 (ffi-var printf (%PTR) %I32)
 (printf "%ld+%ld" 10 20)
 ```
+
+The compiler rejects variadic signatures that use by-value structs, inline
+arrays, or `%VOID` parameters.
+
+It also rejects extra variadic arguments whose pllisp type is not one of:
+
+- `%INT`
+- `%FLT`
+- `%STR`
+- `%BOOL`
+
+That restriction is deliberate. Variadic C calls are the weakest part of the
+FFI, so the language keeps the supported surface small.
 
 ## Structs
 
@@ -259,8 +297,28 @@ Closures may capture surrounding values:
   (print (int-to-str (pll_test_apply_int adder 32))))
 ```
 
-The exact callback consumer function comes from your C library; the examples
-above show the pllisp side of the interface.
+Float callbacks are supported too:
+
+```
+(ffi pll_test_apply_flt64 (%PTR %F64) %F64)
+(ffi-callback flt64-cb (%F64) %F64)
+
+(let ((twice (flt64-cb (lam (x) (mulf x 2.0)))))
+  (print (flt-to-str (pll_test_apply_flt64 twice 21.25))))
+```
+
+So are mixed numeric signatures:
+
+```
+(ffi pll_test_apply_mix_num (%PTR %I64 %F64) %F64)
+(ffi-callback mix-cb (%I64 %F64) %F64)
+
+(let ((combine (mix-cb (lam (i x) (addf (int-to-flt i) x)))))
+  (print (flt-to-str (pll_test_apply_mix_num combine 40 2.5))))
+```
+
+The callback boundary is still limited to scalar and pointer ABI types. Use
+`%PTR` when a C callback argument is really a pointer to richer data.
 
 ## Interop with C Functions that Read or Mutate Structs
 
@@ -288,9 +346,12 @@ And mutation:
 
 ## Practical Advice
 
+- treat FFI declarations as unsafe escape hatches
 - start with simple fixed-arity functions before adding structs or callbacks
 - use explicit widths like `%I32` and `%F64` when ABI precision matters
 - remember that pointer-like values appear as strings at the pllisp level
+- use `%PTR`, not `%Point` or `(%ARR ...)`, in function and callback signatures
+- keep variadic calls boring: ints, floats, strings, booleans
 - keep FFI declarations near the top of the file
 - do not expect FFI declarations to export cleanly across modules right now
 

@@ -778,6 +778,17 @@ spec = do
         >>= (`shouldBe` "1")
 
   describe "CLI stdlib module" $ do
+    it "uses the namespaced pll-exit runtime helper" $ do
+      cliSrc <- T.IO.readFile "stdlib/CLI.pll"
+      ir <- multiModulePipeline [("CLI", cliSrc)] (T.unlines
+        [ "(import CLI)"
+        , "(CLI"
+        , "  (:flag :verbose \"-v\" \"--verbose\"))"
+        , "(print \"ok\")"
+        ])
+      T.isInfixOf "call void @pll_ffi_call(ptr @pll_exit" ir `shouldBe` True
+      T.isInfixOf "call void @pll_ffi_call(ptr @exit" ir `shouldBe` False
+
     it "binds flags, options, args, and rest arguments with one top-level CLI form" $
       runWithCLIArgs ["--verbose", "-o", "build/out.txt", "fast", "input.pll", "extra-1", "extra-2"]
         (T.unlines
@@ -1955,6 +1966,19 @@ spec = do
         , "(printf \"%.1f\" 3.5)"
         ]) >>= (`shouldBe` "3.5")
 
+    it "rejects unsupported variadic fixed parameter types" $
+      shouldFailToCompile
+        "(ffi-var bad ((%ARR 4 %I8)) %I32)"
+        "ffi-var does not support by-value struct or array types"
+
+    it "rejects unsupported variadic extra argument types" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(ffi-var printf (%PTR) %I32)"
+          , "(printf \"%p\" (Cons 1 Empty))"
+          ])
+        "unsupported variadic argument type"
+
   -- FEATURE: String marshaling (pllisp strings ARE C char*)
   describe "ffi string marshaling" $ do
     it "pass pllisp string to C strlen" $
@@ -2060,6 +2084,43 @@ spec = do
         , "  (print (int-to-str (pll_test_apply_int adder 32))))"
         ]) >>= (`shouldBe` "42")
 
+    it "marshals f64 callback arguments and returns" $
+      run (T.unlines
+        [ "(ffi pll_test_apply_flt64 (%PTR %F64) %F64)"
+        , "(ffi-callback flt64-cb (%F64) %F64)"
+        , "(let ((twice (flt64-cb (lam (x) (mulf x 2.0)))))"
+        , "  (print (flt-to-str (pll_test_apply_flt64 twice 21.25))))"
+        ]) >>= (`shouldBe` "42.5")
+
+    it "marshals f32 callback arguments and returns" $
+      run (T.unlines
+        [ "(ffi pll_test_apply_flt32 (%PTR %F32) %F32)"
+        , "(ffi-callback flt32-cb (%F32) %F32)"
+        , "(let ((bump (flt32-cb (lam (x) (addf x 1.25)))))"
+        , "  (print (flt-to-str (pll_test_apply_flt32 bump 41.25))))"
+        ]) >>= (`shouldBe` "42.5")
+
+    it "marshals mixed numeric callback arguments" $
+      run (T.unlines
+        [ "(ffi pll_test_apply_mix_num (%PTR %I64 %F64) %F64)"
+        , "(ffi-callback mix-cb (%I64 %F64) %F64)"
+        , "(let ((combine (mix-cb (lam (i x) (addf (int-to-flt i) x)))))"
+        , "  (print (flt-to-str (pll_test_apply_mix_num combine 40 2.5))))"
+        ]) >>= (`shouldBe` "42.5")
+
+    it "rejects void callback parameters" $
+      shouldFailToCompile
+        "(ffi-callback bad-cb (%VOID) %I64)"
+        "ffi-callback parameter types cannot be %VOID"
+
+    it "rejects by-value callback struct parameters" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(ffi-struct Point (x %I32) (y %I32))"
+          , "(ffi-callback point-cb (%Point) %I64)"
+          ])
+        "ffi-callback does not support by-value struct or array types"
+
   -- FEATURE: Struct passed to C functions via pointer
   describe "ffi struct interop" $ do
     it "pass struct to C function that reads fields" $
@@ -2102,6 +2163,31 @@ spec = do
         , "  (let ((_ (snprintf (.buf m) 16 \"hello\")))"
         , "    (print (.buf m))))"
         ]) >>= (`shouldBe` "hello")
+
+  describe "ffi hardening" $ do
+    it "rejects duplicate names across ffi declaration forms" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(ffi foo (%I64) %I64)"
+          , "(ffi-var foo (%PTR) %I32)"
+          ])
+        "duplicate ffi definition: FOO"
+
+    it "rejects duplicate names across ffi struct and enum declarations" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(ffi-struct Point (x %I32))"
+          , "(ffi-enum Point (ORIGIN 0))"
+          ])
+        "duplicate ffi definition: POINT"
+
+    it "rejects by-value struct parameters in ffi declarations" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(ffi-struct Point (x %I32) (y %I32))"
+          , "(ffi bad-point (%Point) %I64)"
+          ])
+        "ffi does not support by-value struct or array types"
 
     it "struct passed to C function via polymorphic ptr" $
       run (T.unlines

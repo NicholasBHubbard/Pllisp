@@ -72,6 +72,7 @@ typecheckWith importedEnvs importedCtx exprs =
   let typeDecls = extractTypeDecls exprs
       ctorCtx = buildCtorContext typeDecls
       builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
+      ffiDeclErrs = validateFFIDecls exprs
       ffiDecls = extractFFIDecls exprs
       ffiCtx = buildFFIContext ffiDecls
       ffiStructDecls = extractFFIStructDecls exprs
@@ -104,8 +105,9 @@ typecheckWith importedEnvs importedCtx exprs =
       localEnvs = TCEnvs localClassEnv localMethodEnv localInstanceEnv
       fullEnvs = mergeTCEnvs localEnvs importedEnvs
   in case solveAll constraints of
-    Left solveErrs -> Left (instErrs ++ superErrs ++ inferErrs ++ solveErrs)
+    Left solveErrs -> Left (ffiDeclErrs ++ instErrs ++ superErrs ++ inferErrs ++ solveErrs)
     Right subst
+      | not (null ffiDeclErrs) -> Left ffiDeclErrs
       | not (null instErrs) -> Left instErrs
       | not (null superErrs) -> Left superErrs
       | not (null inferErrs) -> Left inferErrs
@@ -447,6 +449,41 @@ buildCallbackContext = M.fromList . concatMap go
       let closureTy = Ty.TyFun (map Ty.cTypeToPllisp paramCTys) (Ty.cTypeToPllisp retCTy)
       in [(name, Forall S.empty (Ty.TyFun [closureTy] Ty.TyStr))]
     go _ = []
+
+validateFFIDecls :: [Res.RExpr] -> [TypeError]
+validateFFIDecls = concatMap go
+  where
+    go (Loc.Located sp expr) = case expr of
+      Res.RFFI _ paramCTys retCTy ->
+        validateFFISignature sp "ffi" paramCTys retCTy
+      Res.RFFIVar _ paramCTys retCTy ->
+        validateFFISignature sp "ffi-var" paramCTys retCTy
+      Res.RFFICallback _ paramCTys retCTy ->
+        validateFFISignature sp "ffi-callback" paramCTys retCTy
+      _ -> []
+
+    validateFFISignature sp kind paramCTys retCTy =
+      concatMap (validateFFIParam sp kind) paramCTys ++ validateFFIReturn sp kind retCTy
+
+    validateFFIParam sp kind ct =
+      validateVoidParam sp kind ct ++ validateAggregate sp kind ct
+
+    validateFFIReturn sp kind ct =
+      validateAggregate sp kind ct
+
+    validateVoidParam sp kind Ty.CVoid =
+      [TypeError sp (kind ++ " parameter types cannot be %VOID")]
+    validateVoidParam _ _ _ = []
+
+    validateAggregate sp kind ct
+      | isAggregateCType ct =
+          [TypeError sp (kind ++ " does not support by-value struct or array types; use %PTR instead: "
+            ++ T.unpack (Ty.renderCType ct))]
+      | otherwise = []
+
+    isAggregateCType (Ty.CArr _ _) = True
+    isAggregateCType (Ty.CStruct _) = True
+    isAggregateCType _ = False
 
 buildFieldMap :: [(CST.Symbol, [CST.Symbol], [CST.DataCon])] -> FieldMap
 buildFieldMap = M.fromList . concatMap go
@@ -1125,6 +1162,7 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
           then case typeOf ft of
             Ty.TyFun fixedTys fRet -> do
               sequence_ [constrain sp (typeOf a) ft' | (a, ft') <- zip ats fixedTys]
+              mapM_ validateVariadicExtraArg (drop (length fixedTys) (zip posExprs ats))
               constrain sp fRet rt
             _ -> constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
           else constrain sp (typeOf ft) (Ty.TyFun (map typeOf ats) rt)
@@ -1264,6 +1302,17 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
         bodyExpr <- localCtx (M.union (M.fromList bindings)) (infer body)
         constrain sp (typeOf bodyExpr) resultTy
         pure (rpat, bodyExpr)
+
+validateVariadicExtraArg :: (Res.RExpr, TRExpr) -> Infer ()
+validateVariadicExtraArg (Loc.Located argSp _, at) =
+  case typeOf at of
+    Ty.TyInt -> pure ()
+    Ty.TyFlt -> pure ()
+    Ty.TyStr -> pure ()
+    Ty.TyBool -> pure ()
+    other -> do
+      _ <- recordError argSp ("unsupported variadic argument type: " ++ T.unpack (Ty.renderType other))
+      pure ()
 
 -- Inference helpers
 

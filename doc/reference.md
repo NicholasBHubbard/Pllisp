@@ -62,6 +62,12 @@ variables:
 `syntax-case` is compile-time only. Use it in macro bodies and
 `eval-when (:compile-toplevel ...)` helper code.
 
+FFI is unsafe by design. Function and callback signatures support scalar and
+pointer ABI types. Named struct types like `%Point` and array types like
+`(%ARR 8 %I8)` belong in `ffi-struct` field declarations, not in `ffi`,
+`ffi-var`, or `ffi-callback` signatures. Variadic extra arguments are limited
+to `%INT`, `%FLT`, `%STR`, and `%BOOL` values.
+
 ## Extended Lambda Lists
 
 | Feature | Example |
