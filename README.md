@@ -29,6 +29,8 @@ This project is currently in development.
 - [ ] Strong unicode support
 - [ ] Heredoc strings
 - [ ] Add an optimization phase to compilation
+- [ ] Sophisticated emacs support similar to slime
+- [ ] Add `unwind-protect`
 - [ ] Comprehensive test library
 - [ ] Rewrite entire compiler in Pllisp
 
