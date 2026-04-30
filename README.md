@@ -28,6 +28,7 @@ This project is currently in development.
 - [ ] Strong unicode support
 - [ ] Heredoc strings
 - [ ] Comprehensive test library
+- [ ] Rewrite entire compiler in Pllisp
 
 ## Getting Started
 
