@@ -22,6 +22,12 @@ This project is currently in development.
 - Compiles to LLVM
 - Standard library
 
+## Future Work
+
+- [ ] Documentation system
+- [ ] Heredoc strings
+- [ ] Comprehensive test library
+
 ## Getting Started
 
 ### Requirements
