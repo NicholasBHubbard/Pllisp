@@ -27,6 +27,7 @@ This project is currently in development.
 - [ ] Documentation system
 - [ ] Strong unicode support
 - [ ] Heredoc strings
+- [ ] Add a optimization phase to compilation
 - [ ] Comprehensive test library
 - [ ] Rewrite entire compiler in Pllisp
 
