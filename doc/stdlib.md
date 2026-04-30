@@ -114,17 +114,25 @@ Binds a named function.
 Equivalent shape:
 
 ```
-(let ((square (lam ((x %INT)) (mul x x))))
+(let ((square (lam ((x %INT)) (progn (mul x x)))))
   square)
 ```
 
-If you need multiple expressions in the body, use `progn` inside the body:
+`fun` accepts one or more body forms. Multiple forms are wrapped in `progn`
+automatically:
 
 ```
 (fun greet ((name %STR))
-  (progn
-    (print "greeting")
-    (print (concat "hello " name))))
+  (print "greeting")
+  (print (concat "hello " name)))
+```
+
+Explicit return annotations still work with multi-form bodies:
+
+```
+(fun next ((x %INT)) %INT
+  (print "bump")
+  (add x 1))
 ```
 
 ### `val`

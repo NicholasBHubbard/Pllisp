@@ -1351,6 +1351,30 @@ spec = do
         , "(print (int-to-str (inc 41)))"
         ]) >>= (`shouldBe` "42")
 
+    it "fun macro rejects a bare return annotation with no body" $
+      shouldFailToCompile
+        (T.unlines
+          [ "(fun broken ((x %INT)) %INT)"
+          , "(print (int-to-str (broken 41)))"
+          ])
+        "fun expects"
+
+    it "fun macro accepts multiple body forms" $ do
+      run (T.unlines
+        [ "(fun greet ((name %STR))"
+        , "  (print \"greeting\")"
+        , "  (print (concat \"hello \" name)))"
+        , "(greet \"pllisp\")"
+        ]) >>= (`shouldBe` "greeting\nhello pllisp")
+
+    it "fun macro accepts multiple body forms with an explicit return annotation" $ do
+      run (T.unlines
+        [ "(fun next ((x %INT)) %INT"
+        , "  (print \"bump\")"
+        , "  (add x 1))"
+        , "(print (int-to-str (next 41)))"
+        ]) >>= (`shouldBe` "bump\n42")
+
     it "val introduces a top-level immutable binding" $ do
       run (T.unlines
         [ "(val answer 42)"
