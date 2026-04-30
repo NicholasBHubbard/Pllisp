@@ -7,6 +7,8 @@ import Test.Hspec
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T.IO
+import System.Exit (ExitCode(..))
+import System.Process (readProcessWithExitCode)
 
 spec :: Spec
 spec = do
@@ -43,6 +45,11 @@ spec = do
         , "bool?", "type?"
         , "sym-to-str", "str-to-sym"
         ]
+
+  describe "pllisp-mode font-lock behavior" $ do
+    it "highlights uninterned symbols as constants" $ do
+      face <- emacsFaceAt "(print :verbose)\n" 8
+      face `shouldContain` "font-lock-constant-face"
 
 extractConstStrings :: T.Text -> IO [T.Text]
 extractConstStrings name = do
@@ -112,3 +119,23 @@ expectedBuiltinNames = S.fromList
   , "syntax-symbol-name", "syntax-usym-name"
   , "error"
   ]
+
+emacsFaceAt :: String -> Int -> IO String
+emacsFaceAt src pos = do
+  let elisp =
+        unlines
+          [ "(with-temp-buffer"
+          , "  (insert " ++ show src ++ ")"
+          , "  (load-file \"extras/pllisp-mode.el\")"
+          , "  (pllisp-mode)"
+          , "  (font-lock-ensure)"
+          , "  (princ (format \"%S\" (get-text-property " ++ show pos ++ " 'face))))" ]
+  (ec, out, err) <- readProcessWithExitCode "emacs" ["--batch", "--quick", "--eval", elisp] ""
+  case ec of
+    ExitSuccess -> pure (trim out)
+    ExitFailure _ -> expectationFailure ("emacs font-lock check failed:\n" ++ err) >> pure ""
+
+trim :: String -> String
+trim = reverse . strip . reverse . strip
+  where
+    strip = dropWhile (`elem` (" \n\r\t" :: String))

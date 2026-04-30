@@ -67,7 +67,7 @@
       ;; Constants: true, false, unit
       (,constant-re . font-lock-constant-face)
       ;; Uninterned symbols: :foo
-      ("\\<:\\([A-Za-z][A-Za-z0-9_-]*\\)" . font-lock-constant-face)
+      ("\\(?:^\\|[[:space:](]\\)\\(:[A-Za-z][A-Za-z0-9_-]*\\)" 1 font-lock-constant-face)
       ;; Regex literals: /pattern/flags
       ("\\(/[^/\n]*/[imsx]*\\)" 1 font-lock-string-face)
       ;; Type annotations: %INT, %(List INT), etc.
