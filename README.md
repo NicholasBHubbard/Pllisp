@@ -4,6 +4,23 @@ A statically typed Lisp programming language.
 
 This project is currently in development.
 
+## Key Features
+
+- Lisp language
+- Static typing
+- Type inference
+- Algebraic data types
+- Higher-kinded types
+- Record types
+- Pattern matching
+- Typeclasses
+- Hygienic macro system
+- Mutable references
+- Module system
+- Built-in regular expressions
+- C FFI
+- Standard library
+
 ## Getting Started
 
 ### Requirements
