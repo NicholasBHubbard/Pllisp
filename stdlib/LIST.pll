@@ -1,0 +1,14 @@
+(module LIST)
+
+(fun hd (l)
+  (case l
+    ((Cons x _) (Just x))
+    (_ Nothing)))
+
+(fun tl (l)
+  (case l
+    ((Cons _ tl) tl)
+    (_ Empty)))
+
+(fun list (&rest es)
+  es)

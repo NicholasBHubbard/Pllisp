@@ -1,0 +1,19 @@
+(module FUNCTOR)
+
+(fun list-map ((fn %(-> a b)) (xs %(List a))) %(List b)
+  (case xs
+    ((Empty) Empty)
+    ((Cons h t) (Cons (fn h) (list-map fn t)))))
+
+(class FUNCTOR () (f)
+  (map %(-> a b) %(f a) %(f b)))
+
+(inst FUNCTOR %List
+  (map (lam ((fn %(-> a b)) (xs %(List a)))
+    (list-map fn xs))))
+
+(inst FUNCTOR %Maybe
+  (map (lam ((fn %(-> a b)) (m %(Maybe a)))
+    (case m
+      ((Just x) (Just (fn x)))
+      (_ Nothing)))))

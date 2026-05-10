@@ -4,9 +4,25 @@ module StdlibSpec (spec) where
 
 import Test.Hspec
 
+import Control.Exception (IOException, bracket, evaluate, finally, try)
+import Data.List (sort)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T.IO
+import System.Directory
+  ( copyFile
+  , createDirectoryIfMissing
+  , getTemporaryDirectory
+  , listDirectory
+  , removeFile
+  , removePathForcibly
+  )
+import System.Exit (ExitCode(..))
+import System.FilePath ((</>), takeBaseName, takeExtension, takeFileName)
+import System.IO (BufferMode(..), hClose, hFlush, hSetBuffering, openTempFile, stdout)
 
+import qualified GHC.IO.Handle as IOHandle
+
+import qualified Pllisp.Driver as Driver
 import qualified Pllisp.Parser as Parser
 import qualified Pllisp.SExpr as SExpr
 import qualified Pllisp.SrcLoc as Loc
@@ -20,6 +36,10 @@ spec = do
         Left err -> expectationFailure ("parse error: " ++ show err) >> pure []
         Right parsed -> pure parsed
       collectWrappedNames sexprs `shouldBe` []
+
+  describe "stdlib modules" $ do
+    files <- runIO findStdlibFiles
+    mapM_ compileTest files
 
 collectWrappedNames :: [SExpr.SExpr] -> [T.Text]
 collectWrappedNames = concatMap go
@@ -46,3 +66,70 @@ wrappedName (Loc.Located _
     ]))
   | bindName == bodyName = Just bindName
 wrappedName _ = Nothing
+
+findStdlibFiles :: IO [FilePath]
+findStdlibFiles = do
+  files <- listDirectory "stdlib"
+  pure $ sort ["stdlib" </> f | f <- files, takeExtension f == ".pll"]
+
+compileTest :: FilePath -> Spec
+compileTest path = it ("compiles " ++ takeBaseName path) $
+  withScratchDir ("stdlib-" ++ takeBaseName path) $ \dir -> do
+    let scratchStdlib = dir </> "stdlib"
+        mainPath = dir </> "main.pllisp"
+        modName = takeBaseName path
+        mainSrc
+          | modName == "PRELUDE" = "(print \"ok\")\n"
+          | otherwise = "(import " ++ modName ++ ")\nunit\n"
+    createDirectoryIfMissing True scratchStdlib
+    stdlibFiles <- findStdlibFiles
+    mapM_ (\src -> copyFile src (scratchStdlib </> takeFileName src)) stdlibFiles
+    T.IO.writeFile mainPath (T.pack mainSrc)
+    (out, ec) <- captureStdout (Driver.runFiles [mainPath])
+    case ec of
+      ExitSuccess -> pure ()
+      ExitFailure c -> expectationFailure ("expected compile success, got " ++ show c ++ ":\n" ++ out)
+
+captureStdout :: IO a -> IO (String, a)
+captureStdout action = do
+  tmp <- getTemporaryDirectory
+  bracket (openTempFile tmp "pllisp-stdlib-spec.out") cleanup $ \(fp, h) -> do
+    old <- IOHandle.hDuplicate stdout
+    hSetBuffering stdout LineBuffering
+    result <-
+      (`finally` restoreStdout old h) $ do
+        IOHandle.hDuplicateTo h stdout
+        value <- action
+        hFlush stdout
+        pure value
+    out <- readFile fp
+    _ <- evaluate (length out)
+    pure (out, result)
+  where
+    restoreStdout old h = do
+      hFlush stdout
+      IOHandle.hDuplicateTo old stdout
+      ignoreIO (hClose old)
+      ignoreIO (hClose h)
+
+    cleanup (fp, h) = do
+      ignoreIO (hClose h)
+      ignoreIO (removeFile fp)
+
+ignoreIO :: IO () -> IO ()
+ignoreIO io = do
+  _ <- try io :: IO (Either IOException ())
+  pure ()
+
+withScratchDir :: String -> (FilePath -> IO a) -> IO a
+withScratchDir label action = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "pllisp-stdlib-spec" </> label
+  clearIfExists dir
+  createDirectoryIfMissing True dir
+  action dir `finally` clearIfExists dir
+
+clearIfExists :: FilePath -> IO ()
+clearIfExists dir = do
+  _ <- try (removePathForcibly dir) :: IO (Either IOException ())
+  pure ()
