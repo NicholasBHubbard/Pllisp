@@ -1,0 +1,2 @@
+(module A)
+(type BoxA () (Same %INT))

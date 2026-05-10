@@ -160,9 +160,8 @@ spec = do
       S.member "FOO.BAR" resolveScope `shouldBe` True
       S.member "BAR" resolveScope `shouldBe` False
       M.member "FOO.BAR" tcCtx `shouldBe` True
-      -- BAR is in TC context (needed for normalization) but not in resolve scope
-      M.member "BAR" tcCtx `shouldBe` True
-      M.lookup "FOO.BAR" normMap `shouldBe` Just "BAR"
+      M.member "BAR" tcCtx `shouldBe` False
+      M.lookup "FOO.BAR" normMap `shouldBe` Just "FOO.BAR"
 
     it "import with unquals: both qualified and unqualified in scope" $ do
       let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
@@ -171,7 +170,7 @@ spec = do
       S.member "FOO.BAR" resolveScope `shouldBe` True
       S.member "BAR" resolveScope `shouldBe` True
       M.member "FOO.BAR" tcCtx `shouldBe` True
-      M.member "BAR" tcCtx `shouldBe` True
+      M.member "BAR" tcCtx `shouldBe` False
 
     it "alias changes qualified prefix" $ do
       let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
@@ -179,9 +178,9 @@ spec = do
           (resolveScope, tcCtx, normMap) = Mod.buildImportScope exports imports
       S.member "F.BAR" resolveScope `shouldBe` True
       S.member "FOO.BAR" resolveScope `shouldBe` False
-      M.member "F.BAR" tcCtx `shouldBe` True
-      M.member "FOO.BAR" tcCtx `shouldBe` False
-      M.lookup "F.BAR" normMap `shouldBe` Just "BAR"
+      M.member "F.BAR" tcCtx `shouldBe` False
+      M.member "FOO.BAR" tcCtx `shouldBe` True
+      M.lookup "F.BAR" normMap `shouldBe` Just "FOO.BAR"
 
     it "alias with unquals" $ do
       let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
@@ -209,8 +208,7 @@ spec = do
       S.member "X" resolveScope `shouldBe` True
       S.member "B.Y" resolveScope `shouldBe` True
       S.member "Y" resolveScope `shouldBe` False
-      -- TC context: A.X, X, B.Y, Y (all unquals in TC for normalization)
-      M.size tcCtx `shouldBe` 4
+      M.size tcCtx `shouldBe` 2
 
   describe "checkImportCollisions" $ do
     it "accepts non-overlapping unquals" $ do

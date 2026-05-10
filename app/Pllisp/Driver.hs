@@ -392,10 +392,13 @@ compileModules expandedMap compileStates moduleInfos (modName : rest) accExports
                           pure (Left (concatMap (\e ->
                             Error.renderError src "type" (TC.teSpan e) (TC.teMsg e)) errs))
                         Right (typed, modEnvs) -> do
-                          let exports = Mod.collectExports modEnvs typed
+                          let renameMap = Mod.moduleRenameMap modName (CST.progExprs modProg)
+                              typed' = Mod.renameTypedModuleSymbols renameMap typed
+                              modEnvs' = Mod.renameTCEnvsSymbols renameMap modEnvs
+                              exports = Mod.renameExportSchemes renameMap (Mod.collectExports modEnvs typed)
                               accExports' = M.insert modName exports accExports
                           compileModules expandedMap compileStates moduleInfos rest
-                            accExports' (accTyped ++ [typed]) modEnvs
+                            accExports' (accTyped ++ [typed']) modEnvs'
 
 findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)
 findModuleFile searchDir stdlibDir modName = do

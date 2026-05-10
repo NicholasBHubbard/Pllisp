@@ -1,0 +1,2 @@
+(module B)
+(type BoxB () (Same %STR))

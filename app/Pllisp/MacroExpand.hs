@@ -72,6 +72,9 @@ data EvalPhase
 primitiveOrigin :: T.Text
 primitiveOrigin = "%PRIMITIVE"
 
+ambiguousRuntimeOrigin :: T.Text
+ambiguousRuntimeOrigin = "%AMBIGUOUS-RUNTIME"
+
 compileTimeBuiltins :: TC.Context
 compileTimeBuiltins = M.fromList
   [ ("SYNTAX-CAR", syntaxFun [Ty.TySyntax] Ty.TySyntax)
@@ -282,28 +285,35 @@ mergeCompileStates :: [CompileState] -> Either String CompileState
 mergeCompileStates = foldM mergeOne emptyState
   where
     mergeOne acc st = do
-      acc1 <- foldM mergeEnvEntry acc (M.toList (csEnv st))
+      (acc1, st1) <- foldM mergeEnvEntry (acc, st) (M.toList (csEnv st))
       let acc2 = acc1
-            { csCtCtx = M.union (csCtCtx acc1) (csCtCtx st)
-            , csCtEnvs = TC.mergeTCEnvs (csCtEnvs acc1) (csCtEnvs st)
-            , csRtCtx = M.union (csRtCtx acc1) (csRtCtx st)
-            , csRtEnvs = TC.mergeTCEnvs (csRtEnvs acc1) (csRtEnvs st)
+            { csCtCtx = M.union (csCtCtx acc1) (csCtCtx st1)
+            , csCtEnvs = TC.mergeTCEnvs (csCtEnvs acc1) (csCtEnvs st1)
+            , csRtCtx = M.union (csRtCtx acc1) (csRtCtx st1)
+            , csRtEnvs = TC.mergeTCEnvs (csRtEnvs acc1) (csRtEnvs st1)
             }
-      foldM mergeMacroEntry acc2 (M.toList (csMacros st))
+      foldM (mergeMacroEntry st1) acc2 (M.toList (csMacros st1))
 
       where
-        mergeEnvEntry cur (name, val) =
-          case M.lookup name (csEnvOrigins st) of
-            Nothing -> pure cur
+        mergeEnvEntry (cur, curSt) (name, val) =
+          case M.lookup name (csEnvOrigins curSt) of
+            Nothing -> pure (cur, curSt)
             Just origin ->
               case M.lookup name (csEnvOrigins cur) of
                 Nothing -> pure
-                  (cur
-                    { csEnv = M.insert name val (csEnv cur)
-                    , csEnvOrigins = M.insert name origin (csEnvOrigins cur)
-                    })
+                  ( cur
+                      { csEnv = M.insert name val (csEnv cur)
+                      , csEnvOrigins = M.insert name origin (csEnvOrigins cur)
+                      }
+                  , curSt
+                  )
                 Just existingOrigin
-                  | existingOrigin == origin -> pure cur
+                  | existingOrigin == ambiguousRuntimeOrigin ->
+                      pure (cur, dropRuntimeName name curSt)
+                Just existingOrigin
+                  | existingOrigin == origin -> pure (cur, curSt)
+                  | isRuntimeVisible name cur curSt ->
+                      pure (markRuntimeAmbiguous name cur, dropRuntimeName name curSt)
                   | otherwise ->
                       Left ("compile-time helper collision: "
                         ++ T.unpack name
@@ -312,8 +322,27 @@ mergeCompileStates = foldM mergeOne emptyState
                         ++ " and "
                         ++ T.unpack origin)
 
-        mergeMacroEntry cur (name, clause) =
-          case M.lookup name (csMacroOrigins st) of
+        isRuntimeVisible name left right =
+          M.member name (csRtCtx left) || M.member name (csRtCtx right)
+
+        dropRuntimeName name st' =
+          st'
+            { csEnv = M.delete name (csEnv st')
+            , csCtCtx = M.delete name (csCtCtx st')
+            , csRtCtx = M.delete name (csRtCtx st')
+            , csEnvOrigins = M.delete name (csEnvOrigins st')
+            }
+
+        markRuntimeAmbiguous name cur =
+          cur
+            { csEnv = M.delete name (csEnv cur)
+            , csCtCtx = M.delete name (csCtCtx cur)
+            , csRtCtx = M.delete name (csRtCtx cur)
+            , csEnvOrigins = M.insert name ambiguousRuntimeOrigin (M.delete name (csEnvOrigins cur))
+            }
+
+        mergeMacroEntry macroState cur (name, clause) =
+          case M.lookup name (csMacroOrigins macroState) of
             Nothing -> pure cur
             Just origin ->
               case M.lookup name (csMacroOrigins cur) of

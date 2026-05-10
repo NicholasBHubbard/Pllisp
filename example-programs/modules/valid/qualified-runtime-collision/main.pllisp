@@ -1,0 +1,4 @@
+(import A AA)
+(import B BB)
+(case (AA.Same 1) ((AA.Same x) (print (int-to-str x))))
+(case (BB.Same "hi") ((BB.Same x) (print x)))

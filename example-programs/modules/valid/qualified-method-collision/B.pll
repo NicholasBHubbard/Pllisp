@@ -1,0 +1,5 @@
+(module B)
+(cls SHOWSTR () (a)
+  (render %a %STR))
+(inst SHOWSTR %STR
+  (render (lam ((x %STR)) x)))

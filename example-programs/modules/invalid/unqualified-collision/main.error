@@ -1,1 +1,1 @@
-compile-time helper collision: HELPER from FOO and BAR
+ambiguous import: HELPER is imported unqualified from BAR, FOO

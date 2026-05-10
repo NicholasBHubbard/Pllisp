@@ -1,0 +1,4 @@
+(import A)
+(import B)
+(print (A.render 1))
+(print (B.render "hi"))

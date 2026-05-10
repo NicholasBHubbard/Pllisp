@@ -75,7 +75,7 @@ data ResolveError = ResolveError
   } deriving (Eq, Show)
 
 -- | Resolve monad: Reader for (scope, normalization map), Writer for errors
-type Resolve a = RWS.RWS (ResolveScope, M.Map CST.Symbol CST.Symbol) [ResolveError] () a
+type Resolve a = RWS.RWS (ResolveScope, M.Map CST.Symbol CST.Symbol, S.Set CST.Symbol) [ResolveError] () a
 
 resolve :: S.Set CST.Symbol -> CST.CST -> Either [ResolveError] ResolvedCST
 resolve importedNames = resolveWith importedNames M.empty
@@ -86,8 +86,9 @@ resolveWith importedNames normMap cst =
       classMethodNames = S.fromList (extractClassMethodNames cst)
       ffiNames = S.fromList (extractFFINames cst)
       enumNames = S.fromList (extractEnumNames cst)
+      topLevelLetNames = S.fromList (extractTopLevelLetNames cst)
       initialScope = [S.unions [BuiltIn.builtInNames, ctorNames, classMethodNames, ffiNames, enumNames, importedNames]]
-      (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) (initialScope, normMap) ()
+      (result, (), errors) = RWS.runRWS (traverse resolveExpr cst) (initialScope, normMap, topLevelLetNames) ()
   in if null errors
      then Right result
      else Left errors
@@ -119,6 +120,25 @@ extractEnumNames = concatMap go
     go (Loc.Located _ (CST.ExprFFIEnum _ variants)) = map fst variants
     go _ = []
 
+extractTopLevelLetNames :: CST.CST -> [CST.Symbol]
+extractTopLevelLetNames = concatMap goTop
+  where
+    goTop (Loc.Located _ (CST.ExprLet binds body)) =
+      bindNames binds ++ goBody body
+    goTop _ =
+      []
+
+    goBody (Loc.Located _ (CST.ExprLet binds body)) =
+      bindNames binds ++ goBody body
+    goBody _ =
+      []
+
+    bindNames binds =
+      [ CST.symName binder
+      | (binder, _) <- binds
+      , CST.symName binder /= "_"
+      ]
+
 resolveExpr :: CST.Expr -> Resolve RExpr
 resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   CST.ExprLit l  -> pure (RLit l)
@@ -136,8 +156,8 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     let allParamNames = map CST.symName required ++ extraParamNames extra
     dupCheck "duplicate lambda parameter" allParamNames sp
     let newScope = S.fromList allParamNames
-    rExtra <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExtra extra)
-    rbody <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExpr body)
+    rExtra <- RWS.local (\(sc, nm, topNames) -> (newScope : sc, nm, topNames)) (resolveExtra extra)
+    rbody <- RWS.local (\(sc, nm, topNames) -> (newScope : sc, nm, topNames)) (resolveExpr body)
     pure $ RLam (RLamList required rExtra) mRet rbody
   CST.ExprKeyArg name subExpr -> do
     rexpr <- resolveExpr subExpr
@@ -146,9 +166,9 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
     let symNames = map (CST.symName . fst) binds
         newScope = S.fromList (filter (/= "_") symNames)
     dupCheck "duplicate let binding" symNames sp
-    rbinds <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) $
+    rbinds <- RWS.local (\(sc, nm, topNames) -> (newScope : sc, nm, topNames)) $
       traverse (\(v, rhs) -> (\r -> (v, r)) <$> resolveExpr rhs) binds
-    rbody <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExpr body)
+    rbody <- RWS.local (\(sc, nm, topNames) -> (newScope : sc, nm, topNames)) (resolveExpr body)
     pure (RLet rbinds rbody)
   CST.ExprType name params ctors -> do
     dupCheck "duplicate type parameter" params sp
@@ -157,9 +177,11 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   CST.ExprCls name tvars supers methods -> do
     pure $ RCls name tvars supers methods
   CST.ExprInst className ty methods -> do
-    rmethods <- traverse (\(mname, body) -> do
-      rbody <- resolveExpr body
-      pure (mname, rbody)) methods
+    (_, _, topLevelLetNames) <- RWS.ask
+    rmethods <- RWS.local (\(sc, nm, topNames) -> (topLevelLetNames : sc, nm, topNames)) $
+      traverse (\(mname, body) -> do
+        rbody <- resolveExpr body
+        pure (mname, rbody)) methods
     pure $ RInst className ty rmethods
   CST.ExprFFI name linkName paramTys retTy ->
     pure $ RFFI name linkName paramTys retTy
@@ -183,12 +205,12 @@ resolveExpr (Loc.Located sp expr) = Loc.Located sp <$> case expr of
         (rpat, boundVars) <- resolvePattern pat armSp
         dupCheck "duplicate pattern variable" boundVars armSp
         let newScope = S.fromList boundVars
-        rbody <- RWS.local (\(sc, nm) -> (newScope : sc, nm)) (resolveExpr body)
+        rbody <- RWS.local (\(sc, nm, topNames) -> (newScope : sc, nm, topNames)) (resolveExpr body)
         pure (rpat, rbody)
 
 resolveSym :: CST.Symbol -> Loc.Span -> Resolve VarBinding
 resolveSym sym sp = do
-  (sc, normMap) <- RWS.ask
+  (sc, normMap, _) <- RWS.ask
   case lookupSym 0 sc of
     Just binding ->
       -- Normalize qualified names: MATH.SQUARE → SQUARE

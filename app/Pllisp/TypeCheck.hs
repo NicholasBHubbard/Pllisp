@@ -90,32 +90,35 @@ typecheckWith importedEnvs importedCtx exprs =
       methodEnv = M.union localMethodEnv (tceMethodEnv importedEnvs)
       initialCtx = M.unions [importedCtx, ctorCtx, builtInCtx, ffiCtx, ffiStructCtorCtx, ffiVarCtx, enumCtx, callbackCtx, methodCtx]
       fieldMap = M.union (buildFieldMap typeDecls) ffiStructFieldMap
-      -- Type-check instance method bodies in a first pass
       instDecls = extractInstDecls exprs
       localTypeNames = S.fromList [name | (name, _, _) <- typeDecls]
       importedTypeNames = collectTypeNames importedCtx
       ffiStructNames = S.fromList [name | (name, _) <- ffiStructDecls]
       knownTypeNames = S.unions [localTypeNames, importedTypeNames, ffiStructNames]
-      (localInstanceEnv, instErrs) = buildInstanceEnv classEnv methodEnv initialCtx fieldMap knownTypeNames instDecls
-      instanceEnv = M.unionWith (++) localInstanceEnv (tceInstanceEnv importedEnvs)
-      superErrs = validateSuperclasses classEnv instanceEnv
       structFieldsMap = M.fromList ffiStructDecls
-      env = InferEnv initialCtx fieldMap M.empty methodEnv instanceEnv variadicNames structFieldsMap
+      env = InferEnv initialCtx fieldMap M.empty methodEnv (tceInstanceEnv importedEnvs) variadicNames structFieldsMap
       (typed, _, (constraints, inferErrs)) = RWS.runRWS (traverse infer exprs) env 0
-      localEnvs = TCEnvs localClassEnv localMethodEnv localInstanceEnv
-      fullEnvs = mergeTCEnvs localEnvs importedEnvs
   in case solveAll constraints of
-    Left solveErrs -> Left (ffiDeclErrs ++ instErrs ++ superErrs ++ inferErrs ++ solveErrs)
+    Left solveErrs -> Left (ffiDeclErrs ++ inferErrs ++ solveErrs)
     Right subst
       | not (null ffiDeclErrs) -> Left ffiDeclErrs
-      | not (null instErrs) -> Left instErrs
-      | not (null superErrs) -> Left superErrs
       | not (null inferErrs) -> Left inferErrs
       | otherwise ->
           let resolved = apply subst typed
+              helperCtx = M.union (topLevelLetContext resolved) initialCtx
+              (localInstanceEnv, instErrs) =
+                buildInstanceEnv classEnv methodEnv helperCtx fieldMap knownTypeNames instDecls
+              instanceEnv = M.unionWith (++) localInstanceEnv (tceInstanceEnv importedEnvs)
+              superErrs = validateSuperclasses classEnv instanceEnv
+              localEnvs = TCEnvs localClassEnv localMethodEnv localInstanceEnv
+              fullEnvs = mergeTCEnvs localEnvs importedEnvs
               missingInst = validateInstances methodEnv instanceEnv resolved
           in if not (null missingInst)
              then Left missingInst
+             else if not (null instErrs)
+             then Left instErrs
+             else if not (null superErrs)
+             then Left superErrs
              else Right (tcoPass (dictPass classEnv methodEnv instanceEnv resolved), fullEnvs)
 
 -- TYPES
@@ -680,7 +683,7 @@ validateInstances me ie = concatMap checkExpr
             _ -> case lookupInstance ie (miClass mi) iT (Res.symName vb) of
               Just _  -> concatMap checkExpr args
               Nothing ->
-                TypeError sp ("no instance of class " ++ T.unpack (miClass mi)
+                TypeError sp ("no instance of class " ++ displaySymbol (miClass mi)
                              ++ " for type " ++ showType iT)
                 : concatMap checkExpr args
       TRApp f as -> checkExpr f ++ concatMap checkExpr as
@@ -699,6 +702,23 @@ validateInstances me ie = concatMap checkExpr
     showType (Ty.TyCon n ts) = T.unpack n ++ " " ++ unwords (map showType ts)
     showType (Ty.TyApp f a) = "(" ++ showType f ++ " " ++ showType a ++ ")"
     showType t = show t
+
+    displaySymbol sym =
+      case T.splitOn "." sym of
+        [] -> T.unpack sym
+        parts -> T.unpack (last parts)
+
+topLevelLetContext :: TResolvedCST -> Context
+topLevelLetContext = M.unions . map collect
+  where
+    collect (Loc.Located _ (Ty.Typed _ (TRLet binds body))) =
+      M.fromList
+        [ (name, generalize M.empty bindTy)
+        | (name, bindTy, _) <- binds
+        , name /= "_"
+        ]
+      `M.union` collect body
+    collect _ = M.empty
 
 -- | Haskell-style dictionary passing for typeclass methods.
 -- Monomorphic calls: inline instance implementation (static dispatch).
@@ -1432,13 +1452,17 @@ partitionArgs = go [] []
 -- | Build a Cons/Nil list expression from a list of typed expressions.
 buildListExpr :: Loc.Span -> Ty.Type -> [TRExpr] -> Infer TRExpr
 buildListExpr sp elemTy [] = do
-  let listTy = Ty.TyCon "LIST" [elemTy]
-  pure $ Loc.Located sp (Ty.Typed listTy (TRVar (Res.VarBinding 0 "EMPTY")))
+  ctx <- askCtx
+  let emptyName = if M.member "PRELUDE.EMPTY" ctx then "PRELUDE.EMPTY" else "EMPTY"
+      listTy = Ty.TyCon "LIST" [elemTy]
+  pure $ Loc.Located sp (Ty.Typed listTy (TRVar (Res.VarBinding 0 emptyName)))
 buildListExpr sp elemTy (x:xs) = do
+  ctx <- askCtx
   rest <- buildListExpr sp elemTy xs
-  let listTy = Ty.TyCon "LIST" [elemTy]
+  let consName = if M.member "PRELUDE.CONS" ctx then "PRELUDE.CONS" else "CONS"
+      listTy = Ty.TyCon "LIST" [elemTy]
       consTy = Ty.TyFun [elemTy, listTy] listTy
-      consFn = Loc.Located sp (Ty.Typed consTy (TRVar (Res.VarBinding 0 "CONS")))
+      consFn = Loc.Located sp (Ty.Typed consTy (TRVar (Res.VarBinding 0 consName)))
   constrain sp (typeOf x) elemTy
   pure $ Loc.Located sp (Ty.Typed listTy (TRApp consFn [x, rest]))
 

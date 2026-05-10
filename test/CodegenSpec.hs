@@ -1244,6 +1244,17 @@ spec = do
           mainSrc = "(import MOD M)\n(print (int-to-str (M.square 7)))"
       runWithModules [("MOD", modSrc)] mainSrc >>= (`shouldBe` "49")
 
+    it "qualified imports keep same-named constructors distinct across modules" $ do
+      let modA = "(type BoxA () (Same %INT))"
+          modB = "(type BoxB () (Same %STR))"
+          mainSrc = T.unlines
+            [ "(import A AA)"
+            , "(import B BB)"
+            , "(case (AA.Same 1) ((AA.Same x) (print (int-to-str x))))"
+            , "(case (BB.Same \"hi\") ((BB.Same x) (print x)))"
+            ]
+      runWithModules [("A", modA), ("B", modB)] mainSrc >>= (`shouldBe` "1\nhi")
+
     it "imported type constructors" $ do
       let modSrc = "(type Box (a) (MkBox a))"
           mainSrc = T.unlines
@@ -1882,6 +1893,23 @@ spec = do
         , "(print (show 42))"
         ]) >>= (`shouldBe` "42")
 
+    it "qualified imports keep same-named methods distinct across modules" $ do
+      let modA = T.unlines
+            [ "(cls SHOWINT () (a) (render %a %STR))"
+            , "(inst SHOWINT %INT (render (lam ((x %INT)) (int-to-str x))))"
+            ]
+          modB = T.unlines
+            [ "(cls SHOWSTR () (a) (render %a %STR))"
+            , "(inst SHOWSTR %STR (render (lam ((x %STR)) x)))"
+            ]
+          mainSrc = T.unlines
+            [ "(import A)"
+            , "(import B)"
+            , "(print (A.render 1))"
+            , "(print (B.render \"hi\"))"
+            ]
+      runWithModules [("A", modA), ("B", modB)] mainSrc >>= (`shouldBe` "1\nhi")
+
     it "class method with multiple args" $
       run (T.unlines
         [ "(cls EQUAL () (a) (equal %a %a %BOOL))"
@@ -1923,6 +1951,14 @@ spec = do
         , "(let ((result (show 99)))"
         , "  (print result))"
         ]) >>= (`shouldBe` "99")
+
+    it "instance methods can call same-module helper bindings" $
+      run (T.unlines
+        [ "(cls SHOW () (a) (show %a %STR))"
+        , "(let ((helper (lam ((x %INT)) (int-to-str x)))) unit)"
+        , "(inst SHOW %INT (show (lam ((x %INT)) (helper x))))"
+        , "(print (show 42))"
+        ]) >>= (`shouldBe` "42")
 
     it "class method in if branches" $
       run (T.unlines
@@ -2857,19 +2893,11 @@ runWithInput stdin' = runWithStdin stdin' []
 runWithStdin :: String -> [String] -> T.Text -> IO String
 runWithStdin stdin' extraArgs src = do
   ir <- pipeline src
-  T.IO.writeFile "/tmp/pllisp_test.ll" ir
-  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
-  (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-  case ec1 of
-    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
-    ExitSuccess -> do
-      (ec2, out, err2) <- readProcessWithExitCode
-        "/tmp/pllisp_test_exe" extraArgs stdin'
-      case ec2 of
-        ExitSuccess   -> pure (strip out)
-        ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
+  withCompiledExecutable ir $ \exePath -> do
+    (ec, out, err) <- readProcessWithExitCode exePath extraArgs stdin'
+    case ec of
+      ExitSuccess   -> pure (strip out)
+      ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err)
   where
     strip = reverse . dropWhile (== '\n') . reverse
 
@@ -2878,18 +2906,11 @@ runWithStdin stdin' extraArgs src = do
 runWithModule :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO String
 runWithModule modName modSrc unquals mainSrc = do
   ir <- importPipeline modName modSrc unquals mainSrc
-  T.IO.writeFile "/tmp/pllisp_test.ll" ir
-  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
-  (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-  case ec1 of
-    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
-    ExitSuccess -> do
-      (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" [] ""
-      case ec2 of
-        ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
-        ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
+  withCompiledExecutable ir $ \exePath -> do
+    (ec, out, err) <- readProcessWithExitCode exePath [] ""
+    case ec of
+      ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
+      ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err)
 
 importPipeline :: CST.Symbol -> T.Text -> [CST.Symbol] -> T.Text -> IO T.Text
 importPipeline modName modSrc unquals mainSrc =
@@ -2901,18 +2922,11 @@ importPipeline modName modSrc unquals mainSrc =
 runWithModules :: [(CST.Symbol, T.Text)] -> T.Text -> IO String
 runWithModules modules mainSrc = do
   ir <- multiModulePipeline modules mainSrc
-  T.IO.writeFile "/tmp/pllisp_test.ll" ir
-  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
-  (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-  case ec1 of
-    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
-    ExitSuccess -> do
-      (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" [] ""
-      case ec2 of
-        ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
-        ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err2)
+  withCompiledExecutable ir $ \exePath -> do
+    (ec, out, err) <- readProcessWithExitCode exePath [] ""
+    case ec of
+      ExitSuccess   -> pure (reverse . dropWhile (== '\n') . reverse $ out)
+      ExitFailure c -> error ("Program exited with " ++ show c ++ ":\n" ++ err)
 
 runWithCLIArgs :: [String] -> T.Text -> IO String
 runWithCLIArgs extraArgs mainSrc = do
@@ -2925,16 +2939,9 @@ runWithCLIArgsRaw :: [String] -> T.Text -> IO (ExitCode, String, String)
 runWithCLIArgsRaw extraArgs mainSrc = do
   cliSrc <- T.IO.readFile "stdlib/CLI.pll"
   ir <- multiModulePipeline [("CLI", cliSrc)] mainSrc
-  T.IO.writeFile "/tmp/pllisp_test.ll" ir
-  T.IO.writeFile "/tmp/pll_ffi_bridge.c" Ty.ffiBridgeC
-  (ec1, _, err1) <- readProcessWithExitCode
-    "clang" ["/tmp/pllisp_test.ll", "/tmp/pll_ffi_bridge.c",
-             "-o", "/tmp/pllisp_test_exe", "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
-  case ec1 of
-    ExitFailure _ -> error ("clang failed:\n" ++ err1 ++ "\nIR:\n" ++ T.unpack ir)
-    ExitSuccess -> do
-      (ec2, out, err2) <- readProcessWithExitCode "/tmp/pllisp_test_exe" extraArgs ""
-      pure (ec2, reverse . dropWhile (== '\n') . reverse $ out, err2)
+  withCompiledExecutable ir $ \exePath -> do
+    (ec, out, err) <- readProcessWithExitCode exePath extraArgs ""
+    pure (ec, reverse . dropWhile (== '\n') . reverse $ out, err)
 
 runWithFileIOModule :: T.Text -> IO String
 runWithFileIOModule mainSrc = do
@@ -3049,10 +3056,13 @@ multiModulePipeline modules mainSrc = do
             Right resolved -> case TC.typecheckWith accEnvs tcCtx resolved of
               Left e  -> error ("tc " ++ T.unpack modName ++ ": " ++ show e)
               Right r -> r
-          modExports = Mod.collectExports modEnvs typed
+          renameMap = Mod.moduleRenameMap modName (CST.progExprs modProg)
+          typed' = Mod.renameTypedModuleSymbols renameMap typed
+          modEnvs' = Mod.renameTCEnvsSymbols renameMap modEnvs
+          modExports = Mod.renameExportSchemes renameMap (Mod.collectExports modEnvs typed)
       in (M.insert modName modExports accExports,
-          accTyped ++ [typed],
-          modEnvs)
+          accTyped ++ [typed'],
+          modEnvs')
 
 shouldFailToCompile :: T.Text -> String -> IO ()
 shouldFailToCompile src msg = do
@@ -3078,6 +3088,20 @@ shouldFailToCompileModules modules src msg = do
 
 quoted :: FilePath -> T.Text
 quoted = T.pack . show
+
+withCompiledExecutable :: T.Text -> (FilePath -> IO a) -> IO a
+withCompiledExecutable ir action =
+  withTempDir "pllisp-codegen" $ \dir -> do
+    let llPath = dir </> "pllisp_test.ll"
+        bridgePath = dir </> "pll_ffi_bridge.c"
+        exePath = dir </> "pllisp_test_exe"
+    T.IO.writeFile llPath ir
+    T.IO.writeFile bridgePath Ty.ffiBridgeC
+    (ec, _, err) <- readProcessWithExitCode
+      "clang" [llPath, bridgePath, "-o", exePath, "-lm", "-lpcre2-8", "-lgc", "-lffi"] ""
+    case ec of
+      ExitFailure _ -> error ("clang failed:\n" ++ err ++ "\nIR:\n" ++ T.unpack ir)
+      ExitSuccess -> action exePath
 
 withTempTextFile :: String -> String -> (FilePath -> IO a) -> IO a
 withTempTextFile template contents action =

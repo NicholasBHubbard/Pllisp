@@ -5,6 +5,7 @@
 module Pllisp.Module where
 
 import qualified Pllisp.CST      as CST
+import qualified Pllisp.Resolve  as Res
 import qualified Pllisp.SrcLoc   as Loc
 import qualified Pllisp.Type     as Ty
 import qualified Pllisp.TypeCheck as TC
@@ -192,6 +193,375 @@ collectExports envs typed =
       in M.union named fromBody
     collectLetExports _ = M.empty
 
+qualifiedSymbol :: CST.Symbol -> CST.Symbol -> CST.Symbol
+qualifiedSymbol modName name = modName <> "." <> name
+
+moduleDefinedNames :: CST.CST -> S.Set CST.Symbol
+moduleDefinedNames = foldr collect S.empty
+  where
+    collect (Loc.Located _ expr) acc = case expr of
+      CST.ExprLet binds _ ->
+        acc `S.union` S.fromList [name | (CST.TSymbol name _, _) <- binds, name /= "_"]
+      CST.ExprType name _ ctors ->
+        acc `S.union` S.fromList (map CST.dcName ctors)
+      CST.ExprCls name _ supers methods ->
+        acc `S.union` S.fromList (map CST.cmName methods)
+      CST.ExprFFI name _ _ _ ->
+        S.insert name acc
+      CST.ExprFFIStruct name _ ->
+        acc
+      CST.ExprFFIVar name _ _ _ ->
+        S.insert name acc
+      CST.ExprFFIEnum name variants ->
+        acc `S.union` S.fromList (map fst variants)
+      CST.ExprFFICallback name _ _ ->
+        S.insert name acc
+      _ ->
+        acc
+
+moduleRenameMap :: CST.Symbol -> CST.CST -> M.Map CST.Symbol CST.Symbol
+moduleRenameMap modName exprs =
+  M.fromList
+    [ (name, qualifiedSymbol modName name)
+    | name <- S.toList (moduleDefinedNames exprs)
+    ]
+
+renameTypeSymbols :: M.Map CST.Symbol CST.Symbol -> Ty.Type -> Ty.Type
+renameTypeSymbols ren ty = case ty of
+  Ty.TyFun args retTy ->
+    Ty.TyFun (map (renameTypeSymbols ren) args) (renameTypeSymbols ren retTy)
+  Ty.TyCon name args ->
+    Ty.TyCon (renameSymbol name) (map (renameTypeSymbols ren) args)
+  Ty.TyApp f a ->
+    Ty.TyApp (renameTypeSymbols ren f) (renameTypeSymbols ren a)
+  _ ->
+    ty
+  where
+    renameSymbol name = M.findWithDefault name name ren
+
+renameCTypeSymbols :: M.Map CST.Symbol CST.Symbol -> Ty.CType -> Ty.CType
+renameCTypeSymbols ren cty = case cty of
+  Ty.CArr n inner ->
+    Ty.CArr n (renameCTypeSymbols ren inner)
+  Ty.CStruct name ->
+    Ty.CStruct (M.findWithDefault name name ren)
+  _ ->
+    cty
+
+renameSchemeSymbols :: M.Map CST.Symbol CST.Symbol -> TC.Scheme -> TC.Scheme
+renameSchemeSymbols ren (TC.Forall vars ty) =
+  TC.Forall vars (renameTypeSymbols ren ty)
+
+renameTypedModuleSymbols
+  :: M.Map CST.Symbol CST.Symbol
+  -> TC.TResolvedCST
+  -> TC.TResolvedCST
+renameTypedModuleSymbols ren = map (renameTopExpr S.empty)
+  where
+    renameTopExpr shadow = renameExpr True shadow
+
+    renameExpr isTop shadow (Loc.Located sp (Ty.Typed ty exprF)) =
+      Loc.Located sp (Ty.Typed (renameTypeSymbols ren ty) (renameExprF isTop shadow exprF))
+
+    renameExprF isTop shadow exprF = case exprF of
+      TC.TRLit _ ->
+        exprF
+      TC.TRBool _ ->
+        exprF
+      TC.TRUnit ->
+        exprF
+      TC.TRVar vb ->
+        TC.TRVar
+          (vb
+            { Res.symName =
+                if S.member (Res.symName vb) shadow
+                  then Res.symName vb
+                  else M.findWithDefault (Res.symName vb) (Res.symName vb) ren
+            })
+      TC.TRLam params retTy body ->
+        let paramNames = S.fromList (map fst params)
+            shadow' = shadow `S.union` paramNames
+        in TC.TRLam
+             [(name, renameTypeSymbols ren paramTy) | (name, paramTy) <- params]
+             (renameTypeSymbols ren retTy)
+             (renameExpr False shadow' body)
+      TC.TRLet binds body
+        | isTop ->
+            TC.TRLet
+              [ ( renameTopBinder name
+                , renameTypeSymbols ren bindTy
+                , renameExpr False shadow bindExpr
+                )
+              | (name, bindTy, bindExpr) <- binds
+              ]
+              (renameExpr True shadow body)
+        | otherwise ->
+            let boundNames = S.fromList [name | (name, _, _) <- binds]
+                shadow' = shadow `S.union` boundNames
+            in TC.TRLet
+                 [ ( name
+                   , renameTypeSymbols ren bindTy
+                   , renameExpr False shadow' bindExpr
+                   )
+                 | (name, bindTy, bindExpr) <- binds
+                 ]
+                 (renameExpr False shadow' body)
+      TC.TRIf cond thenBr elseBr ->
+        TC.TRIf
+          (renameExpr False shadow cond)
+          (renameExpr False shadow thenBr)
+          (renameExpr False shadow elseBr)
+      TC.TRApp fn args ->
+        TC.TRApp
+          (renameExpr False shadow fn)
+          (map (renameExpr False shadow) args)
+      TC.TRType name params ctors ->
+        TC.TRType
+          (renameTopBinder name)
+          params
+          [ ctor
+              { CST.dcName = renameTopBinder (CST.dcName ctor)
+              , CST.dcArgs = map (renameTypeSymbols ren) (CST.dcArgs ctor)
+              }
+          | ctor <- ctors
+          ]
+      TC.TRCase scrutinee arms ->
+        TC.TRCase
+          (renameExpr False shadow scrutinee)
+          (map (renameArm shadow) arms)
+      TC.TRLoop params body ->
+        let paramNames = S.fromList (map fst params)
+            shadow' = shadow `S.union` paramNames
+        in TC.TRLoop
+             [(name, renameTypeSymbols ren paramTy) | (name, paramTy) <- params]
+             (renameExpr False shadow' body)
+      TC.TRRecur args ->
+        TC.TRRecur (map (renameExpr False shadow) args)
+      TC.TRFFI name linkName paramTys retTy ->
+        TC.TRFFI
+          (renameTopBinder name)
+          linkName
+          (map (renameCTypeSymbols ren) paramTys)
+          (renameCTypeSymbols ren retTy)
+      TC.TRFFIStruct name fields ->
+        TC.TRFFIStruct
+          (renameTopBinder name)
+          [(field, renameCTypeSymbols ren fieldTy) | (field, fieldTy) <- fields]
+      TC.TRFFIVar name linkName paramTys retTy ->
+        TC.TRFFIVar
+          (renameTopBinder name)
+          linkName
+          (map (renameCTypeSymbols ren) paramTys)
+          (renameCTypeSymbols ren retTy)
+      TC.TRFFIEnum name variants ->
+        TC.TRFFIEnum
+          (renameTopBinder name)
+          [(renameTopBinder variantName, value) | (variantName, value) <- variants]
+      TC.TRFFICallback name paramTys retTy ->
+        TC.TRFFICallback
+          (renameTopBinder name)
+          (map (renameCTypeSymbols ren) paramTys)
+          (renameCTypeSymbols ren retTy)
+
+    renameArm shadow (pat, body) =
+      let (pat', boundNames) = renamePattern pat
+      in (pat', renameExpr False (shadow `S.union` boundNames) body)
+
+    renamePattern pat = case pat of
+      TC.TRPatLit _ ->
+        (pat, S.empty)
+      TC.TRPatBool _ ->
+        (pat, S.empty)
+      TC.TRPatVar name patTy ->
+        (TC.TRPatVar name (renameTypeSymbols ren patTy), S.singleton name)
+      TC.TRPatWild patTy ->
+        (TC.TRPatWild (renameTypeSymbols ren patTy), S.empty)
+      TC.TRPatCon name patTy subPats ->
+        let renamedSubs = map renamePattern subPats
+        in ( TC.TRPatCon
+               (renameTopBinder name)
+               (renameTypeSymbols ren patTy)
+               (map fst renamedSubs)
+           , S.unions (map snd renamedSubs)
+           )
+
+    renameTopBinder name = M.findWithDefault name name ren
+
+renameTCEnvsSymbols
+  :: M.Map CST.Symbol CST.Symbol
+  -> TC.TCEnvs
+  -> TC.TCEnvs
+renameTCEnvsSymbols ren envs =
+  TC.TCEnvs
+    { TC.tceClassEnv =
+        M.fromList
+          [ (renameSymbol className, renameClassInfo info)
+          | (className, info) <- M.toList (TC.tceClassEnv envs)
+          ]
+    , TC.tceMethodEnv =
+        M.fromList
+          [ (renameSymbol methodName, renameMethodInfo info)
+          | (methodName, info) <- M.toList (TC.tceMethodEnv envs)
+          ]
+    , TC.tceInstanceEnv =
+        M.fromList
+          [ (renameSymbol className, map renameInstanceInfo instances)
+          | (className, instances) <- M.toList (TC.tceInstanceEnv envs)
+          ]
+    }
+  where
+    renameSymbol name = M.findWithDefault name name ren
+
+    renameClassInfo info =
+      info
+        { TC.ciSupers = map renameSymbol (TC.ciSupers info)
+        }
+
+    renameMethodInfo info =
+      info
+        { TC.miClass = renameSymbol (TC.miClass info)
+        , TC.miArgTys = map (renameTypeSymbols ren) (TC.miArgTys info)
+        , TC.miRetTy = renameTypeSymbols ren (TC.miRetTy info)
+        }
+
+    renameInstanceInfo info =
+      info
+        { TC.iiType = renameTypeSymbols ren (TC.iiType info)
+        , TC.iiMethods =
+            M.fromList
+              [ (renameSymbol methodName, renameInstanceExpr body)
+              | (methodName, body) <- M.toList (TC.iiMethods info)
+              ]
+        }
+
+    renameInstanceExpr = renameExpr False S.empty
+
+    renameExpr isTop shadow (Loc.Located sp (Ty.Typed ty exprF)) =
+      Loc.Located sp (Ty.Typed (renameTypeSymbols ren ty) (renameExprF isTop shadow exprF))
+
+    renameExprF isTop shadow exprF = case exprF of
+      TC.TRLit _ ->
+        exprF
+      TC.TRBool _ ->
+        exprF
+      TC.TRUnit ->
+        exprF
+      TC.TRVar vb ->
+        TC.TRVar
+          (vb
+            { Res.symName =
+                if S.member (Res.symName vb) shadow
+                  then Res.symName vb
+                  else renameSymbol (Res.symName vb)
+            })
+      TC.TRLam params retTy body ->
+        let paramNames = S.fromList (map fst params)
+            shadow' = shadow `S.union` paramNames
+        in TC.TRLam
+             [(name, renameTypeSymbols ren paramTy) | (name, paramTy) <- params]
+             (renameTypeSymbols ren retTy)
+             (renameExpr False shadow' body)
+      TC.TRLet binds body ->
+        let boundNames = S.fromList [name | (name, _, _) <- binds]
+            shadow' = shadow `S.union` boundNames
+            renameBinder name =
+              if isTop
+                then renameSymbol name
+                else name
+        in TC.TRLet
+             [ ( renameBinder name
+               , renameTypeSymbols ren bindTy
+               , renameExpr False shadow' bindExpr
+               )
+             | (name, bindTy, bindExpr) <- binds
+             ]
+             (renameExpr isTop shadow' body)
+      TC.TRIf cond thenBr elseBr ->
+        TC.TRIf
+          (renameExpr False shadow cond)
+          (renameExpr False shadow thenBr)
+          (renameExpr False shadow elseBr)
+      TC.TRApp fn args ->
+        TC.TRApp
+          (renameExpr False shadow fn)
+          (map (renameExpr False shadow) args)
+      TC.TRType name params ctors ->
+        TC.TRType
+          (renameSymbol name)
+          params
+          [ ctor
+              { CST.dcName = renameSymbol (CST.dcName ctor)
+              , CST.dcArgs = map (renameTypeSymbols ren) (CST.dcArgs ctor)
+              }
+          | ctor <- ctors
+          ]
+      TC.TRCase scrutinee arms ->
+        TC.TRCase
+          (renameExpr False shadow scrutinee)
+          (map (renameArm shadow) arms)
+      TC.TRLoop params body ->
+        let paramNames = S.fromList (map fst params)
+            shadow' = shadow `S.union` paramNames
+        in TC.TRLoop
+             [(name, renameTypeSymbols ren paramTy) | (name, paramTy) <- params]
+             (renameExpr False shadow' body)
+      TC.TRRecur args ->
+        TC.TRRecur (map (renameExpr False shadow) args)
+      TC.TRFFI name linkName paramTys retTy ->
+        TC.TRFFI
+          (renameSymbol name)
+          linkName
+          (map (renameCTypeSymbols ren) paramTys)
+          (renameCTypeSymbols ren retTy)
+      TC.TRFFIStruct name fields ->
+        TC.TRFFIStruct
+          (renameSymbol name)
+          [(field, renameCTypeSymbols ren fieldTy) | (field, fieldTy) <- fields]
+      TC.TRFFIVar name linkName paramTys retTy ->
+        TC.TRFFIVar
+          (renameSymbol name)
+          linkName
+          (map (renameCTypeSymbols ren) paramTys)
+          (renameCTypeSymbols ren retTy)
+      TC.TRFFIEnum name variants ->
+        TC.TRFFIEnum
+          (renameSymbol name)
+          [(renameSymbol variantName, value) | (variantName, value) <- variants]
+      TC.TRFFICallback name paramTys retTy ->
+        TC.TRFFICallback
+          (renameSymbol name)
+          (map (renameCTypeSymbols ren) paramTys)
+          (renameCTypeSymbols ren retTy)
+
+    renameArm shadow (pat, body) =
+      let (pat', boundNames) = renamePattern pat
+      in (pat', renameExpr False (shadow `S.union` boundNames) body)
+
+    renamePattern pat = case pat of
+      TC.TRPatLit _ ->
+        (pat, S.empty)
+      TC.TRPatBool _ ->
+        (pat, S.empty)
+      TC.TRPatVar name patTy ->
+        (TC.TRPatVar name (renameTypeSymbols ren patTy), S.singleton name)
+      TC.TRPatWild patTy ->
+        (TC.TRPatWild (renameTypeSymbols ren patTy), S.empty)
+      TC.TRPatCon name patTy subPats ->
+        let renamedSubs = map renamePattern subPats
+        in ( TC.TRPatCon
+               (renameSymbol name)
+               (renameTypeSymbols ren patTy)
+               (map fst renamedSubs)
+           , S.unions (map snd renamedSubs)
+           )
+
+renameExportSchemes
+  :: M.Map CST.Symbol CST.Symbol
+  -> M.Map CST.Symbol TC.Scheme
+  -> M.Map CST.Symbol TC.Scheme
+renameExportSchemes ren =
+  M.map (renameSchemeSymbols ren)
+
 -- MERGE IMPORTED CODE
 
 -- | Merge imported modules' typed ASTs into the local module's typed AST.
@@ -286,17 +656,24 @@ buildImportScope exports imports =
   where
     buildOne (CST.Import modName alias unquals) =
       let modExports = M.findWithDefault M.empty modName exports
-          -- Qualified: ALIAS.NAME in resolve scope
-          qualNames = [alias <> "." <> n | (n, _) <- M.toList modExports]
-          -- Unqualified: only explicitly listed names in resolve scope
-          unqualNames = [n | (n, _) <- M.toList modExports, n `elem` unquals]
-          -- TC context: qualified forms + all unqualified forms (needed for
-          -- normalization: resolver maps ALIAS.NAME → NAME, so TC needs NAME)
-          qualCtx     = [(alias <> "." <> n, scheme) | (n, scheme) <- M.toList modExports]
-          allUnqualCtx = M.toList modExports
-          -- Normalization map: ALIAS.NAME → NAME
-          normMap = [(alias <> "." <> n, n) | (n, _) <- M.toList modExports]
-      in (qualNames ++ unqualNames, qualCtx ++ allUnqualCtx, normMap)
+          exportEntries = M.toList modExports
+          canonicalName name = qualifiedSymbol modName name
+          qualNames = [alias <> "." <> name | (name, _) <- exportEntries]
+          unqualNames = [name | (name, _) <- exportEntries, name `elem` unquals]
+          canonicalCtx =
+            [ (canonicalName name, scheme)
+            | (name, scheme) <- exportEntries
+            ]
+          normMap =
+            [ (alias <> "." <> name, canonicalName name)
+            | (name, _) <- exportEntries
+            ]
+            ++
+            [ (name, canonicalName name)
+            | (name, _) <- exportEntries
+            , name `elem` unquals
+            ]
+      in (qualNames ++ unqualNames, canonicalCtx, normMap)
 
 -- DEPENDENCY ORDERING
 
