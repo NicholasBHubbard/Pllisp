@@ -86,8 +86,8 @@ codegen prog = evalState go initState
 
 -- REPL CODEGEN
 
-codegenRepl :: Int -> [(CST.Symbol, Ty.Type)] -> [LL.LLExpr] -> LL.LLProgram -> T.Text
-codegenRepl roundNum priorGlobals importedMeta prog = evalState go initState
+codegenRepl :: T.Text -> Int -> [(CST.Symbol, Ty.Type)] -> [LL.LLExpr] -> LL.LLProgram -> T.Text
+codegenRepl sessionPrefix roundNum priorGlobals importedMeta prog = evalState go initState
   where
     metaExprs  = importedMeta ++ LL.llExprs prog
     ctors     = collectCtors metaExprs
@@ -108,15 +108,15 @@ codegenRepl roundNum priorGlobals importedMeta prog = evalState go initState
       modify' (\s -> s { csDefs = M.fromList [(LL.defName d, d) | d <- renamedDefs] })
       defTexts <- mapM genDef renamedDefs
       -- Collect top-level globals from let bindings
-      let allGlobals = collectReplGlobals (LL.llExprs prog)
+      let allGlobals = dedupReplGlobals (collectReplGlobals (LL.llExprs prog))
           priorNames = S.fromList (map fst priorGlobals)
           globals = filter (\(n, _) -> not (S.member n priorNames)) allGlobals
           globalDecls = map (\(name, ty) ->
-            "@" <> sanitize (T.toLower name) <> " = global " <> llvmType ty <> " " <> llvmZero ty) globals
+            "@" <> replGlobalName sessionPrefix name <> " = global " <> llvmType ty <> " " <> llvmZero ty) globals
           -- Extern declarations for globals from prior rounds
           priorDecls = map (\(name, ty) ->
-            "@" <> sanitize (T.toLower name) <> " = external global " <> llvmType ty) priorGlobals
-      entryText <- genReplEntry renamedExprs priorGlobals globals
+            "@" <> replGlobalName sessionPrefix name <> " = external global " <> llvmType ty) priorGlobals
+      entryText <- genReplEntry sessionPrefix renamedExprs priorGlobals globals
       strLits  <- gets (reverse . csStrLits)
       let strDecls = map genStrDecl strLits
       pure $ T.unlines $
@@ -141,9 +141,20 @@ collectReplGlobals exprs = concatMap go exprs
       [(name, Ty.ty rhs) | (name, _, rhs) <- binds, name /= "_"] ++ go body
     go _ = []
 
+replGlobalName :: T.Text -> CST.Symbol -> T.Text
+replGlobalName sessionPrefix name =
+  sanitize (sessionPrefix <> "." <> T.toLower name)
+
+dedupReplGlobals :: [(CST.Symbol, Ty.Type)] -> [(CST.Symbol, Ty.Type)]
+dedupReplGlobals = foldl' step []
+  where
+    step acc item@(name, _)
+      | any ((== name) . fst) acc = acc
+      | otherwise = acc ++ [item]
+
 -- | Generate the REPL entry point (no GC_init, no argc/argv)
-genReplEntry :: [LL.LLExpr] -> [(CST.Symbol, Ty.Type)] -> [(CST.Symbol, Ty.Type)] -> CgM T.Text
-genReplEntry exprs priorGlobals newGlobals = do
+genReplEntry :: T.Text -> [LL.LLExpr] -> [(CST.Symbol, Ty.Type)] -> [(CST.Symbol, Ty.Type)] -> CgM T.Text
+genReplEntry sessionPrefix exprs priorGlobals newGlobals = do
   savedVars   <- gets csVars
   savedInstrs <- gets csInstrs
   savedBlock  <- gets csBlock
@@ -152,7 +163,7 @@ genReplEntry exprs priorGlobals newGlobals = do
   -- Load prior globals into vars so this round can reference them
   forM_ priorGlobals $ \(name, ty) -> do
     r <- fresh
-    emit (r <> " = load " <> llvmType ty <> ", ptr @" <> sanitize (T.toLower name))
+    emit (r <> " = load " <> llvmType ty <> ", ptr @" <> replGlobalName sessionPrefix name)
     modify' (\s -> s { csVars = M.insert name r (csVars s) })
 
   -- Use replTopExpr which doesn't restore vars from top-level lets,
@@ -163,7 +174,7 @@ genReplEntry exprs priorGlobals newGlobals = do
   forM_ newGlobals $ \(name, ty) -> do
     vars <- gets csVars
     case M.lookup name vars of
-      Just op -> emit ("store " <> llvmType ty <> " " <> op <> ", ptr @" <> sanitize (T.toLower name))
+      Just op -> emit ("store " <> llvmType ty <> " " <> op <> ", ptr @" <> replGlobalName sessionPrefix name)
       Nothing -> pure ()
 
   emit "ret void"

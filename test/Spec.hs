@@ -3,6 +3,7 @@ module Main (main) where
 import Test.Hspec
 
 import qualified BuiltInSpec
+import qualified CliSpec
 import qualified DriverSpec
 import qualified EditorSpec
 import qualified ErrorSpec
@@ -27,6 +28,7 @@ main :: IO ()
 main = hspec $ do
   describe "Type"      TypeSpec.spec
   describe "BuiltIn"   BuiltInSpec.spec
+  describe "Cli"       CliSpec.spec
   describe "Editor"    EditorSpec.spec
   describe "Driver"    DriverSpec.spec
   describe "Parser"    ParserSpec.spec

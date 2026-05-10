@@ -50,7 +50,9 @@ extra-doc-files:    README.md
 data-dir:           stdlib
 data-files:         PRELUDE.pll,
                     CLI.pll,
-                    FILEIO.pll
+                    FILEIO.pll,
+                    FUNCTOR.pll,
+                    LIST.pll
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
@@ -61,39 +63,7 @@ common repl-defaults
 common warnings
     ghc-options:      -Wall -Wno-name-shadowing
 
-executable pllisp
-    -- Import common warning flags.
-    import:           warnings
-
-    -- .hs or .lhs file containing the Main module.
-    main-is:          Pllisp/Main.hs
-
-    -- Modules included in this executable, other than Main.
-    other-modules:    Pllisp.BuiltIn,
-                      Pllisp.ClosureConvert,
-                      Pllisp.Codegen,
-                      Pllisp.CST,
-                      Pllisp.Driver,
-                      Pllisp.Error,
-                      Pllisp.ExhaustCheck,
-                      Pllisp.LambdaLift,
-                      Pllisp.MacroExpand,
-                      Pllisp.MacroInterp,
-                      Pllisp.Module,
-                      Pllisp.Parser,
-                      Pllisp.Resolve,
-                      Pllisp.SExpr,
-                      Pllisp.SrcLoc,
-                      Pllisp.Stdlib,
-                      Pllisp.Type,
-                      Pllisp.TypeCheck,
-                      Paths_pllisp
-    autogen-modules:  Paths_pllisp
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-
-    -- Other library packages from which modules are imported.
+common compiler-deps
     build-depends:    base       ^>=4.21.0.0,
                       containers ^>=0.7,
                       directory,
@@ -105,20 +75,51 @@ executable pllisp
                       text       ^>=2.1.2,
                       unix
 
-
-    -- Directories containing source files.
+library
+    import:           warnings
+    import:           compiler-deps
     hs-source-dirs:   app
+    exposed-modules:  Pllisp.BuiltIn,
+                      Pllisp.Cli,
+                      Pllisp.ClosureConvert,
+                      Pllisp.Codegen,
+                      Pllisp.CST,
+                      Pllisp.Driver,
+                      Pllisp.Error,
+                      Pllisp.ExhaustCheck,
+                      Pllisp.LambdaLift,
+                      Pllisp.MacroExpand,
+                      Pllisp.MacroInterp,
+                      Pllisp.Module,
+                      Pllisp.Parser,
+                      Pllisp.Pipeline,
+                      Pllisp.Repl,
+                      Pllisp.Resolve,
+                      Pllisp.SExpr,
+                      Pllisp.SrcLoc,
+                      Pllisp.Stdlib,
+                      Pllisp.Type,
+                      Pllisp.TypeCheck
+    other-modules:    Paths_pllisp
+    autogen-modules:  Paths_pllisp
+    default-language: Haskell2010
 
-    -- Base language which the package is written in.
+executable pllisp
+    import:           warnings
+    import:           compiler-deps
+    main-is:          Pllisp/Main.hs
+    hs-source-dirs:   app
+    build-depends:    pllisp
     default-language: Haskell2010
 
 test-suite pllisp-test
     import:           warnings
     type:             exitcode-stdio-1.0
-    hs-source-dirs:   test, app
+    hs-source-dirs:   test
     main-is:          Spec.hs
     ghc-options:      -fhpc -rtsopts "-with-rtsopts=--read-tix-file=no"
     other-modules:    BuiltInSpec,
+                      CliSpec,
                       DriverSpec,
                       EditorSpec,
                       ClosureConvertSpec,
@@ -137,28 +138,9 @@ test-suite pllisp-test
                       SExprSpec,
                       StdlibSpec,
                       TypeCheckSpec,
-                      TypeSpec,
-                      Pllisp.BuiltIn,
-                      Pllisp.ClosureConvert,
-                      Pllisp.Codegen,
-                      Pllisp.CST,
-                      Pllisp.Driver,
-                      Pllisp.Error,
-                      Pllisp.ExhaustCheck,
-                      Pllisp.LambdaLift,
-                      Pllisp.MacroExpand,
-                      Pllisp.MacroInterp,
-                      Pllisp.Module,
-                      Pllisp.Parser,
-                      Pllisp.Resolve,
-                      Pllisp.SExpr,
-                      Pllisp.SrcLoc,
-                      Pllisp.Stdlib,
-                      Pllisp.Type,
-                      Pllisp.TypeCheck,
-                      Paths_pllisp
-    autogen-modules:  Paths_pllisp
+                      TypeSpec
     build-depends:    base       ^>=4.21.0.0,
+                      pllisp,
                       containers ^>=0.7,
                       directory,
                       megaparsec ^>=9.7.0,

@@ -1,0 +1,375 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module Pllisp.Pipeline
+  ( ModuleInfo(..)
+  , LoadedImports(..)
+  , CompiledModule(..)
+  , CompileSeed(..)
+  , emptyCompileSeed
+  , moduleNameOrUser
+  , validateRuntimeSyntaxTypes
+  , loadImports
+  , scanAllModules
+  , expandModulesFrom
+  , compileBaseState
+  , compileModulesDetailedFrom
+  ) where
+
+import System.Directory (doesFileExist)
+import System.FilePath (takeDirectory, (</>))
+
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+import qualified Data.Text as T
+import qualified Data.Text.IO as T.IO
+import qualified Text.Megaparsec as MP
+
+import qualified Pllisp.CST as CST
+import qualified Pllisp.Error as Error
+import qualified Pllisp.MacroExpand as MacroExpand
+import qualified Pllisp.Module as Mod
+import qualified Pllisp.Parser as Parser
+import qualified Pllisp.Resolve as Resolve
+import qualified Pllisp.SExpr as SExpr
+import qualified Pllisp.SrcLoc as Loc
+import qualified Pllisp.Type as Ty
+import qualified Pllisp.TypeCheck as TC
+
+data ModuleInfo = ModuleInfo
+  { miPath :: FilePath
+  , miSexprs :: [SExpr.SExpr]
+  , miImports :: [CST.Import]
+  }
+
+data LoadedImports = LoadedImports
+  { liExports :: M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)
+  , liTypedModules :: [TC.TResolvedCST]
+  , liEnvs :: TC.TCEnvs
+  , liCompileStates :: M.Map CST.Symbol MacroExpand.CompileState
+  }
+
+data CompiledModule = CompiledModule
+  { cmName :: CST.Symbol
+  , cmTyped :: TC.TResolvedCST
+  , cmExports :: M.Map CST.Symbol TC.Scheme
+  , cmEnvs :: TC.TCEnvs
+  , cmCompileState :: MacroExpand.CompileState
+  }
+
+data CompileSeed = CompileSeed
+  { seedExports :: M.Map CST.Symbol (M.Map CST.Symbol TC.Scheme)
+  , seedTypedModules :: [TC.TResolvedCST]
+  , seedEnvs :: TC.TCEnvs
+  , seedCompileStates :: M.Map CST.Symbol MacroExpand.CompileState
+  }
+
+emptyCompileSeed :: CompileSeed
+emptyCompileSeed =
+  CompileSeed
+    { seedExports = M.empty
+    , seedTypedModules = []
+    , seedEnvs = TC.emptyTCEnvs
+    , seedCompileStates = M.empty
+    }
+
+moduleNameOrUser :: [SExpr.SExpr] -> T.Text
+moduleNameOrUser sexprs = maybe "USER" id (SExpr.preScanModuleName sexprs)
+
+validateRuntimeSyntaxTypes :: TC.TResolvedCST -> Maybe (Loc.Span, String)
+validateRuntimeSyntaxTypes = firstJust checkExpr
+  where
+    checkExpr (Loc.Located sp (Ty.Typed ty exprF)) =
+      checkType sp ty
+        `orElse` checkExprF sp exprF
+
+    checkExprF sp exprF = case exprF of
+      TC.TRLit _ -> Nothing
+      TC.TRBool _ -> Nothing
+      TC.TRUnit -> Nothing
+      TC.TRVar _ -> Nothing
+      TC.TRLam params retTy body ->
+        firstJust (checkType sp . snd) params
+          `orElse` checkType sp retTy
+          `orElse` checkExpr body
+      TC.TRLet binds body ->
+        firstJust checkBind binds
+          `orElse` checkExpr body
+      TC.TRIf cond thenBr elseBr ->
+        checkExpr cond
+          `orElse` checkExpr thenBr
+          `orElse` checkExpr elseBr
+      TC.TRApp fn args ->
+        checkExpr fn
+          `orElse` firstJust checkExpr args
+      TC.TRType _ _ ctors ->
+        firstJust checkCtor ctors
+      TC.TRCase scrutinee arms ->
+        checkExpr scrutinee
+          `orElse` firstJust checkArm arms
+      TC.TRLoop params body ->
+        firstJust (checkType sp . snd) params
+          `orElse` checkExpr body
+      TC.TRRecur args ->
+        firstJust checkExpr args
+      TC.TRFFI _ _ _ _ -> Nothing
+      TC.TRFFIStruct _ fields ->
+        firstJust (checkCType sp . snd) fields
+      TC.TRFFIVar _ _ _ _ -> Nothing
+      TC.TRFFIEnum _ _ -> Nothing
+      TC.TRFFICallback _ _ _ -> Nothing
+
+    checkBind (_, bindTy, bindExpr) =
+      checkType (Loc.locSpan bindExpr) bindTy
+        `orElse` checkExpr bindExpr
+
+    checkArm (pat, body) =
+      checkPattern pat
+        `orElse` checkExpr body
+
+    checkPattern pat = case pat of
+      TC.TRPatLit _ -> Nothing
+      TC.TRPatBool _ -> Nothing
+      TC.TRPatVar _ ty -> checkType dummySpan ty
+      TC.TRPatWild ty -> checkType dummySpan ty
+      TC.TRPatCon _ ty pats ->
+        checkType dummySpan ty
+          `orElse` firstJust checkPattern pats
+
+    checkCtor dc =
+      firstJust (checkType dummySpan) (CST.dcArgs dc)
+
+    checkCType _ _ = Nothing
+
+    checkType sp ty
+      | containsSyntaxType ty = Just (sp, "SYNTAX is a compile-time-only type")
+      | otherwise = Nothing
+
+    containsSyntaxType ty = case ty of
+      Ty.TySyntax -> True
+      Ty.TyFun args retTy -> any containsSyntaxType args || containsSyntaxType retTy
+      Ty.TyCon _ args -> any containsSyntaxType args
+      Ty.TyApp f a -> containsSyntaxType f || containsSyntaxType a
+      _ -> False
+
+    firstJust f = go
+      where
+        go [] = Nothing
+        go (x:xs) = f x `orElse` go xs
+
+    orElse (Just x) _ = Just x
+    orElse Nothing y = y
+
+    dummySpan = Loc.Span (Loc.Pos "<type>" 0 0) (Loc.Pos "<type>" 0 0)
+
+loadImports :: FilePath -> FilePath -> [CST.Import] -> IO (Either String LoadedImports)
+loadImports _ _ [] =
+  pure $
+    Right $
+      LoadedImports
+        { liExports = M.empty
+        , liTypedModules = []
+        , liEnvs = TC.emptyTCEnvs
+        , liCompileStates = M.empty
+        }
+loadImports fp stdlibDir imports = do
+  let searchDir = takeDirectory fp
+  scanResult <- scanAllModules searchDir stdlibDir imports
+  case scanResult of
+    Left err -> pure (Left err)
+    Right moduleInfos -> do
+      let depMap = dependencyMap S.empty moduleInfos
+      case Mod.dependencyOrder depMap of
+        Left err -> pure (Left err)
+        Right order -> do
+          expanded <- pure (expandModulesFrom M.empty moduleInfos order)
+          case expanded of
+            Left err -> pure (Left err)
+            Right (expandedMap, compileStates) ->
+              fmap snd <$> compileModulesDetailedFrom emptyCompileSeed expandedMap compileStates moduleInfos order
+
+scanAllModules :: FilePath -> FilePath -> [CST.Import] -> IO (Either String (M.Map CST.Symbol ModuleInfo))
+scanAllModules searchDir stdlibDir rootImports =
+  go S.empty M.empty [(imp, searchDir) | imp <- rootImports]
+  where
+    go _ acc [] = pure (Right acc)
+    go visited acc ((CST.Import modName _ _, dir) : rest)
+      | S.member modName visited = go visited acc rest
+      | otherwise = do
+          mPath <- findModuleFile dir stdlibDir modName
+          case mPath of
+            Nothing -> pure (Left ("module not found: " ++ T.unpack modName))
+            Just modPath -> do
+              src <- T.IO.readFile modPath
+              case Parser.parseSExprs modPath src of
+                Left err ->
+                  pure (Left ("parse error in " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
+                Right sexprs -> do
+                  let subImports = SExpr.preScanImports sexprs
+                      info = ModuleInfo modPath sexprs subImports
+                      visited' = S.insert modName visited
+                      acc' = M.insert modName info acc
+                      modDir = takeDirectory modPath
+                      newItems = [(imp, modDir) | imp <- subImports]
+                  go visited' acc' (rest ++ newItems)
+
+expandModulesFrom
+  :: M.Map CST.Symbol MacroExpand.CompileState
+  -> M.Map CST.Symbol ModuleInfo
+  -> [CST.Symbol]
+  -> Either String (M.Map CST.Symbol [SExpr.SExpr], M.Map CST.Symbol MacroExpand.CompileState)
+expandModulesFrom seedStates moduleInfos = go M.empty seedStates
+  where
+    go expandedMap compileStates [] = Right (expandedMap, compileStates)
+    go expandedMap compileStates (modName : rest) =
+      case M.lookup modName moduleInfos of
+        Nothing -> go expandedMap compileStates rest
+        Just info ->
+          let isPrelude = modName == "PRELUDE"
+              macroImports =
+                if isPrelude
+                  then miImports info
+                  else CST.Import "PRELUDE" "PRELUDE" [] : miImports info
+          in case compileBaseState isPrelude macroImports compileStates of
+               Left err -> Left err
+               Right baseState ->
+                 case MacroExpand.expandModuleWith modName baseState (miSexprs info) of
+                   Left err -> Left ("macro error in " ++ T.unpack modName ++ ": " ++ err)
+                   Right result ->
+                     case MacroExpand.finalizeModuleState modName (MacroExpand.mrState result) (MacroExpand.mrExpanded result) of
+                       Left err -> Left ("runtime surface error in " ++ T.unpack modName ++ ": " ++ err)
+                       Right finalized ->
+                         go
+                           (M.insert modName (MacroExpand.mrExpanded result) expandedMap)
+                           (M.insert modName finalized compileStates)
+                           rest
+
+compileBaseState
+  :: Bool
+  -> [CST.Import]
+  -> M.Map CST.Symbol MacroExpand.CompileState
+  -> Either String MacroExpand.CompileState
+compileBaseState True _ _ = Right MacroExpand.primitiveState
+compileBaseState False imports compileStates =
+  let names = map CST.impModule imports
+  in do
+    states <- mapM lookupState names
+    MacroExpand.mergeCompileStates states
+  where
+    lookupState name =
+      case M.lookup name compileStates of
+        Just st -> Right st
+        Nothing -> Left ("missing compile-time state for " ++ T.unpack name)
+
+compileModulesDetailedFrom
+  :: CompileSeed
+  -> M.Map CST.Symbol [SExpr.SExpr]
+  -> M.Map CST.Symbol MacroExpand.CompileState
+  -> M.Map CST.Symbol ModuleInfo
+  -> [CST.Symbol]
+  -> IO (Either String ([CompiledModule], LoadedImports))
+compileModulesDetailedFrom seed expandedMap compileStates moduleInfos order =
+  go order (seedExports seed) (seedTypedModules seed) (seedEnvs seed) []
+  where
+    go [] accExports accTyped accEnvs accMods =
+      let loaded =
+            LoadedImports
+              { liExports = accExports
+              , liTypedModules = accTyped
+              , liEnvs = accEnvs
+              , liCompileStates = compileStates
+              }
+      in pure (Right (reverse accMods, loaded))
+    go (modName : rest) accExports accTyped accEnvs accMods =
+      case (M.lookup modName moduleInfos, M.lookup modName expandedMap) of
+        (Nothing, _) -> go rest accExports accTyped accEnvs accMods
+        (_, Nothing) -> pure (Left ("missing expanded module for " ++ T.unpack modName))
+        (Just info, Just expanded) ->
+          case SExpr.toProgram expanded of
+            Left err ->
+              pure (Left ("syntax error in " ++ T.unpack modName ++ ": " ++ SExpr.ceMsg err))
+            Right modProg -> do
+              let cstImports = CST.progImports modProg
+                  isPrelude = modName == "PRELUDE"
+                  preludeExports = M.findWithDefault M.empty "PRELUDE" accExports
+                  preludeMacroNames =
+                    case M.lookup "PRELUDE" compileStates of
+                      Just st -> M.keysSet (MacroExpand.csMacros st)
+                      Nothing -> S.empty
+                  protectedNames =
+                    if isPrelude
+                      then S.empty
+                      else M.keysSet preludeExports `S.union` preludeMacroNames
+                  allImports =
+                    if isPrelude
+                      then cstImports
+                      else CST.Import "PRELUDE" "PRELUDE" (M.keys preludeExports) : cstImports
+              case Mod.validateProgramNames protectedNames (CST.progExprs modProg) of
+                Left err -> pure (Left err)
+                Right () ->
+                  case Mod.checkImportCollisions accExports allImports of
+                    Left err -> pure (Left err)
+                    Right () -> do
+                      let (resolveScope, tcCtx, normMap) = Mod.buildImportScope accExports allImports
+                      case Mod.desugarTopLevel (CST.progExprs modProg) of
+                        Left err -> pure (Left ("desugar error in " ++ T.unpack modName ++ ": " ++ err))
+                        Right exprs ->
+                          case Resolve.resolveWith resolveScope normMap exprs of
+                            Left errs -> do
+                              src <- T.IO.readFile (miPath info)
+                              pure
+                                (Left
+                                  (concatMap
+                                    (\e -> Error.renderError src "resolve" (Resolve.errSpan e) (Resolve.errMsg e))
+                                    errs))
+                            Right resolved ->
+                              case TC.typecheckWith accEnvs tcCtx resolved of
+                                Left errs -> do
+                                  src <- T.IO.readFile (miPath info)
+                                  pure
+                                    (Left
+                                      (concatMap
+                                        (\e -> Error.renderError src "type" (TC.teSpan e) (TC.teMsg e))
+                                        errs))
+                                Right (typed, modEnvs) -> do
+                                  let renameMap = Mod.moduleRenameMap modName (CST.progExprs modProg)
+                                      typed' = Mod.renameTypedModuleSymbols renameMap typed
+                                      modEnvs' = Mod.renameTCEnvsSymbols renameMap modEnvs
+                                      exports = Mod.renameExportSchemes renameMap (Mod.collectExports modEnvs typed)
+                                      accExports' = M.insert modName exports accExports
+                                      compileState =
+                                        case M.lookup modName compileStates of
+                                          Just st -> st
+                                          Nothing -> error ("missing compile state for " ++ T.unpack modName)
+                                      compiled =
+                                        CompiledModule
+                                          { cmName = modName
+                                          , cmTyped = typed'
+                                          , cmExports = exports
+                                          , cmEnvs = modEnvs'
+                                          , cmCompileState = compileState
+                                          }
+                                  go rest accExports' (accTyped ++ [typed']) (TC.mergeTCEnvs accEnvs modEnvs') (compiled : accMods)
+
+dependencyMap :: S.Set CST.Symbol -> M.Map CST.Symbol ModuleInfo -> M.Map CST.Symbol [CST.Symbol]
+dependencyMap existing moduleInfos =
+  let rawDepMap = M.map (map CST.impModule . miImports) moduleInfos
+      newDeps =
+        M.mapWithKey
+          (\k ds ->
+            if k == "PRELUDE" || "PRELUDE" `elem` ds
+              then ds
+              else "PRELUDE" : ds)
+          rawDepMap
+      existingDeps = M.fromSet (const []) existing
+  in M.union newDeps existingDeps
+
+findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)
+findModuleFile searchDir stdlibDir modName = do
+  let localPath = searchDir </> T.unpack modName ++ ".pll"
+  localExists <- doesFileExist localPath
+  if localExists
+    then pure (Just localPath)
+    else do
+      let stdlibPath = stdlibDir </> T.unpack modName ++ ".pll"
+      stdlibExists <- doesFileExist stdlibPath
+      pure (if stdlibExists then Just stdlibPath else Nothing)
