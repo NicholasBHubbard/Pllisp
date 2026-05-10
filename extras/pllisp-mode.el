@@ -7,7 +7,7 @@
   :group 'languages)
 
 (defconst pllisp-special-forms
-  '("lam" "let" "if" "case" "type" "cls" "inst"
+  '("lam" "let" "if" "case" "type" "class" "inst"
     "module" "import" "mac" "eval-when" "syntax-case" "ffi" "ffi-struct"
     "ffi-var" "ffi-enum" "ffi-callback")
   "Special forms and declaration keywords.")

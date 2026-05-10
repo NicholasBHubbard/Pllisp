@@ -76,7 +76,7 @@ parseQuotedStrings txt =
 
 expectedKeywordNames :: S.Set T.Text
 expectedKeywordNames = S.fromList
-  [ "lam", "let", "if", "case", "type", "cls", "inst"
+  [ "lam", "let", "if", "case", "type", "class", "inst"
   , "module", "import", "mac", "eval-when", "syntax-case", "ffi", "ffi-struct"
   , "ffi-var", "ffi-enum", "ffi-callback"
   , "fun", "progn", "if_", "when", "unless", "cond"

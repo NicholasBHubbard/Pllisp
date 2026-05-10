@@ -100,7 +100,7 @@ See [Types](types.md#records).
 Typeclasses let you write overloaded operations:
 
 ```
-(cls SHOW () (a)
+(class SHOW () (a)
   (show %a %STR))
 
 (inst SHOW %INT

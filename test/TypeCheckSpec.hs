@@ -374,7 +374,7 @@ spec = do
   describe "higher-kinded types" $ do
     it "HKT class resolves type params correctly" $ do
       let src = T.unlines
-            [ "(cls FUNCTOR () (f)"
+            [ "(class FUNCTOR () (f)"
             , "  (fmap %(-> a b) %(f a) %(f b)))"
             , "(type Box (a) (MkBox a))"
             , "(inst FUNCTOR %Box"
@@ -390,7 +390,7 @@ spec = do
     it "Monad bind infers correct type" $ do
       let src = T.unlines
             [ "(type Opt (a) (Some a) (None))"
-            , "(cls MONAD () (m)"
+            , "(class MONAD () (m)"
             , "  (bind %(m a) %(-> a (m b)) %(m b)))"
             , "(inst MONAD %Opt"
             , "  (bind (lam ((mx %(Opt a)) (fn %(-> a (Opt b))))"
@@ -406,7 +406,7 @@ spec = do
   describe "kind validation" $ do
     it "rejects ground type as HKT class instance" $ do
       let src = T.unlines
-            [ "(cls FUNCTOR () (f)"
+            [ "(class FUNCTOR () (f)"
             , "  (fmap %(-> a b) %(f a) %(f b)))"
             , "(inst FUNCTOR %INT"
             , "  (fmap (lam ((fn %(-> a b)) (x %INT)) x)))"
@@ -417,7 +417,7 @@ spec = do
 
     it "accepts type constructor as HKT class instance" $ do
       let src = T.unlines
-            [ "(cls FUNCTOR () (f)"
+            [ "(class FUNCTOR () (f)"
             , "  (fmap %(-> a b) %(f a) %(f b)))"
             , "(type Box (a) (MkBox a))"
             , "(inst FUNCTOR %Box"
@@ -430,7 +430,7 @@ spec = do
 
     it "rejects ground type for multi-param HKT" $ do
       let src = T.unlines
-            [ "(cls MAPPABLE () (f)"
+            [ "(class MAPPABLE () (f)"
             , "  (mmap %(-> a b) %(f a) %(f b)))"
             , "(inst MAPPABLE %BOOL"
             , "  (mmap (lam ((fn %(-> a b)) (x %BOOL)) x)))"
@@ -442,8 +442,8 @@ spec = do
   describe "superclass constraints" $ do
     it "rejects instance when superclass instance is missing" $ do
       let src = T.unlines
-            [ "(cls FUNCTOR () (f) (fmap %(-> a b) %(f a) %(f b)))"
-            , "(cls APPLICATIVE (FUNCTOR) (f)"
+            [ "(class FUNCTOR () (f) (fmap %(-> a b) %(f a) %(f b)))"
+            , "(class APPLICATIVE (FUNCTOR) (f)"
             , "  (pure %a %(f a))"
             , "  (ap %(f %(-> a b)) %(f a) %(f b)))"
             , "(type Box (a) (MkBox a))"
@@ -458,8 +458,8 @@ spec = do
 
     it "accepts instance when superclass instance exists" $ do
       let src = T.unlines
-            [ "(cls FUNCTOR () (f) (fmap %(-> a b) %(f a) %(f b)))"
-            , "(cls APPLICATIVE (FUNCTOR) (f)"
+            [ "(class FUNCTOR () (f) (fmap %(-> a b) %(f a) %(f b)))"
+            , "(class APPLICATIVE (FUNCTOR) (f)"
             , "  (pure %a %(f a))"
             , "  (ap %(f %(-> a b)) %(f a) %(f b)))"
             , "(type Box (a) (MkBox a))"
@@ -477,7 +477,7 @@ spec = do
 
     it "class with empty superclass list works" $ do
       let src = T.unlines
-            [ "(cls SHOW () (a) (show %a %STR))"
+            [ "(class SHOW () (a) (show %a %STR))"
             , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
             , "(print (show 42))"
             ]
@@ -485,9 +485,9 @@ spec = do
         Left errs -> expectationFailure (unlines (map TC.teMsg errs))
         Right _ -> pure ()
 
-    it "rejects cls missing superclass list" $ do
+    it "rejects class missing superclass list" $ do
       -- Old syntax without () should now fail to parse
-      case Parser.parseProgram "<test>" "(cls SHOW (a) (show %a %STR))" of
+      case Parser.parseProgram "<test>" "(class SHOW (a) (show %a %STR))" of
         Left _ -> pure ()
         Right _ -> expectationFailure "expected parse error for missing superclass list"
 

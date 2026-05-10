@@ -353,7 +353,7 @@ toExpr (Loc.Located sp sexprF) = case sexprF of
   SList (Loc.Located _ (SAtom "IF")   : rest) -> Loc.Located sp <$> toIf sp rest
   SList (Loc.Located _ (SAtom "TYPE") : rest) -> Loc.Located sp <$> toTypeDecl sp rest
   SList (Loc.Located _ (SAtom "CASE") : rest) -> Loc.Located sp <$> toCase sp rest
-  SList (Loc.Located _ (SAtom "CLS")  : rest) -> Loc.Located sp <$> toCls sp rest
+  SList (Loc.Located _ (SAtom "CLASS")  : rest) -> Loc.Located sp <$> toCls sp rest
   SList (Loc.Located _ (SAtom "INST") : rest) -> Loc.Located sp <$> toInst sp rest
   SList (Loc.Located _ (SAtom "FFI")  : rest) -> Loc.Located sp <$> toFFIDecl sp rest
   SList (Loc.Located _ (SAtom "FFI-STRUCT") : rest) -> Loc.Located sp <$> toFFIStruct sp rest
@@ -545,14 +545,14 @@ toArm (Loc.Located sp _) = Left $ ConvertError sp "invalid case arm"
 
 toCls :: Loc.Span -> [SExpr] -> Either ConvertError CST.ExprF
 toCls sp (Loc.Located _ (SAtom name) : Loc.Located _ (SList superExprs) : Loc.Located _ (SList tvars) : methods)
-  | null tvars = Left $ ConvertError sp "cls requires at least one type variable"
-  | null methods = Left $ ConvertError sp "cls requires at least one method"
+  | null tvars = Left $ ConvertError sp "class requires at least one type variable"
+  | null methods = Left $ ConvertError sp "class requires at least one method"
   | otherwise = do
       supers <- mapM toAtomName superExprs
       tvars' <- mapM toAtomName tvars
       methods' <- mapM (toClassMethod sp) methods
       Right $ CST.ExprCls name tvars' supers methods'
-toCls sp _ = Left $ ConvertError sp "invalid cls: expected (cls Name (supers...) (tyvars...) methods...)"
+toCls sp _ = Left $ ConvertError sp "invalid class: expected (class Name (supers...) (tyvars...) methods...)"
 
 toClassMethod :: Loc.Span -> SExpr -> Either ConvertError CST.ClassMethod
 toClassMethod sp (Loc.Located _ (SList (Loc.Located _ (SAtom name) : tys)))

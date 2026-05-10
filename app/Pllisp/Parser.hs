@@ -165,8 +165,8 @@ exprCaseParser = MP.label "case" $ MP.try $ parens $ do
   pure $ CST.ExprCase scrutinee arms
 
 exprClsParser :: Parser CST.ExprF
-exprClsParser = MP.label "cls" $ MP.try $ parens $ do
-  _ <- ident' "CLS"
+exprClsParser = MP.label "class" $ MP.try $ parens $ do
+  _ <- ident' "CLASS"
   name <- symbolParser
   supers <- parens (MP.many symbolParser)
   tvars <- parens (MP.many symbolParser)

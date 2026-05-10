@@ -15,20 +15,20 @@ Common PRELUDE examples are `EQ`, `ORD`, `TRUTHY`, and `STRINGY`.
 ## Defining a Class
 
 ```
-(cls SHOW () (a)
+(class SHOW () (a)
   (show %a %STR))
 ```
 
 The syntax is:
 
 ```
-(cls CLASS-NAME (superclasses...) (typevars...) method-signatures...)
+(class CLASS-NAME (superclasses...) (typevars...) method-signatures...)
 ```
 
 Each method signature lists argument types followed by the return type:
 
 ```
-(cls EQUAL () (a)
+(class EQUAL () (a)
   (equal %a %a %BOOL)
   (nequal %a %a %BOOL))
 ```
@@ -52,7 +52,7 @@ shape.
 For a class with multiple methods:
 
 ```
-(cls EQUAL () (a)
+(class EQUAL () (a)
   (equal %a %a %BOOL)
   (nequal %a %a %BOOL))
 
@@ -67,7 +67,7 @@ Once a class and matching instance are in scope, the method name is used like
 an ordinary function:
 
 ```
-(cls SHOW () (a)
+(class SHOW () (a)
   (show %a %STR))
 
 (inst SHOW %INT
@@ -103,7 +103,7 @@ This works for any `Maybe a`.
 Another common pattern is a capability on a container shape:
 
 ```
-(cls BOOLISH () (a)
+(class BOOLISH () (a)
   (boolish? %a %BOOL))
 
 (inst BOOLISH %(List a)
@@ -118,7 +118,7 @@ Another common pattern is a capability on a container shape:
 Superclasses go in the first parenthesized list:
 
 ```
-(cls APPLICATIVE (FUNCTOR) (f)
+(class APPLICATIVE (FUNCTOR) (f)
   (pure %a %(f a))
   (ap %(f %(-> a b)) %(f a) %(f b)))
 ```
@@ -133,7 +133,7 @@ If the superclass instance is missing, that is an error.
 Typeclass parameters can be type constructors, not just ground types.
 
 ```
-(cls FUNCTOR () (f)
+(class FUNCTOR () (f)
   (map %(-> a b) %(f a) %(f b)))
 
 (inst FUNCTOR %Maybe
@@ -158,7 +158,7 @@ Another example with a custom type:
 (type Box (a)
   (MkBox a))
 
-(cls BOXMAP () (f)
+(class BOXMAP () (f)
   (bmap %(-> a b) %(f a) %(f b)))
 
 (inst BOXMAP %Box

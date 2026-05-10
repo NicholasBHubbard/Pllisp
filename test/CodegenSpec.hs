@@ -147,7 +147,7 @@ spec = do
     it "HKT class with custom type" $
       run (T.unlines
         [ "(type Box (a) (MkBox a))"
-        , "(cls BOXMAP () (f)"
+        , "(class BOXMAP () (f)"
         , "  (bmap %(-> a b) %(f a) %(f b)))"
         , "(inst BOXMAP %Box"
         , "  (bmap (lam ((fn %(-> a b)) (box %(Box a)))"
@@ -158,7 +158,7 @@ spec = do
 
     it "map with Maybe via FUNCTOR" $
       run (T.unlines
-        [ "(cls FUNCTOR () (f)"
+        [ "(class FUNCTOR () (f)"
         , "  (map %(-> a b) %(f a) %(f b)))"
         , "(inst FUNCTOR %Maybe"
         , "  (map (lam ((fn %(-> a b)) (mx %(Maybe a)))"
@@ -170,7 +170,7 @@ spec = do
 
     it "map composed twice" $
       run (T.unlines
-        [ "(cls FUNCTOR () (f)"
+        [ "(class FUNCTOR () (f)"
         , "  (map %(-> a b) %(f a) %(f b)))"
         , "(type Box (a) (MkBox a))"
         , "(inst FUNCTOR %Box"
@@ -184,7 +184,7 @@ spec = do
 
     it "Monad-like bind with Maybe" $
       run (T.unlines
-        [ "(cls MONAD () (m)"
+        [ "(class MONAD () (m)"
         , "  (bind %(m a) %(-> a (m b)) %(m b)))"
         , "(inst MONAD %Maybe"
         , "  (bind (lam ((mx %(Maybe a)) (fn %(-> a (Maybe b))))"
@@ -201,7 +201,7 @@ spec = do
 
     it "Monad bind short-circuits on Nothing" $
       run (T.unlines
-        [ "(cls MONAD () (m)"
+        [ "(class MONAD () (m)"
         , "  (bind %(m a) %(-> a (m b)) %(m b)))"
         , "(inst MONAD %Maybe"
         , "  (bind (lam ((mx %(Maybe a)) (fn %(-> a (Maybe b))))"
@@ -1888,18 +1888,18 @@ spec = do
   describe "typeclasses" $ do
     it "basic class + instance + method call" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(print (show 42))"
         ]) >>= (`shouldBe` "42")
 
     it "qualified imports keep same-named methods distinct across modules" $ do
       let modA = T.unlines
-            [ "(cls SHOWINT () (a) (render %a %STR))"
+            [ "(class SHOWINT () (a) (render %a %STR))"
             , "(inst SHOWINT %INT (render (lam ((x %INT)) (int-to-str x))))"
             ]
           modB = T.unlines
-            [ "(cls SHOWSTR () (a) (render %a %STR))"
+            [ "(class SHOWSTR () (a) (render %a %STR))"
             , "(inst SHOWSTR %STR (render (lam ((x %STR)) x)))"
             ]
           mainSrc = T.unlines
@@ -1912,14 +1912,14 @@ spec = do
 
     it "class method with multiple args" $
       run (T.unlines
-        [ "(cls EQUAL () (a) (equal %a %a %BOOL))"
+        [ "(class EQUAL () (a) (equal %a %a %BOOL))"
         , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eqi x y))))"
         , "(print (int-to-str (if (equal 1 1) 1 0)))"
         ]) >>= (`shouldBe` "1")
 
     it "multiple instances of same class" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(inst SHOW %STR (show (lam ((x %STR)) x)))"
         , "(print (show 42))"
@@ -1927,7 +1927,7 @@ spec = do
 
     it "different instances dispatched by type" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(inst SHOW %STR (show (lam ((x %STR)) (concat \"[\" (concat x \"]\")))))"
         , "(print (show \"hi\"))"
@@ -1935,7 +1935,7 @@ spec = do
 
     it "class with multiple methods" $
       run (T.unlines
-        [ "(cls EQUAL () (a)"
+        [ "(class EQUAL () (a)"
         , "  (equal %a %a %BOOL)"
         , "  (nequal %a %a %BOOL))"
         , "(inst EQUAL %INT"
@@ -1946,7 +1946,7 @@ spec = do
 
     it "class method used in let binding" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(let ((result (show 99)))"
         , "  (print result))"
@@ -1954,7 +1954,7 @@ spec = do
 
     it "instance methods can call same-module helper bindings" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(let ((helper (lam ((x %INT)) (int-to-str x)))) unit)"
         , "(inst SHOW %INT (show (lam ((x %INT)) (helper x))))"
         , "(print (show 42))"
@@ -1962,14 +1962,14 @@ spec = do
 
     it "class method in if branches" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(print (if TRUE (show 1) (show 2)))"
         ]) >>= (`shouldBe` "1")
 
     it "instance for float type" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %FLT (show (lam ((x %FLT)) (flt-to-str x))))"
         , "(print (show 3.14))"
         ]) >>= (`shouldBe` "3.14")
@@ -1977,7 +1977,7 @@ spec = do
     it "method used with ADT" $
       run (T.unlines
         [ "(TYPE Color () (Red) (Green) (Blue))"
-        , "(cls SHOW () (a) (show %a %STR))"
+        , "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %Color (show (lam ((c %Color)) (case c"
         , "  ((Red) \"red\")"
         , "  ((Green) \"green\")"
@@ -1987,14 +1987,14 @@ spec = do
 
     it "method result passed to another function" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(print (concat \"val=\" (show 7)))"
         ]) >>= (`shouldBe` "val=7")
 
     it "class method in nested let" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(let ((a (show 1)))"
         , "  (let ((b (show 2)))"
@@ -2003,8 +2003,8 @@ spec = do
 
     it "two different classes" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
-        , "(cls EQUAL () (a) (equal %a %a %BOOL))"
+        [ "(class SHOW () (a) (show %a %STR))"
+        , "(class EQUAL () (a) (equal %a %a %BOOL))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eqi x y))))"
         , "(print (concat (show 42) (if (equal 1 1) \" yes\" \" no\")))"
@@ -2012,7 +2012,7 @@ spec = do
 
     it "polymorphic function with class method" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(let ((print-show (lam (x) (print (show x)))))"
         , "  (print-show 42))"
@@ -2020,7 +2020,7 @@ spec = do
 
     it "polymorphic function called multiple times same type" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(let ((to-str (lam (x) (show x))))"
         , "  (let ((_ (print (to-str 1))))"
@@ -2029,7 +2029,7 @@ spec = do
 
     it "polymorphic function called with different types" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(inst SHOW %STR (show (lam ((x %STR)) (concat \"[\" (concat x \"]\")))))"
         , "(let ((display (lam (x) (show x))))"
@@ -2039,7 +2039,7 @@ spec = do
 
     it "polymorphic function with multi-method class" $
       run (T.unlines
-        [ "(cls EQUAL () (a)"
+        [ "(class EQUAL () (a)"
         , "  (equal %a %a %BOOL)"
         , "  (nequal %a %a %BOOL))"
         , "(inst EQUAL %INT"
@@ -2051,8 +2051,8 @@ spec = do
 
     it "polymorphic with multiple classes" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
-        , "(cls EQUAL () (a) (equal %a %a %BOOL))"
+        [ "(class SHOW () (a) (show %a %STR))"
+        , "(class EQUAL () (a) (equal %a %a %BOOL))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(inst EQUAL %INT (equal (lam ((x %INT) (y %INT)) (eqi x y))))"
         , "(let ((show-eq (lam (x y)"
@@ -2063,7 +2063,7 @@ spec = do
     it "polymorphic function with ADT instance" $
       run (T.unlines
         [ "(TYPE Color () (Red) (Green) (Blue))"
-        , "(cls SHOW () (a) (show %a %STR))"
+        , "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %Color (show (lam ((c %Color)) (case c"
         , "  ((Red) \"red\") ((Green) \"green\") ((Blue) \"blue\")))))"
         , "(let ((display (lam (x) (print (show x)))))"
@@ -2073,7 +2073,7 @@ spec = do
   describe "parametric typeclass instances" $ do
     it "instance for Maybe a matches Maybe Int" $
       run (T.unlines
-        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        [ "(class BOOLISH () (a) (boolish? %a %BOOL))"
         , "(inst BOOLISH %(Maybe a)"
         , "  (boolish? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
         , "(print (if (boolish? (Just 1)) \"yes\" \"no\"))"
@@ -2081,7 +2081,7 @@ spec = do
 
     it "instance for Maybe a matches Nothing" $
       run (T.unlines
-        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        [ "(class BOOLISH () (a) (boolish? %a %BOOL))"
         , "(inst BOOLISH %(Maybe a)"
         , "  (boolish? (lam ((x %(Maybe a))) (case x ((Just _) true) (_ false)))))"
         , "(print (if (boolish? Nothing) \"yes\" \"no\"))"
@@ -2089,7 +2089,7 @@ spec = do
 
     it "instance for List a" $
       run (T.unlines
-        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        [ "(class BOOLISH () (a) (boolish? %a %BOOL))"
         , "(inst BOOLISH %(List a)"
         , "  (boolish? (lam ((x %(List a))) (case x ((Cons _ _) true) (_ false)))))"
         , "(print (if (boolish? (Cons 1 Empty)) \"yes\" \"no\"))"
@@ -2097,7 +2097,7 @@ spec = do
 
     it "parametric and concrete instances coexist" $
       run (T.unlines
-        [ "(cls SHOW () (a) (show %a %STR))"
+        [ "(class SHOW () (a) (show %a %STR))"
         , "(inst SHOW %INT (show (lam ((x %INT)) (int-to-str x))))"
         , "(inst SHOW %(Maybe a)"
         , "  (show (lam ((x %(Maybe a))) (case x ((Just _) \"Just\") (_ \"Nothing\")))))"
@@ -2108,7 +2108,7 @@ spec = do
 
     it "instance for Either a b (two type params)" $
       run (T.unlines
-        [ "(cls BOOLISH () (a) (boolish? %a %BOOL))"
+        [ "(class BOOLISH () (a) (boolish? %a %BOOL))"
         , "(inst BOOLISH %(Either a b)"
         , "  (boolish? (lam ((x %(Either a b))) (case x ((Right _) true) (_ false)))))"
         , "(progn"
@@ -2120,7 +2120,7 @@ spec = do
     it "error on class method call with no matching instance" $
       shouldFailToCompile
         (T.unlines
-          [ "(cls SHOW () (a) (show %a %STR))"
+          [ "(class SHOW () (a) (show %a %STR))"
           , "(show 42)"
           ])
         "no instance"

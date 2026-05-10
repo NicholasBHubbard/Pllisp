@@ -190,7 +190,7 @@
 
 ### TRUTHY
 
-(cls TRUTHY () (a) (truthy %a %BOOL))
+(class TRUTHY () (a) (truthy %a %BOOL))
 
 (inst TRUTHY %BOOL
   (truthy (lam ((x %BOOL)) x)))
@@ -218,7 +218,7 @@
 
 ### EQ
 
-(cls EQ () (a) (eq %a %a %BOOL))
+(class EQ () (a) (eq %a %a %BOOL))
 
 (inst EQ %INT
   (eq (lam ((a %INT) (b %INT)) (eqi a b))))
@@ -235,7 +235,7 @@
 
 ### ORD
 
-(cls ORD (EQ) (a)
+(class ORD (EQ) (a)
   (lt %a %a %BOOL)
   (gt %a %a %BOOL)
   (le %a %a %BOOL)
@@ -261,7 +261,7 @@
 
 ### STRINGY
 
-(cls STRINGY () (a) (str %a %STR))
+(class STRINGY () (a) (str %a %STR))
 
 (inst STRINGY %BOOL
   (str (lam ((x %BOOL)) (if x "true" "false"))))

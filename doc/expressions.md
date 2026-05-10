@@ -18,7 +18,7 @@ first
 second
 ```
 
-Top-level declarations like `type`, `cls`, `inst`, `mac`, and `import` sit in
+Top-level declarations like `type`, `class`, `inst`, `mac`, and `import` sit in
 that same sequence.
 
 Comments start with `#` and run to the end of the line:

@@ -548,38 +548,38 @@ spec = do
         Right _ -> expectationFailure "expected reserved-word binding error"
 
   describe "typeclasses" $ do
-    -- cls
-    it "cls with one method" $ do
-      prog <- viaSExpr "(cls SHOW () (a) (show %a %STR))"
+    -- class
+    it "class with one method" $ do
+      prog <- viaSExpr "(class SHOW () (a) (show %a %STR))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "SHOW" ["A"] []
           [CST.ClassMethod "SHOW" [Ty.TyCon "A" []] Ty.TyStr])] -> pure ()
         other -> expectationFailure (show other)
 
-    it "cls with multi-arg method" $ do
-      prog <- viaSExpr "(cls EQUAL () (a) (equal %a %a %BOOL))"
+    it "class with multi-arg method" $ do
+      prog <- viaSExpr "(class EQUAL () (a) (equal %a %a %BOOL))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "EQUAL" ["A"] []
           [CST.ClassMethod "EQUAL" [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool])] -> pure ()
         other -> expectationFailure (show other)
 
-    it "cls with multiple methods" $ do
-      prog <- viaSExpr "(cls NUM () (a) (add %a %a %a) (neg %a %a))"
+    it "class with multiple methods" $ do
+      prog <- viaSExpr "(class NUM () (a) (add %a %a %a) (neg %a %a))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "NUM" ["A"] []
           [CST.ClassMethod "ADD" [Ty.TyCon "A" [], Ty.TyCon "A" []] (Ty.TyCon "A" []),
            CST.ClassMethod "NEG" [Ty.TyCon "A" []] (Ty.TyCon "A" [])])] -> pure ()
         other -> expectationFailure (show other)
 
-    it "cls with multiple type vars" $ do
-      prog <- viaSExpr "(cls CONVERT () (a b) (convert %a %b))"
+    it "class with multiple type vars" $ do
+      prog <- viaSExpr "(class CONVERT () (a b) (convert %a %b))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "CONVERT" ["A", "B"] []
           [CST.ClassMethod "CONVERT" [Ty.TyCon "A" []] (Ty.TyCon "B" [])])] -> pure ()
         other -> expectationFailure (show other)
 
-    it "cls with superclasses" $ do
-      prog <- viaSExpr "(cls APPLICATIVE (FUNCTOR) (f) (pure %a %(f a)))"
+    it "class with superclasses" $ do
+      prog <- viaSExpr "(class APPLICATIVE (FUNCTOR) (f) (pure %a %(f a)))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "APPLICATIVE" ["F"] ["FUNCTOR"]
           [CST.ClassMethod "PURE" [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "A" []])])] -> pure ()
@@ -608,14 +608,17 @@ spec = do
         other -> expectationFailure (show other)
 
     -- errors
-    it "rejects cls with no type vars" $
-      shouldFailSExpr "(cls SHOW () (show %a %STR))"
+    it "rejects class with no type vars" $
+      shouldFailSExpr "(class SHOW () (show %a %STR))"
 
-    it "rejects cls with no methods" $
-      shouldFailSExpr "(cls SHOW (a))"
+    it "rejects class with no methods" $
+      shouldFailSExpr "(class SHOW (a))"
 
-    it "rejects cls method with only one type (no args)" $
-      shouldFailSExpr "(cls SHOW (a) (show %STR))"
+    it "rejects class method with only one type (no args)" $
+      shouldFailSExpr "(class SHOW (a) (show %STR))"
+
+    it "rejects legacy cls keyword" $
+      shouldFailSExpr "(cls SHOW () (a) (show %a %STR))"
 
     it "rejects inst with no methods" $
       shouldFailSExpr "(inst SHOW %INT)"

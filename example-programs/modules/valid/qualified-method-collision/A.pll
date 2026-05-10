@@ -1,5 +1,5 @@
 (module A)
-(cls SHOWINT () (a)
+(class SHOWINT () (a)
   (render %a %STR))
 (inst SHOWINT %INT
   (render (lam ((x %INT)) (int-to-str x))))

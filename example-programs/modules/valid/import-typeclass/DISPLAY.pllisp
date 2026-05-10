@@ -1,5 +1,5 @@
 (module DISPLAY)
-(cls DISPLAY () (a)
+(class DISPLAY () (a)
   (display %a %STR))
 (inst DISPLAY %INT
   (display (lam ((x %INT)) (int-to-str x))))

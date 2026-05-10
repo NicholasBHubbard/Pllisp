@@ -815,7 +815,7 @@ attachMacroSpan callSp (Loc.Located sp sexprF) =
 nonRecursiveForms :: [T.Text]
 nonRecursiveForms =
   [ "TYPE"
-  , "CLS"
+  , "CLASS"
   , "MODULE"
   , "IMPORT"
   , "FFI"
@@ -830,7 +830,7 @@ isImmediateRuntimeDecl :: SExpr.SExpr -> Bool
 isImmediateRuntimeDecl (Loc.Located _ (SExpr.SList (Loc.Located _ (SExpr.SAtom tag) : _))) =
   tag `elem`
     [ "TYPE"
-    , "CLS"
+    , "CLASS"
     , "INST"
     , "FFI"
     , "FFI-STRUCT"

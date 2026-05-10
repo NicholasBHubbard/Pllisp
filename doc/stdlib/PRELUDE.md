@@ -247,7 +247,7 @@ Converts a value to `%BOOL`. It powers `if_`, `when`, `unless`, and the
 `*-let` macros.
 
 ```
-(cls TRUTHY () (a)
+(class TRUTHY () (a)
   (truthy %a %BOOL))
 ```
 
@@ -275,7 +275,7 @@ Examples:
 Generic equality comparison.
 
 ```
-(cls EQ () (a)
+(class EQ () (a)
   (eq %a %a %BOOL))
 ```
 
@@ -304,7 +304,7 @@ Use `eq` when you want the typeclass-based interface. Use `eqi`, `eqf`, or
 Generic ordering comparison.
 
 ```
-(cls ORD (EQ) (a)
+(class ORD (EQ) (a)
   (lt %a %a %BOOL)
   (gt %a %a %BOOL)
   (le %a %a %BOOL)
@@ -332,7 +332,7 @@ Examples:
 Converts a value to `%STR`.
 
 ```
-(cls STRINGY () (a)
+(class STRINGY () (a)
   (str %a %STR))
 ```
 

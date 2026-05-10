@@ -1,6 +1,6 @@
 # Defining and using typeclasses
 
-(cls AREA () (a) (area %a %INT))
+(class AREA () (a) (area %a %INT))
 
 (type Shape ()
   (Circle %INT)

@@ -1,4 +1,4 @@
-(cls SHOW () (a)
+(class SHOW () (a)
   (show %a %STR))
 (let ((helper (lam ((x %INT)) (int-to-str x)))) unit)
 (inst SHOW %INT

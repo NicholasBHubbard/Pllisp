@@ -46,7 +46,7 @@ variables:
 | Case | `(case expr (pattern body)...)` |
 | Syntax-case | `(syntax-case expr (pattern body)...)` |
 | Type | `(type Name (tyvars...) (Ctor args...)...)` |
-| Class | `(cls CLASS (supers...) (tyvars...) (method %types...)...)` |
+| Class | `(class CLASS (supers...) (tyvars...) (method %types...)...)` |
 | Instance | `(inst CLASS %Type (method impl)...)` |
 | Macro | `(mac name (params...) body)` |
 | Eval-when | `(eval-when (phases...) form...)` |
