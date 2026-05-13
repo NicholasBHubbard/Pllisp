@@ -889,7 +889,7 @@ expandLet importAliases currentModule macros depth sx kw [Loc.Located bindSp (SE
   body' <- expandExpr importAliases currentModule macros depth body
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, Loc.Located bindSp (SExpr.SList binds'), body'])
 expandLet importAliases currentModule macros depth sx _ elems =
-  expandListElems importAliases currentModule macros depth sx elems
+  expandListElems importAliases currentModule macros depth sx (specialFormElems sx elems)
 
 expandLetBinding :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
 expandLetBinding importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [name, val])) = do
@@ -910,7 +910,7 @@ expandLam importAliases currentModule macros depth sx kw [params@(Loc.Located _ 
   body' <- expandExpr importAliases currentModule macros depth body
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList [kw, params', retTy, body'])
 expandLam importAliases currentModule macros depth sx _ elems =
-  expandListElems importAliases currentModule macros depth sx elems
+  expandListElems importAliases currentModule macros depth sx (specialFormElems sx elems)
 
 expandLamParams :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
 expandLamParams importAliases currentModule macros depth (Loc.Located sp (SExpr.SList params)) = do
@@ -944,7 +944,7 @@ expandCase importAliases currentModule macros depth sx kw (scrutinee : arms) = d
   arms' <- mapM (expandCaseArm importAliases currentModule macros depth) arms
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList (kw : scrutinee' : arms'))
 expandCase importAliases currentModule macros depth sx _ elems =
-  expandListElems importAliases currentModule macros depth sx elems
+  expandListElems importAliases currentModule macros depth sx (specialFormElems sx elems)
 
 expandCaseArm :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
 expandCaseArm importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [pat, body])) = do
@@ -957,7 +957,7 @@ expandInst importAliases currentModule macros depth sx kw (className : ty : meth
   methods' <- mapM (expandInstMethod importAliases currentModule macros depth) methods
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList (kw : className : ty : methods'))
 expandInst importAliases currentModule macros depth sx _ elems =
-  expandListElems importAliases currentModule macros depth sx elems
+  expandListElems importAliases currentModule macros depth sx (specialFormElems sx elems)
 
 expandInstMethod :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.SExpr -> ExpandM SExpr.SExpr
 expandInstMethod importAliases currentModule macros depth (Loc.Located sp (SExpr.SList [name, body])) = do
@@ -969,3 +969,7 @@ expandListElems :: M.Map T.Text T.Text -> T.Text -> MacroTable -> Int -> SExpr.S
 expandListElems importAliases currentModule macros depth sx elems = do
   elems' <- mapM (expandExpr importAliases currentModule macros depth) elems
   pure $ Loc.Located (Loc.locSpan sx) (SExpr.SList elems')
+
+specialFormElems :: SExpr.SExpr -> [SExpr.SExpr] -> [SExpr.SExpr]
+specialFormElems (Loc.Located _ (SExpr.SList (headElem : _))) elems = headElem : elems
+specialFormElems _ elems = elems

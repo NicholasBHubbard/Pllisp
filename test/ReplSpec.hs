@@ -199,6 +199,17 @@ spec = do
         T.strip (Repl.reStdout outB) `shouldBe` "2"
 
   describe "errors" $ do
+    it "reports malformed let as a syntax error instead of a resolve error" $
+      withSession $ \sess -> do
+        result <- Repl.submitForms sess "(let ((foo 12)))"
+        case result of
+          Right _ -> expectationFailure "expected syntax error" >> pure ()
+          Left err -> do
+            Repl.rePhase err `shouldBe` "syntax"
+            let msg = Repl.reMessage err
+            msg `shouldContainText` "invalid let"
+            msg `shouldNotContainText` "symbol not in scope"
+
     it "renders submitForms resolve errors without leaking internal constructors" $
       withSession $ \sess -> do
         result <- Repl.submitForms sess "(print missing)"

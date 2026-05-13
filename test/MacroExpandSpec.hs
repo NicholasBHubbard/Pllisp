@@ -161,6 +161,17 @@ spec = do
         , SExpr.SInt 2
         ]
 
+    it "preserves malformed let as a let form instead of treating it as an ordinary list" $ do
+      r <- either fail pure $ expandSrc "(let ((foo 12)))"
+      r `shouldBe`
+        [ SExpr.SList
+            [ l (SExpr.SAtom "LET")
+            , l (SExpr.SList
+                [ l (SExpr.SList [l (SExpr.SAtom "FOO"), l (SExpr.SInt 12)])
+                ])
+            ]
+        ]
+
   describe "eval-when" $ do
     it "uses compile-time helper bindings for later macros" $ do
       r <- either fail pure $ expandSrc
