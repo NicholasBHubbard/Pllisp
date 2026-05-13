@@ -120,6 +120,7 @@ test-suite pllisp-test
     ghc-options:      -fhpc -rtsopts "-with-rtsopts=--read-tix-file=no"
     other-modules:    BuiltInSpec,
                       CliSpec,
+                      DocSpec,
                       DriverSpec,
                       EditorSpec,
                       ClosureConvertSpec,

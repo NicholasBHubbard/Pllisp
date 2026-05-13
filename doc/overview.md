@@ -135,6 +135,19 @@ names:
 
 See [Modules](modules.md).
 
+### REPL
+
+The quickest way to try code is the REPL:
+
+```sh
+pllisp repl
+```
+
+Bindings persist across entries, multi-line forms work, and REPL commands like
+`:type`, `:load`, and `:macroexpand` are available.
+
+See [REPL](repl.md).
+
 ### C FFI
 
 Pllisp can call C functions and describe C structs directly:

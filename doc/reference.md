@@ -95,6 +95,28 @@ At call sites, keyword arguments are written as:
 | `(import MATH M)` | use alias `M` |
 | `(import MATH M (square))` | alias + unqualified import |
 
+## REPL
+
+Start an interactive session with `pllisp repl`, or preload a file with
+`pllisp repl path/to/file.pllisp`.
+
+The REPL supports these commands:
+
+| Command | Meaning |
+|---------|---------|
+| `:help` | show the command summary |
+| `:quit` | exit the session |
+| `:load FILE` | compile and run a file in the current session |
+| `:reload` | reload the most recently loaded file |
+| `:reset` | reset the session to a fresh PRELUDE-only state |
+| `:type EXPR` | infer and print a type |
+| `:macroexpand FORM` | print the expanded form |
+
+The REPL does not automatically print arbitrary values. Use `print` for
+runtime output.
+
+See [REPL](repl.md) for the full guide.
+
 ## Patterns
 
 | Pattern | Example | Matches |

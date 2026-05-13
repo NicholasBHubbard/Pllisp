@@ -57,6 +57,18 @@ cabal run pllisp -- example-programs/valid/hello.pllisp
 
 This writes the executable next to the input file, using the same basename.
 
+### Start the REPL
+
+```sh
+cabal run pllisp -- repl
+```
+
+You can preload a file into the session:
+
+```sh
+cabal run pllisp -- repl example-programs/valid/typeclasses.pllisp
+```
+
 The entry file can use any filename you pass on the command line. Imported
 modules are different: they are resolved as exact `MODULE.pll` filenames.
 
@@ -103,6 +115,8 @@ Start with [Overview](doc/overview.md), then use the docs under [`doc/`](doc):
   automatic hygiene
 - [Modules](doc/modules.md) — file layout, runtime imports, macro imports,
   aliases, compile-time exports, and PRELUDE behavior
+- [REPL](doc/repl.md) — interactive sessions, REPL commands, file loading,
+  multiline input, and type or macro inspection
 - [FFI](doc/ffi.md) — calling C functions, structs, enums, arrays,
   variadics, and callbacks
 - [Standard Library Overview](doc/stdlib/README.md) — the stdlib docs index
