@@ -37,6 +37,16 @@ spec = do
         Right parsed -> pure parsed
       collectWrappedNames sexprs `shouldBe` []
 
+    it "does not expose the top-level splice sentinel in convenience macros" $ do
+      src <- T.IO.readFile "stdlib/PRELUDE.pll"
+      src `shouldNotContainText` "SPLICE-TOPLEVEL"
+
+  describe "top-level splice usage" $ do
+    it "is only needed by CLI among shipped stdlib modules" $ do
+      files <- findStdlibFiles
+      users <- findTopLevelSpliceUsers files
+      users `shouldBe` ["stdlib/CLI.pll"]
+
   describe "stdlib modules" $ do
     files <- runIO findStdlibFiles
     mapM_ compileTest files
@@ -133,3 +143,19 @@ clearIfExists :: FilePath -> IO ()
 clearIfExists dir = do
   _ <- try (removePathForcibly dir) :: IO (Either IOException ())
   pure ()
+
+findTopLevelSpliceUsers :: [FilePath] -> IO [FilePath]
+findTopLevelSpliceUsers = fmap sort . go
+  where
+    go [] = pure []
+    go (path:rest) = do
+      src <- T.IO.readFile path
+      more <- go rest
+      pure $
+        if "SPLICE-TOPLEVEL" `T.isInfixOf` src
+          then path : more
+          else more
+
+shouldNotContainText :: T.Text -> T.Text -> Expectation
+shouldNotContainText haystack needle =
+  T.isInfixOf needle haystack `shouldBe` False
