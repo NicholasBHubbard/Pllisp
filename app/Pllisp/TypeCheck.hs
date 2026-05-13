@@ -1529,7 +1529,8 @@ unify _ Ty.TyUnit Ty.TyUnit = Right M.empty
 unify _ Ty.TyRx Ty.TyRx = Right M.empty
 unify _ Ty.TyUSym Ty.TyUSym = Right M.empty
 unify _ Ty.TySyntax Ty.TySyntax = Right M.empty
-unify sp t1 t2 = Left [TypeError sp ("cannot unify " ++ show t1 ++ " with " ++ show t2)]
+unify sp t1 t2 =
+  Left [TypeError sp ("cannot unify " ++ renderUserType t1 ++ " with " ++ renderUserType t2)]
 
 -- | Unify multiple type pairs, collecting all errors
 unifyMany :: Loc.Span -> [Ty.Type] -> [Ty.Type] -> Either [TypeError] Subst
@@ -1550,8 +1551,12 @@ unifyMany sp _ _ = Left [TypeError sp "type mismatch: different arities"]
 bind :: Loc.Span -> TyVar -> Ty.Type -> Either [TypeError] Subst
 bind sp tv t
   | t == Ty.TyVar tv = Right M.empty
-  | tv `S.member` tvs t = Left [TypeError sp ("infinite type " ++ show tv ++ " ~ " ++ show t)]
+  | tv `S.member` tvs t =
+      Left [TypeError sp ("infinite type " ++ renderUserType (Ty.TyVar tv) ++ " ~ " ++ renderUserType t)]
   | otherwise = Right $ M.singleton tv t
+
+renderUserType :: Ty.Type -> String
+renderUserType = T.unpack . Ty.renderType
 
 solve :: Constraints -> Either [TypeError] Subst
 solve [] = Right M.empty

@@ -60,6 +60,7 @@ import qualified Text.Megaparsec as MP
 import qualified Pllisp.CST as CST
 import qualified Pllisp.Codegen as Codegen
 import qualified Pllisp.ClosureConvert as CC
+import qualified Pllisp.Error as Error
 import qualified Pllisp.LambdaLift as LL
 import qualified Pllisp.MacroExpand as MacroExpand
 import qualified Pllisp.Module as Mod
@@ -208,7 +209,7 @@ typeOf (ReplSession ref) src = do
               case SExpr.toProgram (MacroExpand.mrExpanded result) of
                 Left err -> pure (Left (ReplError "syntax" (T.pack (SExpr.ceMsg err))))
                 Right prog ->
-                  case typecheckExpr st (CST.progExprs prog) of
+                  case typecheckExpr st src (CST.progExprs prog) of
                     Left err -> pure (Left err)
                     Right typedExpr ->
                       pure
@@ -265,7 +266,7 @@ submitFormsAt (ReplSession ref) sourceName searchDir src = do
                       roundBuild <-
                         if null currentExprs
                           then pure (Right Nothing)
-                          else buildLocalRound st prepared currentExprs
+                          else buildLocalRound st prepared src currentExprs
                       case roundBuild of
                         Left err -> pure (Left err)
                         Right maybeRound -> do
@@ -295,9 +296,10 @@ data LocalRound = LocalRound
 buildLocalRound
   :: SessionState
   -> PreparedImports
+  -> T.Text
   -> [CST.Expr]
   -> IO (Either ReplError (Maybe LocalRound))
-buildLocalRound st prepared currentExprs = do
+buildLocalRound st prepared src currentExprs = do
   let loaded = piLoadedModules prepared
       visibleImports = defaultPreludeImport loaded : piImports prepared
       loadedExports = M.map lmExports loaded
@@ -314,19 +316,11 @@ buildLocalRound st prepared currentExprs = do
     Right exprs ->
       case Resolve.resolveWith visibleScope normMap exprs of
         Left errs ->
-          pure
-            (Left
-              (ReplError
-                "resolve"
-                (T.concat (map (\e -> T.pack (show e)) errs))))
+          pure (Left (renderResolveErrors src errs))
         Right resolved ->
           case TC.typecheckWith visibleEnvs visibleCtx resolved of
             Left errs ->
-              pure
-                (Left
-                  (ReplError
-                    "type"
-                    (T.concat (map (\e -> T.pack (show e)) errs))))
+              pure (Left (renderTypeErrors src errs))
             Right (typed, roundEnvs) -> do
               let merged = Mod.mergeImportedCode (map lmTyped (M.elems loaded)) typed
               case Pipeline.validateRuntimeSyntaxTypes merged of
@@ -639,8 +633,8 @@ buildIncrementalDepMap existing moduleInfos =
       existingDeps = M.fromSet (const []) existing
   in M.union newDeps existingDeps
 
-typecheckExpr :: SessionState -> [CST.Expr] -> Either ReplError TC.TRExpr
-typecheckExpr st exprs =
+typecheckExpr :: SessionState -> T.Text -> [CST.Expr] -> Either ReplError TC.TRExpr
+typecheckExpr st src exprs =
   let loaded = rsLoadedModules st
       visibleImports = defaultPreludeImport loaded : rsImports st
       loadedExports = M.map lmExports loaded
@@ -654,17 +648,35 @@ typecheckExpr st exprs =
        Just expr ->
          case Resolve.resolveWith visibleScope normMap [expr] of
            Left errs ->
-             Left (ReplError "resolve" (T.pack (show errs)))
+             Left (renderResolveErrors src errs)
            Right [resolved] ->
              case TC.typecheckWith visibleEnvs visibleCtx [resolved] of
                Left errs ->
-                 Left (ReplError "type" (T.pack (show errs)))
+                 Left (renderTypeErrors src errs)
                Right (typedExprs, _) ->
                  case reverse typedExprs of
                    typedExpr:_ -> Right typedExpr
                    [] -> Left (ReplError "type" "no expression to type")
            Right _ ->
              Left (ReplError "type" "expected a single expression")
+
+renderResolveErrors :: T.Text -> [Resolve.ResolveError] -> ReplError
+renderResolveErrors src errs =
+  ReplError
+    "resolve"
+    (T.pack
+      (concatMap
+        (\e -> Error.renderError src "resolve" (Resolve.errSpan e) (Resolve.errMsg e))
+        errs))
+
+renderTypeErrors :: T.Text -> [TC.TypeError] -> ReplError
+renderTypeErrors src errs =
+  ReplError
+    "type"
+    (T.pack
+      (concatMap
+        (\e -> Error.renderError src "type" (TC.teSpan e) (TC.teMsg e))
+        errs))
 
 captureStdout :: FilePath -> IO a -> IO (T.Text, a)
 captureStdout dir action =

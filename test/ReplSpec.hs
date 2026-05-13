@@ -198,6 +198,59 @@ spec = do
         T.strip (Repl.reStdout outA) `shouldBe` "1"
         T.strip (Repl.reStdout outB) `shouldBe` "2"
 
+  describe "errors" $ do
+    it "renders submitForms resolve errors without leaking internal constructors" $
+      withSession $ \sess -> do
+        result <- Repl.submitForms sess "(print missing)"
+        case result of
+          Right _ -> expectationFailure "expected resolve error" >> pure ()
+          Left err -> do
+            Repl.rePhase err `shouldBe` "resolve"
+            let msg = Repl.reMessage err
+            msg `shouldContainText` "resolve error: symbol not in scope: \"MISSING\""
+            msg `shouldContainText` "<repl>:1:8"
+            msg `shouldNotContainText` "ResolveError"
+
+    it "renders submitForms type errors without leaking internal constructors" $
+      withSession $ \sess -> do
+        result <- Repl.submitForms sess "(print 12)"
+        case result of
+          Right _ -> expectationFailure "expected type error" >> pure ()
+          Left err -> do
+            Repl.rePhase err `shouldBe` "type"
+            let msg = Repl.reMessage err
+            msg `shouldContainText` "type error: cannot unify %STR with %INT"
+            msg `shouldContainText` "<repl>:1:1"
+            msg `shouldNotContainText` "TypeError {"
+            msg `shouldNotContainText` "TyStr"
+            msg `shouldNotContainText` "TyInt"
+
+    it "renders :type resolve errors without leaking internal constructors" $
+      withSession $ \sess -> do
+        result <- Repl.typeOf sess "missing"
+        case result of
+          Right _ -> expectationFailure "expected resolve error" >> pure ()
+          Left err -> do
+            Repl.rePhase err `shouldBe` "resolve"
+            let msg = Repl.reMessage err
+            msg `shouldContainText` "resolve error: symbol not in scope: \"MISSING\""
+            msg `shouldContainText` "<type>:1:1"
+            msg `shouldNotContainText` "ResolveError"
+
+    it "renders :type type errors without leaking internal constructors" $
+      withSession $ \sess -> do
+        result <- Repl.typeOf sess "(print 12)"
+        case result of
+          Right _ -> expectationFailure "expected type error" >> pure ()
+          Left err -> do
+            Repl.rePhase err `shouldBe` "type"
+            let msg = Repl.reMessage err
+            msg `shouldContainText` "type error: cannot unify %STR with %INT"
+            msg `shouldContainText` "<type>:1:1"
+            msg `shouldNotContainText` "TypeError {"
+            msg `shouldNotContainText` "TyStr"
+            msg `shouldNotContainText` "TyInt"
+
 runRepl :: [T.Text] -> IO String
 runRepl rounds =
   withSession $ \sess -> go sess rounds []
@@ -259,3 +312,11 @@ expectExpand action = do
   case result of
     Left err -> expectationFailure (T.unpack (Repl.reMessage err)) >> error "unreachable"
     Right ok -> pure ok
+
+shouldContainText :: T.Text -> T.Text -> Expectation
+shouldContainText haystack needle =
+  T.isInfixOf needle haystack `shouldBe` True
+
+shouldNotContainText :: T.Text -> T.Text -> Expectation
+shouldNotContainText haystack needle =
+  T.isInfixOf needle haystack `shouldBe` False
