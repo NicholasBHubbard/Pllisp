@@ -133,26 +133,3 @@ If you are new to the language, the fastest path is:
 3. Skim [Standard Library Overview](doc/stdlib/README.md).
 4. Come back to [Typeclasses](doc/typeclasses.md), [Macros](doc/macros.md),
    [Modules](doc/modules.md), and [FFI](doc/ffi.md) as needed.
-
-## AI Usage Statement
-
-This project was developed collaboratively by Nicholas B. Hubbard (student) and Claude (Anthropic's AI assistant, via Claude Code). Per course policy, the AI is treated as a team member on a group project.
-
-### Team Member Roles
-
-**ME:**
-- Designed the language: syntax, semantics, type system, and overall architecture
-- Wrote the initial implementation by hand
-- Made all architectural decisions (e.g. CL-style procedural macros, positional superclass syntax)
-- Used Q/A sessions with the AI to explore design tradeoffs and refine implementation details before committing to an approach
-- Directed every feature, reviewed all generated code, and debugged issues
-- Defined the standard library (PRELUDE.pll) and example programs
-
-**Claude-Code/Codex (AI Assistant):**
-- Wrote implementation code under my direction in an interactive pair-programming workflow
-- Wrote test suites (1000+ tests across 16+ test modules)
-- Applied my design decisions to the codebase across the language implementation
-
-### How to Verify Authorship
-
-The complete git history is included in this repository. Every commit represents a directed collaboration session where the student specified what to build and the AI produced the code. Earlier commits (the initial implementation) were written directly by the student.
