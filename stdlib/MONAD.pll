@@ -1,0 +1,56 @@
+(module MONAD)
+(import APPLICATIVE)
+
+(fun list-append (xs ys)
+  (case xs
+    ((Empty) ys)
+    ((Cons h t) (Cons h (list-append t ys)))))
+
+(fun list-bind (xs fn)
+  (case xs
+    ((Empty) Empty)
+    ((Cons h t) (list-append (fn h) (list-bind t fn)))))
+
+(eval-when (:compile-toplevel)
+  (fun emit-do-let-body ((body %SYNTAX)) %SYNTAX
+    (syntax-case body
+      ((expr)
+        expr)
+      ((expr &rest rest)
+        `(progn ,expr ,@rest))
+      (_
+        (error "do-let expects at least one body form"))))
+
+  (fun emit-do-let ((bindings %SYNTAX) (body %SYNTAX)) %SYNTAX
+    (syntax-case bindings
+      (()
+        (emit-do-let-body body))
+      (((name expr) &rest rest)
+        (let ((_ (syntax-symbol-name name)))
+          `(,(__module-symbol "MONAD" "BIND") ,expr
+             (lam (,name)
+               ,(emit-do-let rest body)))))
+      (_
+        (error "do-let expects bindings like ((name expr) ...)")))))
+
+(class MONAD (APPLICATIVE) (m)
+  (bind %(m a) %(-> a (m b)) %(m b)))
+
+(mac do-let (bindings &rest body)
+  (emit-do-let bindings body))
+
+(inst MONAD %List
+  (bind (lam ((xs %(List a)) (fn %(-> a (List b))))
+    (list-bind xs fn))))
+
+(inst MONAD %Maybe
+  (bind (lam ((mx %(Maybe a)) (fn %(-> a (Maybe b))))
+    (case mx
+      ((Nothing) Nothing)
+      ((Just x) (fn x))))))
+
+(inst MONAD %(Either e)
+  (bind (lam ((mx %(Either e a)) (fn %(-> a (Either e b))))
+    (case mx
+      ((Left err) (Left err))
+      ((Right x) (fn x))))))

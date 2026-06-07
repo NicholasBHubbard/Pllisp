@@ -1,0 +1,8 @@
+(import APPLICATIVE (pure))
+(import MONAD)
+
+(case (do-let ((x (Right 20))
+               (y (Right 22)))
+        (pure (add x y)))
+  ((Right total) (print (int-to-str total)))
+  ((Left err) (print err)))

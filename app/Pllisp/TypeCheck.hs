@@ -1021,14 +1021,29 @@ resolveInstanceType minfo fty = case fty of
       case containsClassVar cvs orig of
         Just False -> findClassVar cvs origs insts
         Just True  -> inst
-        Nothing    -> extractHead inst
+        Nothing    -> maybe (extractHead inst) (`stripAppliedArgs` inst) (classVarAppArity cvs orig)
     containsClassVar cvs (Ty.TyCon name []) | S.member name cvs = Just True
     containsClassVar cvs (Ty.TyCon name _) | S.member name cvs = Nothing
     containsClassVar cvs (Ty.TyCon _ args) | any (\a -> containsClassVar cvs a /= Just False) args = Nothing
     containsClassVar _ _ = Just False
+    classVarAppArity cvs (Ty.TyCon name args) | S.member name cvs = Just (length args)
+    classVarAppArity cvs (Ty.TyCon _ args) = firstJust (map (classVarAppArity cvs) args)
+    classVarAppArity cvs (Ty.TyApp f _) = fmap (+ 1) (classVarAppArity cvs f)
+    classVarAppArity _ _ = Nothing
     extractHead (Ty.TyCon name (_:_)) = Ty.TyCon name []
     extractHead (Ty.TyApp f _) = extractHead f
     extractHead t = t
+    stripAppliedArgs n ty
+      | n <= 0 = ty
+      | otherwise = case ty of
+          Ty.TyCon name args ->
+            let keep = length args - n
+            in Ty.TyCon name (if keep <= 0 then [] else take keep args)
+          Ty.TyApp f _ -> stripAppliedArgs (n - 1) f
+          _ -> extractHead ty
+    firstJust [] = Nothing
+    firstJust (Nothing:rest) = firstJust rest
+    firstJust (justVal:_) = justVal
 
 -- | Look up an instance for a class and type, returning a specific method.
 -- Supports parametric instances: type variables in the instance pattern match any type.

@@ -215,6 +215,109 @@ spec = do
         , "    (_ (print \"nothing\"))))"
         ]) >>= (`shouldBe` "nothing")
 
+  describe "APPLICATIVE stdlib module" $ do
+    it "applies Maybe functions and values" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        ]
+        (T.unlines
+          [ "(import APPLICATIVE (pure ap))"
+          , "(case (ap (Just (lam ((x %INT)) (add x 1))) (pure 41))"
+          , "  ((Just y) (print (int-to-str y)))"
+          , "  (_ (print \"nothing\")))"
+          ]) >>= (`shouldBe` "42")
+
+    it "applies List functions across List values" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        ]
+        (T.unlines
+          [ "(import APPLICATIVE (ap))"
+          , "(fun join-ints ((xs %(List %INT))) %STR"
+          , "  (case xs"
+          , "    ((Empty) \"\")"
+          , "    ((Cons x rest)"
+          , "      (case rest"
+          , "        ((Empty) (int-to-str x))"
+          , "        (_ (concat (int-to-str x) (concat \",\" (join-ints rest))))))))"
+          , "(let ((fns (Cons (lam ((x %INT)) (add x 1))"
+          , "                 (Cons (lam ((x %INT)) (mul x 2)) Empty)))"
+          , "      (xs (Cons 10 (Cons 20 Empty))))"
+          , "  (print (join-ints (ap fns xs))))"
+          ]) >>= (`shouldBe` "11,21,20,40")
+
+  describe "MONAD stdlib module" $ do
+    it "do-let composes and sequences ordinary body forms with implicit progn" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      monadSrc <- T.IO.readFile "stdlib/MONAD.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        , ("MONAD", monadSrc)
+        ]
+        (T.unlines
+          [ "(import APPLICATIVE (pure))"
+          , "(import MONAD)"
+          , "(case (do-let ((x (Just 20)))"
+          , "        (print \"outer\")"
+          , "        (do-let ((y (Just 22)))"
+          , "          (print \"inner\")"
+          , "          (pure (add x y))))"
+          , "  ((Just n) (print (int-to-str n)))"
+          , "  (_ (print \"nothing\")))"
+          ]) >>= (`shouldBe` "outer\ninner\n42")
+
+    it "supports Either e as a monad instance head" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      monadSrc <- T.IO.readFile "stdlib/MONAD.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        , ("MONAD", monadSrc)
+        ]
+        (T.unlines
+          [ "(import APPLICATIVE (pure))"
+          , "(import MONAD)"
+          , "(case (do-let ((x (Right 20))"
+          , "               (y (Right 22)))"
+          , "        (pure (add x y)))"
+          , "  ((Right n) (print (int-to-str n)))"
+          , "  ((Left err) (print err)))"
+          ]) >>= (`shouldBe` "42")
+
+    it "supports List as a monad instance head" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      monadSrc <- T.IO.readFile "stdlib/MONAD.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        , ("MONAD", monadSrc)
+        ]
+        (T.unlines
+          [ "(import APPLICATIVE (pure))"
+          , "(import MONAD)"
+          , "(fun join-ints ((xs %(List %INT))) %STR"
+          , "  (case xs"
+          , "    ((Empty) \"\")"
+          , "    ((Cons x rest)"
+          , "      (case rest"
+          , "        ((Empty) (int-to-str x))"
+          , "        (_ (concat (int-to-str x) (concat \",\" (join-ints rest))))))))"
+          , "(print (join-ints"
+          , "  (do-let ((x (Cons 1 (Cons 2 Empty)))"
+          , "           (y (Cons 10 (Cons 20 Empty))))"
+          , "    (pure (add x y)))))"
+          ]) >>= (`shouldBe` "11,21,12,22")
+
   describe "function type annotations" $ do
     it "annotated higher-order function works" $
       run (T.unlines

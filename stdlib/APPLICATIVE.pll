@@ -1,0 +1,47 @@
+(module APPLICATIVE)
+(import FUNCTOR)
+
+(fun list-append (xs ys)
+  (case xs
+    ((Empty) ys)
+    ((Cons h t) (Cons h (list-append t ys)))))
+
+(fun list-map (fn xs)
+  (case xs
+    ((Empty) Empty)
+    ((Cons h t) (Cons (fn h) (list-map fn t)))))
+
+(fun list-ap (fns xs)
+  (case fns
+    ((Empty) Empty)
+    ((Cons fn rest)
+      (list-append (list-map fn xs) (list-ap rest xs)))))
+
+(class APPLICATIVE (FUNCTOR) (f)
+  (pure %a %(f a))
+  (ap %(f %(-> a b)) %(f a) %(f b)))
+
+(inst APPLICATIVE %List
+  (pure (lam (x) (Cons x Empty)))
+  (ap (lam ((fns %(List %(-> a b))) (xs %(List a)))
+    (list-ap fns xs))))
+
+(inst APPLICATIVE %Maybe
+  (pure (lam (x) (Just x)))
+  (ap (lam ((mf %(Maybe %(-> a b))) (mx %(Maybe a)))
+    (case mf
+      ((Nothing) Nothing)
+      ((Just fn)
+        (case mx
+          ((Nothing) Nothing)
+          ((Just x) (Just (fn x)))))))))
+
+(inst APPLICATIVE %(Either e)
+  (pure (lam (x) (Right x)))
+  (ap (lam ((mf %(Either e %(-> a b))) (mx %(Either e a)))
+    (case mf
+      ((Left err) (Left err))
+      ((Right fn)
+        (case mx
+          ((Left err) (Left err))
+          ((Right x) (Right (fn x)))))))))

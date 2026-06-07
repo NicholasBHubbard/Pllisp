@@ -17,3 +17,9 @@
     (case m
       ((Just x) (Just (fn x)))
       (_ Nothing)))))
+
+(inst FUNCTOR %(Either e)
+  (map (lam ((fn %(-> a b)) (m %(Either e a)))
+    (case m
+      ((Left err) (Left err))
+      ((Right x) (Right (fn x)))))))

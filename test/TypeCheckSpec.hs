@@ -475,6 +475,52 @@ spec = do
         Left errs -> expectationFailure (unlines (map TC.teMsg errs))
         Right _ -> pure ()
 
+    it "accepts partially applied Either through the superclass chain" $ do
+      let src = T.unlines
+            [ "(class FUNCTOR () (f) (fmap %(-> a b) %(f a) %(f b)))"
+            , "(class APPLICATIVE (FUNCTOR) (f)"
+            , "  (pure %a %(f a))"
+            , "  (ap %(f %(-> a b)) %(f a) %(f b)))"
+            , "(class MONAD (APPLICATIVE) (m)"
+            , "  (bind %(m a) %(-> a (m b)) %(m b)))"
+            , "(inst FUNCTOR %(Either e)"
+            , "  (fmap (lam ((fn %(-> a b)) (mx %(Either e a)))"
+            , "    (case mx ((Left err) (Left err)) ((Right x) (Right (fn x)))))))"
+            , "(inst APPLICATIVE %(Either e)"
+            , "  (pure (lam (x) (Right x)))"
+            , "  (ap (lam ((mf %(Either e %(-> a b))) (mx %(Either e a)))"
+            , "    (case mf"
+            , "      ((Left err) (Left err))"
+            , "      ((Right fn) (case mx ((Left err) (Left err)) ((Right x) (Right (fn x)))))))))"
+            , "(inst MONAD %(Either e)"
+            , "  (bind (lam ((mx %(Either e a)) (fn %(-> a (Either e b))))"
+            , "    (case mx ((Left err) (Left err)) ((Right x) (fn x))))))"
+            , "(bind (Right 41) (lam ((x %INT)) (Right (add x 1))))"
+            ]
+      case parseAndTypecheck src of
+        Left errs -> expectationFailure (unlines (map TC.teMsg errs))
+        Right _ -> pure ()
+
+    it "rejects MONAD instance when APPLICATIVE superclass instance is missing" $ do
+      let src = T.unlines
+            [ "(class FUNCTOR () (f) (fmap %(-> a b) %(f a) %(f b)))"
+            , "(class APPLICATIVE (FUNCTOR) (f)"
+            , "  (pure %a %(f a))"
+            , "  (ap %(f %(-> a b)) %(f a) %(f b)))"
+            , "(class MONAD (APPLICATIVE) (m)"
+            , "  (bind %(m a) %(-> a %(m b)) %(m b)))"
+            , "(type Box (a) (MkBox a))"
+            , "(inst FUNCTOR %Box"
+            , "  (fmap (lam ((fn %(-> a b)) (box %(Box a)))"
+            , "    (case box ((MkBox x) (MkBox (fn x)))))))"
+            , "(inst MONAD %Box"
+            , "  (bind (lam ((mx %(Box a)) (fn %(-> a %(Box b))))"
+            , "    (case mx ((MkBox x) (fn x))))))"
+            ]
+      case parseAndTypecheck src of
+        Right _ -> expectationFailure "expected superclass error"
+        Left errs -> any (\e -> "APPLICATIVE" `isInfixOf` TC.teMsg e) errs `shouldBe` True
+
     it "class with empty superclass list works" $ do
       let src = T.unlines
             [ "(class SHOW () (a) (show %a %STR))"
