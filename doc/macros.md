@@ -124,6 +124,32 @@ expands to code shaped like:
     c))
 ```
 
+## Emitting Multiple Top-Level Forms
+
+Most macros should expand to one form. If that form is a top-level `let`, type
+declaration, or other ordinary declaration, just return it directly.
+
+There is one internal escape hatch for macros that must emit multiple top-level
+forms:
+
+```lisp
+(SPLICE-TOPLEVEL form1 form2 ...)
+```
+
+The expander recognizes `SPLICE-TOPLEVEL` only during top-level macro
+expansion. It unwraps the forms and feeds them back through normal top-level
+processing as if the macro had emitted those multiple top-level forms directly.
+
+Important constraints:
+
+- `SPLICE-TOPLEVEL` is internal compiler machinery
+- it exists for macros such as `CLI` that need to emit multiple top-level forms
+- it is not meant to be casual user-facing syntax
+- if a macro only needs to emit one top-level form, do not wrap it in
+  `SPLICE-TOPLEVEL`
+
+Today, `CLI` is the main shipped example that legitimately uses it.
+
 ## Quote
 
 `quote` returns literal syntax without evaluating it:

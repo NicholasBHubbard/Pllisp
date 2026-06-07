@@ -30,6 +30,21 @@ spec = do
         , "The REPL does not automatically print arbitrary values."
         ]
 
+    it "documents SPLICE-TOPLEVEL as an internal top-level macro mechanism" $ do
+      macrosDoc <- T.IO.readFile "doc/macros.md"
+      mapM_ (macrosDoc `shouldContainText`)
+        [ "SPLICE-TOPLEVEL"
+        , "internal"
+        , "multiple top-level forms"
+        , "CLI"
+        ]
+
+      cliDoc <- T.IO.readFile "doc/stdlib/CLI.md"
+      mapM_ (cliDoc `shouldContainText`)
+        [ "SPLICE-TOPLEVEL"
+        , "top-level bindings"
+        ]
+
 shouldContainText :: T.Text -> T.Text -> Expectation
 shouldContainText haystack needle =
   T.isInfixOf needle haystack `shouldBe` True

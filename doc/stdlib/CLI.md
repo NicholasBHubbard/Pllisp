@@ -59,6 +59,10 @@ At expansion time, `CLI` splices in:
 That means later top-level forms in the same file can use `verbose`, `output`,
 `mode`, `input`, and `extras` directly.
 
+Under the hood, `CLI` does this with the internal `SPLICE-TOPLEVEL` macro
+expansion sentinel. That mechanism is how one macro expansion can emit multiple
+top-level bindings at once.
+
 Notes:
 
 - there is no `required-option`; if a value is required, make it a positional
