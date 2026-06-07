@@ -122,6 +122,7 @@ Start with [Overview](doc/overview.md), then use the docs under [`doc/`](doc):
 - [Standard Library Overview](doc/stdlib/README.md) — the stdlib docs index
 - [PRELUDE](doc/stdlib/PRELUDE.md) — the implicit standard module:
   built-in types, convenience macros, and core typeclasses
+- [FOLDABLE](doc/stdlib/FOLDABLE.md) — structural reduction with `foldr`
 - [APPLICATIVE](doc/stdlib/APPLICATIVE.md) — applicative typeclasses,
   `pure`, and `ap`
 - [MONAD](doc/stdlib/MONAD.md) — monadic `bind` and `do-let`

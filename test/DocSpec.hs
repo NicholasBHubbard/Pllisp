@@ -45,19 +45,33 @@ spec = do
         , "top-level bindings"
         ]
 
-    it "documents the APPLICATIVE and MONAD stdlib modules" $ do
+    it "documents the FOLDABLE, APPLICATIVE, and MONAD stdlib modules" $ do
       readme <- T.IO.readFile "README.md"
       mapM_ (readme `shouldContainText`)
-        [ "[APPLICATIVE](doc/stdlib/APPLICATIVE.md)"
+        [ "[FOLDABLE](doc/stdlib/FOLDABLE.md)"
+        , "[APPLICATIVE](doc/stdlib/APPLICATIVE.md)"
         , "[MONAD](doc/stdlib/MONAD.md)"
         , "[TRAVERSABLE](doc/stdlib/TRAVERSABLE.md)"
         ]
 
       stdlibIndex <- T.IO.readFile "doc/stdlib/README.md"
       mapM_ (stdlibIndex `shouldContainText`)
-        [ "[APPLICATIVE](APPLICATIVE.md)"
+        [ "[FOLDABLE](FOLDABLE.md)"
+        , "[APPLICATIVE](APPLICATIVE.md)"
         , "[MONAD](MONAD.md)"
         , "[TRAVERSABLE](TRAVERSABLE.md)"
+        ]
+
+      foldableDoc <- T.IO.readFile "doc/stdlib/FOLDABLE.md"
+      mapM_ (foldableDoc `shouldContainText`)
+        [ "# FOLDABLE"
+        , "(import FOLDABLE"
+        , "foldr"
+        , "foldl"
+        , "List"
+        , "Maybe"
+        , "Either"
+        , "Pair"
         ]
 
       applicativeDoc <- T.IO.readFile "doc/stdlib/APPLICATIVE.md"

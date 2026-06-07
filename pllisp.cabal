@@ -49,6 +49,7 @@ build-type:         Simple
 extra-doc-files:    README.md
 data-dir:           stdlib
 data-files:         PRELUDE.pll,
+                    FOLDABLE.pll,
                     APPLICATIVE.pll,
                     CLI.pll,
                     FILEIO.pll,

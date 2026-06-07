@@ -1,0 +1,46 @@
+(module FOLDABLE)
+
+(class FOLDABLE () (t)
+  (foldr %(-> a b b) b %(t a) b))
+
+(fun list-foldr (fn acc xs)
+  (case xs
+    ((Empty) acc)
+    ((Cons h t) (fn h (list-foldr fn acc t)))))
+
+(fun foldl (fn acc xs)
+  ((foldr (lam (x g)
+            (lam (state) (g (fn state x))))
+          (lam (state) state)
+          xs)
+   acc))
+
+(fun to-list (xs)
+  (foldr (lam (x rest) (Cons x rest)) Empty xs))
+
+(fun length (xs)
+  (foldr (lam (_ n) (add n 1)) 0 xs))
+
+(fun null? (xs)
+  (foldr (lam (_ _acc) false) true xs))
+
+(inst FOLDABLE %List
+  (foldr (lam (fn acc xs)
+    (list-foldr fn acc xs))))
+
+(inst FOLDABLE %Maybe
+  (foldr (lam (fn acc mx)
+    (case mx
+      ((Just x) (fn x acc))
+      (_ acc)))))
+
+(inst FOLDABLE %(Either e)
+  (foldr (lam (fn acc mx)
+    (case mx
+      ((Right x) (fn x acc))
+      (_ acc)))))
+
+(inst FOLDABLE %(Pair e)
+  (foldr (lam (fn acc p)
+    (case p
+      ((Pair _ value) (fn value acc))))))

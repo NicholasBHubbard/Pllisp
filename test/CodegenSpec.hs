@@ -286,6 +286,71 @@ spec = do
           , "  (print (join-ints (ap fns xs))))"
           ]) >>= (`shouldBe` "11,21,20,40")
 
+  describe "FOLDABLE stdlib module" $ do
+    it "folds List values from the right" $ do
+      foldableSrc <- T.IO.readFile "stdlib/FOLDABLE.pll"
+      runWithModules
+        [("FOLDABLE", foldableSrc)]
+        (T.unlines
+          [ "(import FOLDABLE (foldr))"
+          , "(print"
+          , "  (int-to-str"
+          , "    (foldr (lam ((x %INT) (acc %INT)) (add x acc))"
+          , "           0"
+          , "           (Cons 1 (Cons 2 (Cons 3 Empty))))))"
+          ]) >>= (`shouldBe` "6")
+
+    it "folds Maybe values and preserves the accumulator for Nothing" $ do
+      foldableSrc <- T.IO.readFile "stdlib/FOLDABLE.pll"
+      runWithModules
+        [("FOLDABLE", foldableSrc)]
+        (T.unlines
+          [ "(import FOLDABLE (foldr))"
+          , "(print"
+          , "  (int-to-str"
+          , "    (add"
+          , "      (foldr (lam ((x %INT) (acc %INT)) (add x acc)) 1 (Just 41))"
+          , "      (foldr (lam ((x %INT) (acc %INT)) (add x acc)) 1 Nothing))))"
+          ]) >>= (`shouldBe` "43")
+
+    it "folds Right values and preserves the accumulator for Left" $ do
+      foldableSrc <- T.IO.readFile "stdlib/FOLDABLE.pll"
+      runWithModules
+        [("FOLDABLE", foldableSrc)]
+        (T.unlines
+          [ "(import FOLDABLE (foldr))"
+          , "(print"
+          , "  (int-to-str"
+          , "    (add"
+          , "      (foldr (lam ((x %INT) (acc %INT)) (add x acc)) 1 (Right 41))"
+          , "      (foldr (lam ((x %INT) (acc %INT)) (add x acc)) 1 (Left \"nope\")))))"
+          ]) >>= (`shouldBe` "43")
+
+    it "folds Pair values over the second slot" $ do
+      foldableSrc <- T.IO.readFile "stdlib/FOLDABLE.pll"
+      runWithModules
+        [("FOLDABLE", foldableSrc)]
+        (T.unlines
+          [ "(import FOLDABLE (foldr))"
+          , "(print"
+          , "  (int-to-str"
+          , "    (foldr (lam ((x %INT) (acc %INT)) (add x acc))"
+          , "           1"
+          , "           (Pair \"tag\" 41))))"
+          ]) >>= (`shouldBe` "42")
+
+    it "provides a generic foldl helper" $ do
+      foldableSrc <- T.IO.readFile "stdlib/FOLDABLE.pll"
+      runWithModules
+        [("FOLDABLE", foldableSrc)]
+        (T.unlines
+          [ "(import FOLDABLE (foldl))"
+          , "(print"
+          , "  (foldl (lam ((acc %STR) (x %INT)) (concat acc (int-to-str x)))"
+          , "         \"\""
+          , "         (Cons 1 (Cons 2 (Cons 3 Empty)))))"
+          ]) >>= (`shouldBe` "123")
+
   describe "MONAD stdlib module" $ do
     it "do-let composes and sequences ordinary body forms with implicit progn" $ do
       functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
