@@ -553,36 +553,47 @@ spec = do
       prog <- viaSExpr "(class SHOW () (a) (show %a %STR))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "SHOW" ["A"] []
-          [CST.ClassMethod "SHOW" [Ty.TyCon "A" []] Ty.TyStr])] -> pure ()
+          [CST.ClassMethod "SHOW" [] [Ty.TyCon "A" []] Ty.TyStr])] -> pure ()
         other -> expectationFailure (show other)
 
     it "class with multi-arg method" $ do
       prog <- viaSExpr "(class EQUAL () (a) (equal %a %a %BOOL))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "EQUAL" ["A"] []
-          [CST.ClassMethod "EQUAL" [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool])] -> pure ()
+          [CST.ClassMethod "EQUAL" [] [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool])] -> pure ()
         other -> expectationFailure (show other)
 
     it "class with multiple methods" $ do
       prog <- viaSExpr "(class NUM () (a) (add %a %a %a) (neg %a %a))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "NUM" ["A"] []
-          [CST.ClassMethod "ADD" [Ty.TyCon "A" [], Ty.TyCon "A" []] (Ty.TyCon "A" []),
-           CST.ClassMethod "NEG" [Ty.TyCon "A" []] (Ty.TyCon "A" [])])] -> pure ()
+          [CST.ClassMethod "ADD" [] [Ty.TyCon "A" [], Ty.TyCon "A" []] (Ty.TyCon "A" []),
+           CST.ClassMethod "NEG" [] [Ty.TyCon "A" []] (Ty.TyCon "A" [])])] -> pure ()
         other -> expectationFailure (show other)
 
     it "class with multiple type vars" $ do
       prog <- viaSExpr "(class CONVERT () (a b) (convert %a %b))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "CONVERT" ["A", "B"] []
-          [CST.ClassMethod "CONVERT" [Ty.TyCon "A" []] (Ty.TyCon "B" [])])] -> pure ()
+          [CST.ClassMethod "CONVERT" [] [Ty.TyCon "A" []] (Ty.TyCon "B" [])])] -> pure ()
         other -> expectationFailure (show other)
 
     it "class with superclasses" $ do
       prog <- viaSExpr "(class APPLICATIVE (FUNCTOR) (f) (pure %a %(f a)))"
       case CST.progExprs prog of
         [Loc.Located _ (CST.ExprCls "APPLICATIVE" ["F"] ["FUNCTOR"]
-          [CST.ClassMethod "PURE" [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "A" []])])] -> pure ()
+          [CST.ClassMethod "PURE" [] [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "A" []])])] -> pure ()
+        other -> expectationFailure (show other)
+
+    it "class method with constrained type variable" $ do
+      prog <- viaSExpr "(class TRAVERSABLE (FUNCTOR) (t) (traverse ((APPLICATIVE f)) %(-> a (f b)) %(t a) %(f %(t b))))"
+      case CST.progExprs prog of
+        [Loc.Located _ (CST.ExprCls "TRAVERSABLE" ["T"] ["FUNCTOR"]
+          [CST.ClassMethod "TRAVERSE" [CST.ClassPredicate "APPLICATIVE" (Ty.TyCon "F" [])]
+            [ Ty.TyFun [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "B" []])
+            , Ty.TyCon "T" [Ty.TyCon "A" []]
+            ]
+            (Ty.TyCon "F" [Ty.TyCon "T" [Ty.TyCon "B" []]])])] -> pure ()
         other -> expectationFailure (show other)
 
     -- inst

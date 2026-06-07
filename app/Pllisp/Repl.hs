@@ -395,7 +395,7 @@ commitSession st prepared searchDir nextCtState newDefs newHandles maybeLocal =
        Nothing -> base
        Just local ->
          let newNames = S.fromList (map fst (lrGlobals local))
-             newSchemes = M.fromList [(n, TC.Forall S.empty t) | (n, t) <- lrGlobals local]
+             newSchemes = M.fromList [(n, TC.Forall S.empty [] t) | (n, t) <- lrGlobals local]
          in base
               { rsLocalScope = S.union (rsLocalScope st) newNames
               , rsLocalContext = M.union newSchemes (rsLocalContext st)

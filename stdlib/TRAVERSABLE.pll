@@ -1,0 +1,35 @@
+(module TRAVERSABLE)
+(import FUNCTOR)
+(import APPLICATIVE (pure ap))
+
+(class TRAVERSABLE (FUNCTOR) (t)
+  (traverse ((APPLICATIVE f)) %(-> a (f b)) %(t a) %(f %(t b))))
+
+(fun traverse-list-go ((fn %(-> a (f b))) (xs %(List a))) %(f %(List b))
+  (case xs
+    ((Empty) (pure Empty))
+    ((Cons h t)
+      (ap (ap (pure (lam (x) (lam (more) (Cons x more)))) (fn h))
+          (traverse-list-go fn t)))))
+
+(inst TRAVERSABLE %List
+  (traverse (lam ((fn %(-> a (f b))) (xs %(List a)))
+    (traverse-list-go fn xs))))
+
+(inst TRAVERSABLE %Maybe
+  (traverse (lam ((fn %(-> a (f b))) (mx %(Maybe a)))
+    (case mx
+      ((Nothing) (pure Nothing))
+      ((Just x) (ap (pure (lam (y) (Just y))) (fn x)))))))
+
+(inst TRAVERSABLE %(Either e)
+  (traverse (lam ((fn %(-> a (f b))) (mx %(Either e a)))
+    (case mx
+      ((Left err) (pure (Left err)))
+      ((Right x) (ap (pure (lam (y) (Right y))) (fn x)))))))
+
+(inst TRAVERSABLE %(Pair e)
+  (traverse (lam ((fn %(-> a (f b))) (p %(Pair e a)))
+    (case p
+      ((Pair tag value)
+        (ap (pure (lam (y) (Pair tag y))) (fn value)))))))

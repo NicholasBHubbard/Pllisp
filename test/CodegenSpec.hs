@@ -230,6 +230,40 @@ spec = do
           , "  (_ (print \"nothing\")))"
           ]) >>= (`shouldBe` "42")
 
+    it "applies Maybe functions that return Either values" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        ]
+        (T.unlines
+          [ "(import APPLICATIVE (pure ap))"
+          , "(case (ap (pure (lam ((x %INT)) (Right (add x 1)))) (Just 41))"
+          , "  ((Just y)"
+          , "    (case y"
+          , "      ((Right n) (print (int-to-str n)))"
+          , "      ((Left err) (print err))))"
+          , "  (_ (print \"nothing\")))"
+          ]) >>= (`shouldBe` "42")
+
+    it "applies Maybe functions that return Pair values" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        ]
+        (T.unlines
+          [ "(import APPLICATIVE (pure ap))"
+          , "(case (ap (pure (lam ((x %INT)) (Pair \"tag\" (add x 2)))) (Just 40))"
+          , "  ((Just y)"
+          , "    (case y"
+          , "      ((Pair tag n) (print (concat tag (concat \":\" (int-to-str n)))))"
+          , "      (_ (print \"bad\"))))"
+          , "  (_ (print \"nothing\")))"
+          ]) >>= (`shouldBe` "tag:42")
+
     it "applies List functions across List values" $ do
       functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
       applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
@@ -317,6 +351,88 @@ spec = do
           , "           (y (Cons 10 (Cons 20 Empty))))"
           , "    (pure (add x y)))))"
           ]) >>= (`shouldBe` "11,21,12,22")
+
+  describe "TRAVERSABLE stdlib module" $ do
+    it "traverses List with Maybe effects" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      traversableSrc <- T.IO.readFile "stdlib/TRAVERSABLE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        , ("TRAVERSABLE", traversableSrc)
+        ]
+        (T.unlines
+          [ "(import TRAVERSABLE (traverse))"
+          , "(case (traverse (lam ((x %INT)) (Just (add x 10)))"
+          , "                (Cons 1 (Cons 3 Empty)))"
+          , "  ((Just xs)"
+          , "    (case xs"
+          , "      ((Cons a (Cons b Empty))"
+          , "        (print (concat (int-to-str a) (concat \",\" (int-to-str b)))))"
+          , "      (_ (print \"bad\"))))"
+          , "  ((Nothing) (print \"nothing\")))"
+          ]) >>= (`shouldBe` "11,13")
+
+    it "traverses Either with Maybe effects" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      traversableSrc <- T.IO.readFile "stdlib/TRAVERSABLE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        , ("TRAVERSABLE", traversableSrc)
+        ]
+        (T.unlines
+          [ "(import TRAVERSABLE (traverse))"
+          , "(case (traverse (lam ((x %INT)) (Just (add x 1))) (Right 41))"
+          , "  ((Just y)"
+          , "    (case y"
+          , "      ((Right n) (print (int-to-str n)))"
+          , "      ((Left err) (print err))))"
+          , "  ((Nothing) (print \"nothing\")))"
+          ]) >>= (`shouldBe` "42")
+
+    it "traverses Pair with Maybe effects" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      traversableSrc <- T.IO.readFile "stdlib/TRAVERSABLE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        , ("TRAVERSABLE", traversableSrc)
+        ]
+        (T.unlines
+          [ "(import TRAVERSABLE (traverse))"
+          , "(case (traverse (lam ((x %INT)) (Just (add x 2))) (Pair \"tag\" 40))"
+          , "  ((Just y)"
+          , "    (case y"
+          , "      ((Pair tag n) (print (concat tag (concat \":\" (int-to-str n)))))"
+          , "      (_ (print \"bad\"))))"
+          , "  ((Nothing) (print \"nothing\")))"
+          ]) >>= (`shouldBe` "tag:42")
+
+    it "threads method constraints through a polymorphic helper" $ do
+      functorSrc <- T.IO.readFile "stdlib/FUNCTOR.pll"
+      applicativeSrc <- T.IO.readFile "stdlib/APPLICATIVE.pll"
+      traversableSrc <- T.IO.readFile "stdlib/TRAVERSABLE.pll"
+      runWithModules
+        [ ("FUNCTOR", functorSrc)
+        , ("APPLICATIVE", applicativeSrc)
+        , ("TRAVERSABLE", traversableSrc)
+        ]
+        (T.unlines
+          [ "(import TRAVERSABLE (traverse))"
+          , "(let ((walk (lam ((fn %(-> a (f b))) (xs %(t a)))"
+          , "               (traverse fn xs))))"
+          , "  (case (walk (lam ((x %INT)) (Just (add x 1)))"
+          , "              (Cons 41 Empty))"
+          , "    ((Just ys)"
+          , "      (case ys"
+          , "        ((Cons y Empty) (print (int-to-str y)))"
+          , "        (_ (print \"bad\"))))"
+          , "    ((Nothing) (print \"nothing\"))))"
+          ]) >>= (`shouldBe` "42")
 
   describe "function type annotations" $ do
     it "annotated higher-order function works" $
@@ -452,6 +568,13 @@ spec = do
       run "(case 42 (1 (print \"one\")) (_ (print \"other\")))" >>= (`shouldBe` "other")
     it "case with variable binding" $
       run "(case 42 (x (print (int-to-str x))))" >>= (`shouldBe` "42")
+    it "case with nested constructor bindings" $
+      run (T.unlines
+        [ "(case (Cons 1 (Cons 2 Empty))"
+        , "  ((Cons a (Cons b Empty))"
+        , "    (print (int-to-str (add a b))))"
+        , "  (_ (print \"bad\")))"
+        ]) >>= (`shouldBe` "3")
 
   describe "nested expressions" $ do
     it "nested arithmetic" $
@@ -3160,9 +3283,10 @@ multiModulePipeline modules mainSrc = do
               Left e  -> error ("tc " ++ T.unpack modName ++ ": " ++ show e)
               Right r -> r
           renameMap = Mod.moduleRenameMap modName (CST.progExprs modProg)
-          typed' = Mod.renameTypedModuleSymbols renameMap typed
-          modEnvs' = Mod.renameTCEnvsSymbols renameMap modEnvs
-          modExports = Mod.renameExportSchemes renameMap (Mod.collectExports modEnvs typed)
+          typeNames = Mod.moduleTypeNames (CST.progExprs modProg)
+          typed' = Mod.renameTypedModuleSymbols renameMap typeNames typed
+          modEnvs' = Mod.renameTCEnvsSymbols renameMap typeNames modEnvs
+          modExports = Mod.renameExportSchemes renameMap typeNames (Mod.collectExports modEnvs typed)
       in (M.insert modName modExports accExports,
           accTyped ++ [typed'],
           modEnvs')

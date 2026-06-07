@@ -217,14 +217,14 @@ spec = do
   describe "imported context" $ do
     it "typechecks expression using imported scheme" $ do
       let importedCtx = M.singleton "FOO.BAR"
-            (TC.Forall S.empty (Ty.TyFun [Ty.TyInt] Ty.TyInt))
+            (TC.Forall S.empty [] (Ty.TyFun [Ty.TyInt] Ty.TyInt))
       case parseAndTypecheckWith (S.singleton "FOO.BAR") importedCtx "(Foo.bar 42)" of
         Left errs -> expectationFailure (show (map TC.teMsg errs))
         Right typed -> topType typed `shouldBe` Ty.TyInt
 
     it "rejects mistyped use of imported scheme" $ do
       let importedCtx = M.singleton "FOO.BAR"
-            (TC.Forall S.empty (Ty.TyFun [Ty.TyInt] Ty.TyInt))
+            (TC.Forall S.empty [] (Ty.TyFun [Ty.TyInt] Ty.TyInt))
       case parseAndTypecheckWith (S.singleton "FOO.BAR") importedCtx "(Foo.bar \"hello\")" of
         Right _ -> expectationFailure "expected type error"
         Left _  -> pure ()
@@ -402,6 +402,27 @@ spec = do
       case parseAndTypecheck src of
         Left errs -> expectationFailure (unlines (map TC.teMsg errs))
         Right typed -> topType typed `shouldBe` Ty.TyApp (Ty.TyCon "OPT" []) Ty.TyInt
+
+    it "resolves method predicates through partial higher-kinded heads" $ do
+      let mi =
+            TC.MethodInfo
+              { TC.miClass = "TRAVERSABLE"
+              , TC.miPreds = [CST.ClassPredicate "APPLICATIVE" (Ty.TyCon "F" [])]
+              , TC.miArgTys =
+                  [ Ty.TyFun [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "B" []])
+                  , Ty.TyCon "T" [Ty.TyCon "A" []]
+                  ]
+              , TC.miRetTy = Ty.TyCon "F" [Ty.TyCon "T" [Ty.TyCon "B" []]]
+              , TC.miClassVars = ["T"]
+              }
+          callTy =
+            Ty.TyFun
+              [ Ty.TyFun [Ty.TyInt] (Ty.TyCon "MAYBE" [Ty.TyInt])
+              , Ty.TyCon "EITHER" [Ty.TyStr, Ty.TyInt]
+              ]
+              (Ty.TyCon "MAYBE" [Ty.TyCon "EITHER" [Ty.TyStr, Ty.TyInt]])
+      TC.resolveMethodPredicates mi callTy
+        `shouldBe` [CST.ClassPredicate "APPLICATIVE" (Ty.TyCon "MAYBE" [])]
 
   describe "kind validation" $ do
     it "rejects ground type as HKT class instance" $ do

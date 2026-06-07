@@ -175,8 +175,17 @@ exprClsParser = MP.label "class" $ MP.try $ parens $ do
   where
     classMethodParser = parens $ do
       mname <- symbolParser
+      preds <- MP.option [] (MP.try (parens (MP.many classPredicateParser)))
       tys <- MP.many typeParser
-      pure $ CST.ClassMethod mname (init tys) (last tys)
+      pure $ CST.ClassMethod mname preds (init tys) (last tys)
+
+    classPredicateParser = parens $
+      CST.ClassPredicate <$> symbolParser <*> methodTypeParser
+
+    methodTypeParser = MP.choice
+      [ typeParser
+      , Ty.TyCon <$> symbolParser <*> pure []
+      ]
 
 exprInstParser :: Parser CST.ExprF
 exprInstParser = MP.label "inst" $ MP.try $ parens $ do

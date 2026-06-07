@@ -23,3 +23,8 @@
     (case m
       ((Left err) (Left err))
       ((Right x) (Right (fn x)))))))
+
+(inst FUNCTOR %(Pair e)
+  (map (lam ((fn %(-> a b)) (p %(Pair e a)))
+    (case p
+      ((Pair tag value) (Pair tag (fn value)))))))

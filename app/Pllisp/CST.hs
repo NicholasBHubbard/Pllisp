@@ -52,8 +52,14 @@ data ExprF
 
 data ClassMethod = ClassMethod
   { cmName   :: Symbol
+  , cmPreds  :: [ClassPredicate]
   , cmArgTys :: [Ty.Type]
   , cmRetTy  :: Ty.Type
+  } deriving (Eq, Show)
+
+data ClassPredicate = ClassPredicate
+  { cpClass :: Symbol
+  , cpType  :: Ty.Type
   } deriving (Eq, Show)
 
 data LamList = LamList

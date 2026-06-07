@@ -50,12 +50,14 @@ spec = do
       mapM_ (readme `shouldContainText`)
         [ "[APPLICATIVE](doc/stdlib/APPLICATIVE.md)"
         , "[MONAD](doc/stdlib/MONAD.md)"
+        , "[TRAVERSABLE](doc/stdlib/TRAVERSABLE.md)"
         ]
 
       stdlibIndex <- T.IO.readFile "doc/stdlib/README.md"
       mapM_ (stdlibIndex `shouldContainText`)
         [ "[APPLICATIVE](APPLICATIVE.md)"
         , "[MONAD](MONAD.md)"
+        , "[TRAVERSABLE](TRAVERSABLE.md)"
         ]
 
       applicativeDoc <- T.IO.readFile "doc/stdlib/APPLICATIVE.md"
@@ -83,6 +85,18 @@ spec = do
         , "Either"
         ]
       monadDoc `shouldNotContainText` "does not have a shipped `MONAD` instance yet."
+
+      traversableDoc <- T.IO.readFile "doc/stdlib/TRAVERSABLE.md"
+      mapM_ (traversableDoc `shouldContainText`)
+        [ "# TRAVERSABLE"
+        , "(import TRAVERSABLE"
+        , "traverse"
+        , "APPLICATIVE"
+        , "List"
+        , "Maybe"
+        , "Either"
+        , "Pair"
+        ]
 
 shouldContainText :: T.Text -> T.Text -> Expectation
 shouldContainText haystack needle =

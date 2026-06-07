@@ -54,7 +54,8 @@ data-files:         PRELUDE.pll,
                     FILEIO.pll,
                     FUNCTOR.pll,
                     LIST.pll,
-                    MONAD.pll
+                    MONAD.pll,
+                    TRAVERSABLE.pll
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:

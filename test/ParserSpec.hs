@@ -360,21 +360,32 @@ spec = do
       r <- either fail pure $ parseOne "(class SHOW () (a) (show %a %STR))"
       case r of
         CST.ExprCls "SHOW" ["A"] []
-          [CST.ClassMethod "SHOW" [Ty.TyCon "A" []] Ty.TyStr] -> pure ()
+          [CST.ClassMethod "SHOW" [] [Ty.TyCon "A" []] Ty.TyStr] -> pure ()
         _ -> expectationFailure (show r)
 
     it "class with multi-arg method" $ do
       r <- either fail pure $ parseOne "(class EQUAL () (a) (equal %a %a %BOOL))"
       case r of
         CST.ExprCls "EQUAL" ["A"] []
-          [CST.ClassMethod "EQUAL" [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool] -> pure ()
+          [CST.ClassMethod "EQUAL" [] [Ty.TyCon "A" [], Ty.TyCon "A" []] Ty.TyBool] -> pure ()
         _ -> expectationFailure (show r)
 
     it "class with superclasses" $ do
       r <- either fail pure $ parseOne "(class APPLICATIVE (FUNCTOR) (f) (pure %a %(f a)))"
       case r of
         CST.ExprCls "APPLICATIVE" ["F"] ["FUNCTOR"]
-          [CST.ClassMethod "PURE" [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "A" []])] -> pure ()
+          [CST.ClassMethod "PURE" [] [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "A" []])] -> pure ()
+        _ -> expectationFailure (show r)
+
+    it "class method with constrained type variable" $ do
+      r <- either fail pure $ parseOne "(class TRAVERSABLE (FUNCTOR) (t) (traverse ((APPLICATIVE f)) %(-> a (f b)) %(t a) %(f %(t b))))"
+      case r of
+        CST.ExprCls "TRAVERSABLE" ["T"] ["FUNCTOR"]
+          [CST.ClassMethod "TRAVERSE" [CST.ClassPredicate "APPLICATIVE" (Ty.TyCon "F" [])]
+            [ Ty.TyFun [Ty.TyCon "A" []] (Ty.TyCon "F" [Ty.TyCon "B" []])
+            , Ty.TyCon "T" [Ty.TyCon "A" []]
+            ]
+            (Ty.TyCon "F" [Ty.TyCon "T" [Ty.TyCon "B" []]])] -> pure ()
         _ -> expectationFailure (show r)
 
     it "rejects legacy cls keyword" $ do

@@ -125,6 +125,8 @@ Start with [Overview](doc/overview.md), then use the docs under [`doc/`](doc):
 - [APPLICATIVE](doc/stdlib/APPLICATIVE.md) — applicative typeclasses,
   `pure`, and `ap`
 - [MONAD](doc/stdlib/MONAD.md) — monadic `bind` and `do-let`
+- [TRAVERSABLE](doc/stdlib/TRAVERSABLE.md) — effectful structure traversal
+  with `traverse`
 - [CLI](doc/stdlib/CLI.md) — the top-level command-line DSL
 - [FILEIO](doc/stdlib/FILEIO.md) — filesystem and handle-oriented I/O
 - [Reference](doc/reference.md) — quick syntax and builtin cheat sheet

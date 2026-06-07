@@ -10,6 +10,7 @@ import qualified Pllisp.SrcLoc as Loc
 import qualified Pllisp.Resolve as Res
 import qualified Pllisp.Type as Ty
 
+import Control.Monad (foldM)
 import qualified Control.Monad.RWS as RWS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -40,17 +41,13 @@ methodSchemes envs =
     mkScheme _name mi =
       let className = miClass mi
           tvars = maybe [] ciTyVars (M.lookup className (tceClassEnv envs))
-          paramMap = M.fromList (zip tvars [0..])
-          paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
-          resolvedArgs = map (resolveTP paramMap) (miArgTys mi)
-          resolvedRet  = resolveTP paramMap (miRetTy mi)
+          fullMap = methodSchemeVarMap tvars (miPreds mi) (miArgTys mi) (miRetTy mi)
+          paramSet = S.fromList (M.elems fullMap)
+          resolvedPreds = map (\predInfo -> predInfo { CST.cpType = resolveTP fullMap (CST.cpType predInfo) }) (miPreds mi)
+          resolvedArgs = map (resolveTP fullMap) (miArgTys mi)
+          resolvedRet  = resolveTP fullMap (miRetTy mi)
           funTy0 = Ty.TyFun resolvedArgs resolvedRet
-          freeNames = collectFreeTyCons funTy0
-          nextIdx = if S.null paramSet then 0 else S.findMax paramSet + 1
-          extraMap = M.fromList (zip (S.toList freeNames) [nextIdx..])
-          funTy = resolveTP extraMap funTy0
-          extraSet = S.fromList [nextIdx .. nextIdx + fromIntegral (S.size freeNames) - 1]
-      in Forall (S.union paramSet extraSet) funTy
+      in Forall paramSet resolvedPreds funTy0
     resolveTP pm ty = case ty of
       Ty.TyCon name [] -> case M.lookup name pm of
         Just idx -> Ty.TyVar idx
@@ -71,7 +68,7 @@ typecheckWith :: TCEnvs -> Context -> Res.ResolvedCST -> Either [TypeError] (TRe
 typecheckWith importedEnvs importedCtx exprs =
   let typeDecls = extractTypeDecls exprs
       ctorCtx = buildCtorContext typeDecls
-      builtInCtx = M.map (uncurry Forall) BuiltIn.builtInSchemes
+      builtInCtx = M.map (\(vs, ty) -> Forall vs [] ty) BuiltIn.builtInSchemes
       ffiDeclErrs = validateFFIDecls exprs
       ffiDecls = extractFFIDecls exprs
       ffiCtx = buildFFIContext ffiDecls
@@ -105,21 +102,22 @@ typecheckWith importedEnvs importedCtx exprs =
       | not (null inferErrs) -> Left inferErrs
       | otherwise ->
           let resolved = apply subst typed
-              helperCtx = M.union (topLevelLetContext resolved) initialCtx
+              topSchemes = topLevelLetContext methodEnv initialCtx resolved
+              helperCtx = M.union topSchemes initialCtx
               (localInstanceEnv, instErrs) =
                 buildInstanceEnv classEnv methodEnv helperCtx fieldMap knownTypeNames instDecls
               instanceEnv = M.unionWith (++) localInstanceEnv (tceInstanceEnv importedEnvs)
               superErrs = validateSuperclasses classEnv instanceEnv
               localEnvs = TCEnvs localClassEnv localMethodEnv localInstanceEnv
               fullEnvs = mergeTCEnvs localEnvs importedEnvs
-              missingInst = validateInstances methodEnv instanceEnv resolved
+              missingInst = validateInstances knownTypeNames methodEnv instanceEnv resolved
           in if not (null missingInst)
              then Left missingInst
              else if not (null instErrs)
              then Left instErrs
              else if not (null superErrs)
              then Left superErrs
-             else Right (tcoPass (dictPass classEnv methodEnv instanceEnv resolved), fullEnvs)
+             else Right (tcoPass (dictPass classEnv methodEnv helperCtx instanceEnv resolved), fullEnvs)
 
 -- TYPES
 
@@ -155,6 +153,7 @@ type FuncInfoMap = M.Map CST.Symbol FuncInfo
 -- | Info about a typeclass method: which class, original arg types, return type.
 data MethodInfo = MethodInfo
   { miClass     :: CST.Symbol
+  , miPreds     :: [CST.ClassPredicate]
   , miArgTys    :: [Ty.Type]    -- uses TyCon "A" [] for class type vars
   , miRetTy     :: Ty.Type
   , miClassVars :: [CST.Symbol] -- class type parameter names
@@ -207,7 +206,7 @@ type TResolvedCST = [TRExpr]
 
 type TRExpr = Loc.Located (Ty.Typed TRExprF)
 
-data Scheme = Forall (S.Set TyVar) Ty.Type
+data Scheme = Forall (S.Set TyVar) [CST.ClassPredicate] Ty.Type
   deriving (Eq, Show)
 
 data Constraint = Constraint Loc.Span Ty.Type Ty.Type
@@ -265,9 +264,16 @@ instance Substitutable Ty.Type where
   apply s (Ty.TyApp f a)    = Ty.TyApp (apply s f) (apply s a)
   apply _ t                 = t
 
+instance Substitutable CST.ClassPredicate where
+  tvs predInfo = tvs (CST.cpType predInfo)
+  apply s predInfo =
+    predInfo { CST.cpType = apply s (CST.cpType predInfo) }
+
 instance Substitutable Scheme where
-  tvs (Forall vs t) = tvs t `S.difference` vs
-  apply s (Forall vs t) = Forall vs $ apply (foldr M.delete s vs) t
+  tvs (Forall vs preds t) = (tvs preds `S.union` tvs t) `S.difference` vs
+  apply s (Forall vs preds t) =
+    let s' = foldr M.delete s vs
+    in Forall vs (apply s' preds) (apply s' t)
 
 instance Substitutable Constraint where
   tvs (Constraint _ t1 t2) = tvs t1 `S.union` tvs t2
@@ -349,7 +355,7 @@ extractTypeDecls = foldr go []
 -- | Extract type constructor names from a context by scanning constructor
 -- return types (the TyCon head of function return types in schemes).
 collectTypeNames :: Context -> S.Set CST.Symbol
-collectTypeNames ctx = S.fromList [n | Forall _ ty <- M.elems ctx, n <- headTyCons ty]
+collectTypeNames ctx = S.fromList [n | Forall _ _ ty <- M.elems ctx, n <- headTyCons ty]
   where
     headTyCons (Ty.TyFun _ (Ty.TyCon n _)) = [n]
     headTyCons (Ty.TyCon n _) = [n]
@@ -372,7 +378,7 @@ buildFFIContext = M.fromList . map (\(name, _linkName, paramCTys, retCTy) ->
         Ty.CPtr -> (Ty.TyVar nextVar, nextVar + 1)
         _       -> (Ty.cTypeToPllisp retCTy, nextVar)
       ptrVars = S.fromList [100 .. maxVar - 1]
-  in (name, Forall ptrVars (Ty.TyFun paramTys retTy)))
+  in (name, Forall ptrVars [] (Ty.TyFun paramTys retTy)))
 
 buildCtorContext :: [(CST.Symbol, [CST.Symbol], [CST.DataCon])] -> Context
 buildCtorContext = M.fromList . concatMap buildCtors
@@ -389,7 +395,7 @@ buildCtorContext = M.fromList . concatMap buildCtors
           ctorTy = if null argTys
                    then resultTy
                    else Ty.TyFun argTys resultTy
-          scheme = Forall paramSet ctorTy
+          scheme = Forall paramSet [] ctorTy
       in (ctorName, scheme)
 
     resolveTypeParams paramMap ty = case ty of
@@ -415,7 +421,7 @@ buildFFIStructCtorContext = M.fromList . map (\(name, fields) ->
       argTys = map (Ty.cTypeToPllisp . snd) scalarFields
       resultTy = Ty.TyCon name []
       ctorTy = if null argTys then resultTy else Ty.TyFun argTys resultTy
-  in (name, Forall S.empty ctorTy))
+  in (name, Forall S.empty [] ctorTy))
 
 isScalarCType :: Ty.CType -> Bool
 isScalarCType (Ty.CArr _ _) = False
@@ -442,7 +448,7 @@ buildEnumContext :: [Res.RExpr] -> Context
 buildEnumContext = M.fromList . concatMap go
   where
     go (Loc.Located _ (Res.RFFIEnum _ variants)) =
-      [(name, Forall S.empty Ty.TyInt) | (name, _) <- variants]
+      [(name, Forall S.empty [] Ty.TyInt) | (name, _) <- variants]
     go _ = []
 
 buildCallbackContext :: [Res.RExpr] -> Context
@@ -450,7 +456,7 @@ buildCallbackContext = M.fromList . concatMap go
   where
     go (Loc.Located _ (Res.RFFICallback name paramCTys retCTy)) =
       let closureTy = Ty.TyFun (map Ty.cTypeToPllisp paramCTys) (Ty.cTypeToPllisp retCTy)
-      in [(name, Forall S.empty (Ty.TyFun [closureTy] Ty.TyStr))]
+      in [(name, Forall S.empty [] (Ty.TyFun [closureTy] Ty.TyStr))]
     go _ = []
 
 validateFFIDecls :: [Res.RExpr] -> [TypeError]
@@ -527,18 +533,13 @@ buildClassContext decls =
           paramSet = S.fromList [0 .. fromIntegral (length tvars - 1)]
       in map (buildMethod className tvars paramMap paramSet) methods
 
-    buildMethod className cvars paramMap paramSet (CST.ClassMethod mname argTys retTy) =
-      let resolvedArgs = map (resolveTypeParams' paramMap) argTys
-          resolvedRet  = resolveTypeParams' paramMap retTy
-          funTy0 = Ty.TyFun resolvedArgs resolvedRet
-          -- Resolve remaining free type names (method-local type variables like a, b)
-          freeNames = collectFreeTyCons funTy0
-          nextIdx = if S.null paramSet then 0 else S.findMax paramSet + 1
-          extraMap = M.fromList (zip (S.toList freeNames) [nextIdx..])
-          funTy = resolveTypeParams' extraMap funTy0
-          extraSet = S.fromList [nextIdx .. nextIdx + fromIntegral (S.size freeNames) - 1]
-          scheme = Forall (S.union paramSet extraSet) funTy
-      in (mname, MethodInfo className argTys retTy cvars, scheme)
+    buildMethod className cvars paramMap paramSet (CST.ClassMethod mname preds argTys retTy) =
+      let fullMap = methodSchemeVarMap cvars preds argTys retTy
+          resolvedArgs = map (resolveTypeParams' fullMap) argTys
+          resolvedRet  = resolveTypeParams' fullMap retTy
+          resolvedPreds = map (\predInfo -> predInfo { CST.cpType = resolveTypeParams' fullMap (CST.cpType predInfo) }) preds
+          scheme = Forall (S.fromList (M.elems fullMap)) resolvedPreds (Ty.TyFun resolvedArgs resolvedRet)
+      in (mname, MethodInfo className preds argTys retTy cvars, scheme)
 
     resolveTypeParams' paramMap ty = case ty of
       Ty.TyCon name [] -> case M.lookup name paramMap of
@@ -555,12 +556,32 @@ buildClassContext decls =
 collectFreeTyCons :: Ty.Type -> S.Set CST.Symbol
 collectFreeTyCons = go
   where
-    builtins = S.fromList ["INT", "FLT", "STR", "BOOL", "UNIT", "RX", "REF"]
-    go (Ty.TyCon name []) | not (S.member name builtins) = S.singleton name
+    go (Ty.TyCon name []) | not (S.member name builtinTypeNames) = S.singleton name
     go (Ty.TyCon _ args) = S.unions (map go args)
     go (Ty.TyFun args ret) = S.unions (go ret : map go args)
     go (Ty.TyApp f a) = go f `S.union` go a
     go _ = S.empty
+
+builtinTypeNames :: S.Set CST.Symbol
+builtinTypeNames = S.fromList ["INT", "FLT", "STR", "BOOL", "UNIT", "RX", "REF", "USYM", "SYNTAX"]
+
+methodExtraVarMapFromParts :: [CST.Symbol] -> [CST.ClassPredicate] -> [Ty.Type] -> Ty.Type -> M.Map CST.Symbol Integer
+methodExtraVarMapFromParts classVars preds argTys retTy =
+  let classVarSet = S.fromList classVars
+      freeNames =
+        (collectFreeTyCons (Ty.TyFun argTys retTy)
+          `S.union` S.unions [collectFreeTyCons (CST.cpType pred) | pred <- preds])
+          `S.difference` classVarSet
+      nextIdx = fromIntegral (length classVars)
+  in M.fromList (zip (S.toList freeNames) [nextIdx ..])
+
+methodSchemeVarMap :: [CST.Symbol] -> [CST.ClassPredicate] -> [Ty.Type] -> Ty.Type -> M.Map CST.Symbol Integer
+methodSchemeVarMap classVars preds argTys retTy =
+  M.union (M.fromList (zip classVars [0..])) (methodExtraVarMapFromParts classVars preds argTys retTy)
+
+methodExtraVarMap :: MethodInfo -> M.Map CST.Symbol Integer
+methodExtraVarMap mi =
+  methodExtraVarMapFromParts (miClassVars mi) (miPreds mi) (miArgTys mi) (miRetTy mi)
 
 -- | Type-check instance method bodies and build the instance environment.
 buildInstanceEnv :: ClassEnv -> MethodEnv -> Context -> FieldMap
@@ -586,9 +607,22 @@ buildInstanceEnv classEnv methodEnv ctx fieldMap knownTypes instDecls =
           inst = InstanceInfo instTy tyVars methodMap
       in (className, inst, kindErrs ++ inferErrs ++ solveErrs)
 
-    checkMethod _className _instTy (mname, body) = do
-      typed <- infer body
-      pure (mname, typed)
+    checkMethod className instTy (mname, body) = do
+      case M.lookup mname methodEnv of
+        Just mi | miClass mi == className -> do
+          let extraMap = methodExtraVarMap mi
+          reserveTypeVarIds (M.elems extraMap)
+          let body' = normalizeMethodExpr extraMap body
+          typed <- infer body'
+          let expectedTy =
+                Ty.TyFun
+                  [substMethodClassVars (miClassVars mi) instTy (resolveNamedTypeVars extraMap argTy) | argTy <- miArgTys mi]
+                  (substMethodClassVars (miClassVars mi) instTy (resolveNamedTypeVars extraMap (miRetTy mi)))
+          constrain (Loc.locSpan body) (typeOf typed) expectedTy
+          pure (mname, typed)
+        _ -> do
+          typed <- infer body
+          pure (mname, typed)
 
 -- | Extract type variable names from an instance type.
 -- A TyCon name [] that is NOT a known type constructor is a type variable.
@@ -662,6 +696,7 @@ data DictNeed = DictNeed
   { dnClass    :: !CST.Symbol
   , dnTyVar    :: !Ty.Type
   , dnParamIdx :: !Int
+  , dnParamPat :: !Ty.Type
   }
 
 type DictNeedsMap = M.Map CST.Symbol [DictNeed]
@@ -671,27 +706,42 @@ dictSp :: Loc.Span
 dictSp = Loc.Span (Loc.Pos "<dict>" 0 0) (Loc.Pos "<dict>" 0 0)
 
 -- | Check that all monomorphic class method calls have matching instances.
-validateInstances :: MethodEnv -> InstanceEnv -> TResolvedCST -> [TypeError]
-validateInstances me ie = concatMap checkExpr
+validateInstances :: S.Set CST.Symbol -> MethodEnv -> InstanceEnv -> TResolvedCST -> [TypeError]
+validateInstances knownTypes me ie = concatMap checkExpr
   where
     checkExpr (Loc.Located sp (Ty.Typed _ node)) = case node of
       TRApp (Loc.Located _ (Ty.Typed fty (TRVar vb))) args
         | Just mi <- M.lookup (Res.symName vb) me ->
           let iT = resolveInstanceType mi fty
+              predErrs = concatMap (checkPred sp) (resolveMethodPredicates mi fty)
           in case iT of
-            Ty.TyVar _ -> concatMap checkExpr args
+            _ | isPolymorphicType iT -> predErrs ++ concatMap checkExpr args
             _ -> case lookupInstance ie (miClass mi) iT (Res.symName vb) of
-              Just _  -> concatMap checkExpr args
+              Just _  -> predErrs ++ concatMap checkExpr args
               Nothing ->
                 TypeError sp ("no instance of class " ++ displaySymbol (miClass mi)
                              ++ " for type " ++ showType iT)
-                : concatMap checkExpr args
+                : predErrs ++ concatMap checkExpr args
       TRApp f as -> checkExpr f ++ concatMap checkExpr as
       TRLam _ _ b -> checkExpr b
       TRLet bs b -> concatMap (\(_, _, e) -> checkExpr e) bs ++ checkExpr b
       TRIf c t e -> checkExpr c ++ checkExpr t ++ checkExpr e
       TRCase s as -> checkExpr s ++ concatMap (\(_, e) -> checkExpr e) as
       _ -> []
+
+    checkPred sp predInfo = case CST.cpType predInfo of
+      ty | isPolymorphicType ty -> []
+      ty ->
+        if hasInstance ie (CST.cpClass predInfo) ty
+          then []
+          else [TypeError sp ("no instance of class " ++ displaySymbol (CST.cpClass predInfo)
+                           ++ " for type " ++ showType ty)]
+
+    isPolymorphicType ty = case ty of
+      Ty.TyVar _ -> True
+      Ty.TyCon name _ -> not (S.member name knownTypes)
+      Ty.TyApp f _ -> isPolymorphicType f
+      _ -> False
 
     showType Ty.TyInt = "INT"
     showType Ty.TyFlt = "FLT"
@@ -708,29 +758,95 @@ validateInstances me ie = concatMap checkExpr
         [] -> T.unpack sym
         parts -> T.unpack (last parts)
 
-topLevelLetContext :: TResolvedCST -> Context
-topLevelLetContext = M.unions . map collect
+hasInstance :: InstanceEnv -> CST.Symbol -> Ty.Type -> Bool
+hasInstance ienv className instTy =
+  case M.lookup className ienv of
+    Nothing -> False
+    Just insts -> any (\ii -> matchInstanceType (iiTyVars ii) (iiType ii) instTy) insts
+
+topLevelLetContext :: MethodEnv -> Context -> TResolvedCST -> Context
+topLevelLetContext me base = snd . foldl collectExpr (base, M.empty)
   where
-    collect (Loc.Located _ (Ty.Typed _ (TRLet binds body))) =
-      M.fromList
-        [ (name, generalize M.empty bindTy)
-        | (name, bindTy, _) <- binds
-        , name /= "_"
-        ]
-      `M.union` collect body
-    collect _ = M.empty
+    collectExpr (ctx, exports) expr =
+      let (ctx', exports') = collectTopExpr ctx expr
+      in (ctx', M.union exports exports')
+
+    collectTopExpr ctx (Loc.Located _ (Ty.Typed _ (TRLet binds body))) =
+      let (ctx', bindExports) = collectBinds ctx binds
+          (ctx'', bodyExports) = collectTopExpr ctx' body
+      in (ctx'', M.union bindExports bodyExports)
+    collectTopExpr ctx _ = (ctx, M.empty)
+
+    collectBinds ctx [] = (ctx, M.empty)
+    collectBinds ctx ((name, bindTy, bindExpr) : rest)
+      | name == "_" =
+          collectBinds ctx rest
+      | otherwise =
+          let scheme = bindingScheme me ctx bindTy bindExpr
+              ctx' = M.insert name scheme ctx
+              (ctx'', restExports) = collectBinds ctx' rest
+          in (ctx'', M.insert name scheme restExports)
 
 -- | Haskell-style dictionary passing for typeclass methods.
 -- Monomorphic calls: inline instance implementation (static dispatch).
 -- Polymorphic calls: add dictionary parameters and extract methods from dicts.
-dictPass :: ClassEnv -> MethodEnv -> InstanceEnv -> TResolvedCST -> TResolvedCST
-dictPass classEnv methodEnv instanceEnv typed
+dictPass :: ClassEnv -> MethodEnv -> Context -> InstanceEnv -> TResolvedCST -> TResolvedCST
+dictPass classEnv methodEnv schemeCtx instanceEnv typed
   | M.null classEnv = typed
   | otherwise =
     let dictTypes = genDictTypes classEnv methodEnv
-        dictBinds = genDictBinds classEnv methodEnv instanceEnv
-        rewritten = map (dpRewrite classEnv methodEnv instanceEnv M.empty M.empty) typed
+        topNeeds = topLevelDictNeeds methodEnv schemeCtx typed
+        dictBinds = genDictBinds classEnv methodEnv schemeCtx instanceEnv topNeeds
+        rewritten = map (dpRewrite classEnv methodEnv schemeCtx instanceEnv topNeeds M.empty) typed
     in dictTypes ++ injectDictBinds dictBinds rewritten
+
+bindingScheme :: MethodEnv -> Context -> Ty.Type -> TRExpr -> Scheme
+bindingScheme me ctx bindTy bindExpr =
+  case explicitDictScheme bindTy bindExpr of
+    Just scheme -> scheme
+    Nothing -> case bindExpr of
+      Loc.Located _ (Ty.Typed _ (TRLam params _ body)) ->
+        quantifyScheme (map needPredicate (analyzeNeeds me ctx params body)) bindTy
+      _ ->
+        generalize M.empty bindTy
+  where
+    needPredicate dn = CST.ClassPredicate (dnClass dn) (dnTyVar dn)
+
+quantifyScheme :: [CST.ClassPredicate] -> Ty.Type -> Scheme
+quantifyScheme preds ty =
+  Forall (tvs preds `S.union` tvs ty) preds ty
+
+explicitDictScheme :: Ty.Type -> TRExpr -> Maybe Scheme
+explicitDictScheme bindTy (Loc.Located _ (Ty.Typed _ (TRLam params _ _))) =
+  let dictPreds =
+        [ predInfo
+        | (_name, paramTy) <- takeWhile (hasDictPredicate . snd) params
+        , Just predInfo <- [dictParamPredicate paramTy]
+        ]
+      visibleTy = dropLeadingFunArgs (length dictPreds) bindTy
+  in if null dictPreds
+     then Nothing
+     else Just (quantifyScheme dictPreds visibleTy)
+  where
+    hasDictPredicate paramTy = case dictParamPredicate paramTy of
+      Just _ -> True
+      Nothing -> False
+explicitDictScheme _ _ = Nothing
+
+dictParamPredicate :: Ty.Type -> Maybe CST.ClassPredicate
+dictParamPredicate (Ty.TyCon dictName [argTy])
+  | "__DICT_" `T.isPrefixOf` dictName =
+      Just (CST.ClassPredicate (T.drop (T.length "__DICT_") dictName) argTy)
+dictParamPredicate _ = Nothing
+
+dropLeadingFunArgs :: Int -> Ty.Type -> Ty.Type
+dropLeadingFunArgs 0 ty = ty
+dropLeadingFunArgs n (Ty.TyFun args retTy)
+  | n >= length args = retTy
+  | otherwise =
+      let rest = drop n args
+      in if null rest then retTy else Ty.TyFun rest retTy
+dropLeadingFunArgs _ ty = ty
 
 typeToName :: Ty.Type -> T.Text
 typeToName Ty.TyInt = "INT"
@@ -761,7 +877,7 @@ mkDictType className tvars me =
       cn = "__Dict" <> className
       pm = M.fromList (zip tvars [0..])
       methods = classMethodOrder className me
-      fTys = [Ty.TyFun (map (rTV pm) (miArgTys mi)) (rTV pm (miRetTy mi))
+      fTys = [Ty.TyFun (map (rTV pm) (methodRuntimeArgTypes mi)) (rTV pm (methodRuntimeRetType mi))
              | (_, mi) <- methods]
       fNames = map fst methods
       ctor = CST.DataCon cn fTys (Just fNames)
@@ -775,12 +891,12 @@ mkDictType className tvars me =
     rTV _ t = t
 
 -- Generate dictionary instance let-bindings (one per instance)
-genDictBinds :: ClassEnv -> MethodEnv -> InstanceEnv -> [(CST.Symbol, Ty.Type, TRExpr)]
-genDictBinds ce me ie =
-  concatMap (\(cn, insts) -> map (mkDictBind cn ce me ie) insts) (M.toList ie)
+genDictBinds :: ClassEnv -> MethodEnv -> Context -> InstanceEnv -> DictNeedsMap -> [(CST.Symbol, Ty.Type, TRExpr)]
+genDictBinds ce me sc ie topNm =
+  concatMap (\(cn, insts) -> map (mkDictBind cn ce me sc ie topNm) insts) (M.toList ie)
 
-mkDictBind :: CST.Symbol -> ClassEnv -> MethodEnv -> InstanceEnv -> InstanceInfo -> (CST.Symbol, Ty.Type, TRExpr)
-mkDictBind className ce me ie inst =
+mkDictBind :: CST.Symbol -> ClassEnv -> MethodEnv -> Context -> InstanceEnv -> DictNeedsMap -> InstanceInfo -> (CST.Symbol, Ty.Type, TRExpr)
+mkDictBind className ce me sc ie topNm inst =
   let iTy = iiType inst
       dName = "__DICT_" <> className
       cName = "__Dict" <> className
@@ -793,8 +909,8 @@ mkDictBind className ce me ie inst =
                      Just e -> e
                      Nothing -> error ("dictPass: missing " ++ T.unpack mn)
                  | (mn, _) <- methods]
-      impls = map (dpRewrite ce me ie M.empty M.empty) rawImpls
-      fTys = [Ty.TyFun (map (sTV pm iTy) (miArgTys mi)) (sTV pm iTy (miRetTy mi))
+      impls = zipWith rewriteImpl methods rawImpls
+      fTys = [Ty.TyFun (map (sTV pm iTy) (methodRuntimeArgTypes mi)) (sTV pm iTy (methodRuntimeRetType mi))
              | (_, mi) <- methods]
       cTy = if null fTys then dTy else Ty.TyFun fTys dTy
       cRef = Loc.Located dictSp (Ty.Typed cTy (TRVar (Res.VarBinding 0 cName)))
@@ -809,6 +925,26 @@ mkDictBind className ce me ie inst =
     sTV pm ct (Ty.TyApp f a) = Ty.TyApp (sTV pm ct f) (sTV pm ct a)
     sTV _ _ t = t
 
+    rewriteImpl (_mn, mi) rawImpl =
+      let resolvedPreds = resolveMethodPredicates mi (typeOf rawImpl)
+          predParams = resolvedPredParams resolvedPreds
+          predCtx = dictCtxFromResolvedPreds resolvedPreds predParams
+          implWithPreds = prependLamParams predParams rawImpl
+      in dpRewrite ce me sc ie topNm predCtx implWithPreds
+
+topLevelDictNeeds :: MethodEnv -> Context -> TResolvedCST -> DictNeedsMap
+topLevelDictNeeds me sc = M.unions . map collect
+  where
+    collect (Loc.Located _ (Ty.Typed _ (TRLet binds body))) =
+      M.fromList
+        [ (name, needs)
+        | (name, _, Loc.Located _ (Ty.Typed _ (TRLam params _ lb))) <- binds
+        , let needs = analyzeNeeds me sc params lb
+        , not (null needs)
+        ]
+      `M.union` collect body
+    collect _ = M.empty
+
 -- Inject dict bindings into the first TRLet
 injectDictBinds :: [(CST.Symbol, Ty.Type, TRExpr)] -> TResolvedCST -> TResolvedCST
 injectDictBinds [] es = es
@@ -819,26 +955,28 @@ injectDictBinds db es = go es
       Loc.Located sp (Ty.Typed ty (TRLet (db ++ bs) b)) : rest
     go (e : rest) = e : go rest
 
--- Analyze a lambda body for class method calls on type variables
-analyzeNeeds :: MethodEnv -> [(CST.Symbol, Ty.Type)] -> TRExpr -> [DictNeed]
-analyzeNeeds me params body = dedup (go body)
+-- Analyze a lambda body for class-constrained calls on type variables
+analyzeNeeds :: MethodEnv -> Context -> [(CST.Symbol, Ty.Type)] -> TRExpr -> [DictNeed]
+analyzeNeeds me sc params body = dedup (go body)
   where
+    explicitDictCtx = dictCtxFromParams params
+
     dedup = foldr (\dn acc -> if any (sameDN dn) acc then acc else dn : acc) []
-    sameDN a b = dnClass a == dnClass b && sameTyV (dnTyVar a) (dnTyVar b)
+    sameDN a b =
+      dnClass a == dnClass b
+      && dnParamIdx a == dnParamIdx b
+      && sameTyV (dnTyVar a) (dnTyVar b)
     sameTyV (Ty.TyVar a) (Ty.TyVar b) = a == b
     sameTyV _ _ = False
 
     go (Loc.Located _ (Ty.Typed _ node)) = case node of
       TRApp (Loc.Located _ (Ty.Typed fty (TRVar vb))) args ->
         (case M.lookup (Res.symName vb) me of
-          Just mi ->
-            let iT = resolveInstanceType mi fty
-            in case iT of
-              Ty.TyVar v -> case paramIdx v of
-                Just idx -> [DictNeed (miClass mi) iT idx]
-                Nothing -> []
-              _ -> []
-          Nothing -> []) ++ concatMap go args
+          Just mi -> concatMap needForPred (methodCallNeeds mi fty)
+          Nothing ->
+            case M.lookup (Res.symName vb) sc of
+              Just scheme -> concatMap needForPred (resolveSchemePredicates scheme fty)
+              Nothing -> []) ++ concatMap go args
       TRApp f as -> go f ++ concatMap go as
       TRLam _ _ b -> go b
       TRLet bs b -> concatMap (\(_, _, e) -> go e) bs ++ go b
@@ -846,44 +984,75 @@ analyzeNeeds me params body = dedup (go body)
       TRCase s as -> go s ++ concatMap (\(_, e) -> go e) as
       _ -> []
 
-    paramIdx v = lookup v [(n, i) | (i, (_, Ty.TyVar n)) <- zip [0..] params]
+    needForPred predInfo
+      | predSatisfied predInfo = []
+      | otherwise = case CST.cpType predInfo of
+          Ty.TyVar v -> case paramWitness v of
+            Just (idx, patTy) -> [DictNeed (CST.cpClass predInfo) (Ty.TyVar v) idx patTy]
+            Nothing -> []
+          _ -> []
+
+    predSatisfied predInfo = case CST.cpType predInfo of
+      Ty.TyVar v -> M.member (CST.cpClass predInfo, v) explicitDictCtx
+      _ -> False
+
+    paramWitness v =
+      firstJust
+        [ if containsTyVar v ty then Just (idx, ty) else Nothing
+        | (idx, (_, ty)) <- zip [0..] params
+        ]
+
+dictCtxFromParams :: [(CST.Symbol, Ty.Type)] -> DictParamCtx
+dictCtxFromParams params =
+  M.fromList
+    [ ((CST.cpClass predInfo, v), name)
+    | (name, paramTy) <- params
+    , Just predInfo <- [dictParamPredicate paramTy]
+    , Ty.TyVar v <- [CST.cpType predInfo]
+    ]
+
+resolveSchemePredicates :: Scheme -> Ty.Type -> [CST.ClassPredicate]
+resolveSchemePredicates (Forall _ preds schemeTy) actualTy =
+  case matchTyVarPattern schemeTy actualTy of
+    Just subst -> apply subst preds
+    Nothing -> []
 
 -- Main AST rewriter
-dpRewrite :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx -> TRExpr -> TRExpr
-dpRewrite ce me ie nm dpc expr@(Loc.Located sp (Ty.Typed ty node)) = case node of
-  TRApp fexpr args -> dpApp ce me ie nm dpc sp ty fexpr args
-  TRLam params retTy body -> dpLam ce me ie nm dpc sp params retTy body
-  TRLet binds body -> dpLetExpr ce me ie nm dpc sp ty binds body
+dpRewrite :: ClassEnv -> MethodEnv -> Context -> InstanceEnv -> DictNeedsMap -> DictParamCtx -> TRExpr -> TRExpr
+dpRewrite ce me sc ie nm dpc expr@(Loc.Located sp (Ty.Typed ty node)) = case node of
+  TRApp fexpr args -> dpApp ce me sc ie nm dpc sp ty fexpr args
+  TRLam params retTy body -> dpLam ce me sc ie nm dpc sp params retTy body
+  TRLet binds body -> dpLetExpr ce me sc ie nm dpc sp ty binds body
   TRIf c t e -> Loc.Located sp (Ty.Typed ty (TRIf (rw c) (rw t) (rw e)))
   TRCase scr arms -> Loc.Located sp (Ty.Typed ty (TRCase (rw scr) [(p, rw e) | (p, e) <- arms]))
   _ -> expr
-  where rw = dpRewrite ce me ie nm dpc
+  where rw = dpRewrite ce me sc ie nm dpc
 
 -- Rewrite function application: method calls and dict-parameterized function calls
-dpApp :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+dpApp :: ClassEnv -> MethodEnv -> Context -> InstanceEnv -> DictNeedsMap -> DictParamCtx
       -> Loc.Span -> Ty.Type -> TRExpr -> [TRExpr] -> TRExpr
-dpApp ce me ie nm dpc sp ty fexpr args =
-  let args' = map (dpRewrite ce me ie nm dpc) args
+dpApp ce me sc ie nm dpc sp ty fexpr args =
+  let args' = map (dpRewrite ce me sc ie nm dpc) args
   in case fexpr of
     Loc.Located fsp (Ty.Typed fty (TRVar vb))
       -- Class method call
       | Just mi <- M.lookup (Res.symName vb) me ->
         let iT = resolveInstanceType mi fty
+            predArgs = map (mkDictArgForResolvedPred dpc) (resolveMethodPredicates mi fty)
         in case iT of
           Ty.TyVar v ->
             -- Polymorphic: extract from dict param
             case M.lookup (miClass mi, v) dpc of
               Just dpn ->
                 let ext = mkMethodExtract sp dpn (miClass mi) (Res.symName vb) iT ce me
-                in Loc.Located sp (Ty.Typed ty (TRApp ext args'))
+                in Loc.Located sp (Ty.Typed ty (TRApp ext (predArgs ++ args')))
               Nothing -> Loc.Located sp (Ty.Typed ty (TRApp fexpr args'))
           _ ->
             -- Monomorphic: inline instance impl (static dispatch)
             case lookupInstance ie (miClass mi) iT (Res.symName vb) of
               Just impl ->
-                let impl' = dpRewrite ce me ie nm dpc impl
-                    Loc.Located _ (Ty.Typed _ implBody) = impl'
-                in Loc.Located sp (Ty.Typed ty (TRApp (Loc.Located fsp (Ty.Typed fty implBody)) args'))
+                let impl'@(Loc.Located _ (Ty.Typed implTy implBody)) = dpRewrite ce me sc ie nm dpc impl
+                in Loc.Located sp (Ty.Typed ty (TRApp (Loc.Located fsp (Ty.Typed implTy implBody)) (predArgs ++ args')))
               Nothing -> Loc.Located sp (Ty.Typed ty (TRApp fexpr args'))
 
       -- Call to a dict-parameterized function
@@ -894,59 +1063,76 @@ dpApp ce me ie nm dpc sp ty fexpr args =
             newF = Loc.Located fsp (Ty.Typed newFty (TRVar vb))
         in Loc.Located sp (Ty.Typed ty (TRApp newF allArgs))
 
+      -- Call to an imported or top-level constrained helper
+      | Just scheme <- M.lookup (Res.symName vb) sc
+      , let predInfos = resolveSchemePredicates scheme fty
+      , not (null predInfos) ->
+        let dArgs = map (mkDictArgForResolvedPred dpc) predInfos
+            allArgs = dArgs ++ args'
+            newFty = Ty.TyFun (map typeOf allArgs) ty
+            newF = Loc.Located fsp (Ty.Typed newFty (TRVar vb))
+        in Loc.Located sp (Ty.Typed ty (TRApp newF allArgs))
+
     -- Regular call
-    _ -> Loc.Located sp (Ty.Typed ty (TRApp (dpRewrite ce me ie nm dpc fexpr) args'))
+    _ -> Loc.Located sp (Ty.Typed ty (TRApp (dpRewrite ce me sc ie nm dpc fexpr) args'))
 
 -- Rewrite lambda: add dict params if body uses class methods on type variables
-dpLam :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+dpLam :: ClassEnv -> MethodEnv -> Context -> InstanceEnv -> DictNeedsMap -> DictParamCtx
       -> Loc.Span -> [(CST.Symbol, Ty.Type)] -> Ty.Type -> TRExpr -> TRExpr
-dpLam ce me ie nm dpc sp params retTy body =
-  let needs = analyzeNeeds me params body
+dpLam ce me sc ie nm dpc sp params retTy body =
+  let paramDpc = M.union (dictCtxFromParams params) dpc
+      needs = filter (needsMissing paramDpc) (analyzeNeeds me sc params body)
   in if null needs
      then
-       let body' = dpRewrite ce me ie nm dpc body
+       let body' = dpRewrite ce me sc ie nm paramDpc body
        in Loc.Located sp (Ty.Typed (Ty.TyFun (map snd params) retTy) (TRLam params retTy body'))
      else
        let dParams = [(dpNameFor dn, dpTypeFor dn) | dn <- needs]
            newDpc = foldl (\ctx dn -> case dnTyVar dn of
                              Ty.TyVar v -> M.insert (dnClass dn, v) (dpNameFor dn) ctx
-                             _ -> ctx) dpc needs
-           body' = dpRewrite ce me ie nm newDpc body
+                             _ -> ctx) paramDpc needs
+           body' = dpRewrite ce me sc ie nm newDpc body
            allParams = dParams ++ params
            newTy = Ty.TyFun (map snd allParams) retTy
        in Loc.Located sp (Ty.Typed newTy (TRLam allParams retTy body'))
 
 -- Rewrite let: build needs map, rewrite bindings and body
-dpLetExpr :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+dpLetExpr :: ClassEnv -> MethodEnv -> Context -> InstanceEnv -> DictNeedsMap -> DictParamCtx
           -> Loc.Span -> Ty.Type -> [(CST.Symbol, Ty.Type, TRExpr)] -> TRExpr -> TRExpr
-dpLetExpr ce me ie parentNm dpc sp ty binds body =
+dpLetExpr ce me sc ie parentNm dpc sp ty binds body =
   let localNeeds = M.fromList
         [(name, needs)
         | (name, _, Loc.Located _ (Ty.Typed _ (TRLam params _ lb))) <- binds
-        , let needs = analyzeNeeds me params lb
+        , let needs = analyzeNeeds me sc params lb
         , not (null needs)]
       nm = M.union localNeeds parentNm
-      binds' = map (dpBind ce me ie nm dpc) binds
-      body' = dpRewrite ce me ie nm dpc body
+      binds' = map (dpBind ce me sc ie nm dpc) binds
+      body' = dpRewrite ce me sc ie nm dpc body
   in Loc.Located sp (Ty.Typed ty (TRLet binds' body'))
 
-dpBind :: ClassEnv -> MethodEnv -> InstanceEnv -> DictNeedsMap -> DictParamCtx
+dpBind :: ClassEnv -> MethodEnv -> Context -> InstanceEnv -> DictNeedsMap -> DictParamCtx
        -> (CST.Symbol, Ty.Type, TRExpr) -> (CST.Symbol, Ty.Type, TRExpr)
-dpBind ce me ie nm dpc (name, ty, Loc.Located sp (Ty.Typed lamTy (TRLam params retTy body))) =
-  let needs = analyzeNeeds me params body
+dpBind ce me sc ie nm dpc (name, ty, Loc.Located sp (Ty.Typed lamTy (TRLam params retTy body))) =
+  let paramDpc = M.union (dictCtxFromParams params) dpc
+      needs = filter (needsMissing paramDpc) (analyzeNeeds me sc params body)
   in if null needs
-     then (name, ty, dpRewrite ce me ie nm dpc (Loc.Located sp (Ty.Typed lamTy (TRLam params retTy body))))
+     then (name, ty, dpRewrite ce me sc ie nm paramDpc (Loc.Located sp (Ty.Typed lamTy (TRLam params retTy body))))
      else
        let dParams = [(dpNameFor dn, dpTypeFor dn) | dn <- needs]
            newDpc = foldl (\ctx dn -> case dnTyVar dn of
                              Ty.TyVar v -> M.insert (dnClass dn, v) (dpNameFor dn) ctx
-                             _ -> ctx) dpc needs
-           body' = dpRewrite ce me ie nm newDpc body
+                             _ -> ctx) paramDpc needs
+           body' = dpRewrite ce me sc ie nm newDpc body
            allParams = dParams ++ params
            newTy = Ty.TyFun (map snd allParams) retTy
        in (name, newTy, Loc.Located sp (Ty.Typed newTy (TRLam allParams retTy body')))
-dpBind ce me ie nm dpc (name, ty, expr) =
-  (name, ty, dpRewrite ce me ie nm dpc expr)
+dpBind ce me sc ie nm dpc (name, ty, expr) =
+  (name, ty, dpRewrite ce me sc ie nm dpc expr)
+
+needsMissing :: DictParamCtx -> DictNeed -> Bool
+needsMissing dpc dn = case dnTyVar dn of
+  Ty.TyVar v -> M.notMember (dnClass dn, v) dpc
+  _ -> True
 
 dpNameFor :: DictNeed -> CST.Symbol
 dpNameFor dn = "__dict_" <> dnClass dn
@@ -965,7 +1151,7 @@ mkMethodExtract sp dictName className methodName tyVar ce me =
       pm = M.fromList (zip tvars [0..])
       methods = classMethodOrder className me
       mIdx = findIdx methodName (map fst methods)
-      fTys = [Ty.TyFun (map (rTV pm tyVar) (miArgTys mi)) (rTV pm tyVar (miRetTy mi))
+      fTys = [Ty.TyFun (map (rTV pm tyVar) (methodRuntimeArgTypes mi)) (rTV pm tyVar (methodRuntimeRetType mi))
              | (_, mi) <- methods]
       mTy = fTys !! mIdx
       pats = [if i == mIdx then TRPatVar "__m" ft else TRPatWild ft
@@ -989,18 +1175,19 @@ mkDictArgForCall _ie dpc callFty dn =
   case callFty of
     Ty.TyFun argTys _ | dnParamIdx dn < length argTys ->
       let cTy = argTys !! dnParamIdx dn
-      in case cTy of
+          resolvedTy = resolveTyVarFromPattern dn cTy
+      in case resolvedTy of
         Ty.TyVar v ->
           -- Still polymorphic at call site: pass through our dict param
           case M.lookup (dnClass dn, v) dpc of
             Just dpn ->
-              let dictTy = Ty.TyCon ("__DICT_" <> dnClass dn) [cTy]
+              let dictTy = Ty.TyCon ("__DICT_" <> dnClass dn) [resolvedTy]
               in Loc.Located dictSp (Ty.Typed dictTy (TRVar (Res.VarBinding 0 dpn)))
             Nothing -> error ("dictPass: no dict for " ++ T.unpack (dnClass dn))
         _ ->
           -- Concrete type: reference the instance dict
-          let iName = "__inst_" <> dnClass dn <> "_" <> typeToName cTy
-              dictTy = Ty.TyCon ("__DICT_" <> dnClass dn) [cTy]
+          let iName = "__inst_" <> dnClass dn <> "_" <> typeToName resolvedTy
+              dictTy = Ty.TyCon ("__DICT_" <> dnClass dn) [resolvedTy]
           in Loc.Located dictSp (Ty.Typed dictTy (TRVar (Res.VarBinding 0 iName)))
     _ -> error "dictPass: unexpected function type at call site"
 
@@ -1044,6 +1231,296 @@ resolveInstanceType minfo fty = case fty of
     firstJust [] = Nothing
     firstJust (Nothing:rest) = firstJust rest
     firstJust (justVal:_) = justVal
+
+methodCallNeeds :: MethodInfo -> Ty.Type -> [CST.ClassPredicate]
+methodCallNeeds mi fty =
+  CST.ClassPredicate (miClass mi) (resolveInstanceType mi fty)
+  : resolveMethodPredicates mi fty
+
+resolveMethodPredicates :: MethodInfo -> Ty.Type -> [CST.ClassPredicate]
+resolveMethodPredicates mi fty =
+  case matchNamedTypePattern (methodVarNames mi) (Ty.TyFun (miArgTys mi) (miRetTy mi)) fty of
+    Nothing -> []
+    Just subst ->
+      [ pred
+          { CST.cpType = applyNamedSubst subst (CST.cpType pred) }
+      | pred <- miPreds mi
+      ]
+
+methodVarNames :: MethodInfo -> S.Set CST.Symbol
+methodVarNames mi =
+  S.unions
+    [ S.fromList (miClassVars mi)
+    , collectFreeTyCons (Ty.TyFun (miArgTys mi) (miRetTy mi))
+    , S.unions [collectFreeTyCons (CST.cpType pred) | pred <- miPreds mi]
+    ]
+
+methodRuntimeArgTypes :: MethodInfo -> [Ty.Type]
+methodRuntimeArgTypes mi =
+  let extraMap = methodExtraVarMap mi
+  in map (dictPredType extraMap) (miPreds mi) ++ map (resolveNamedTypeVars extraMap) (miArgTys mi)
+
+methodRuntimeRetType :: MethodInfo -> Ty.Type
+methodRuntimeRetType mi =
+  resolveNamedTypeVars (methodExtraVarMap mi) (miRetTy mi)
+
+resolvedPredParams :: [CST.ClassPredicate] -> [(CST.Symbol, Ty.Type)]
+resolvedPredParams preds =
+  [ ("__pred" <> T.pack (show idx), dictPredType extraMap predInfo)
+  | (idx, predInfo) <- zip [0 :: Int ..] preds
+  ]
+  where
+    extraMap = M.empty
+
+dictCtxFromResolvedPreds :: [CST.ClassPredicate] -> [(CST.Symbol, Ty.Type)] -> DictParamCtx
+dictCtxFromResolvedPreds preds params =
+  M.fromList
+    [ ((CST.cpClass predInfo, v), paramName)
+    | (predInfo, (paramName, _)) <- zip preds params
+    , Ty.TyVar v <- [CST.cpType predInfo]
+    ]
+
+prependLamParams :: [(CST.Symbol, Ty.Type)] -> TRExpr -> TRExpr
+prependLamParams [] expr = expr
+prependLamParams params (Loc.Located sp (Ty.Typed ty node)) = case node of
+  TRLam args retTy body ->
+    let allParams = params ++ args
+        allArgTys = map snd params ++ map snd args
+    in Loc.Located sp (Ty.Typed (Ty.TyFun allArgTys retTy) (TRLam allParams retTy body))
+  _ ->
+    let retTy = ty
+        allArgTys = map snd params
+    in Loc.Located sp (Ty.Typed (Ty.TyFun allArgTys retTy) (TRLam params retTy (Loc.Located sp (Ty.Typed retTy node))))
+
+substMethodClassVars :: [CST.Symbol] -> Ty.Type -> Ty.Type -> Ty.Type
+substMethodClassVars classVars instTy ty = case ty of
+  Ty.TyCon name [] | name `elem` classVars -> instTy
+  Ty.TyCon name args | name `elem` classVars -> foldl Ty.TyApp instTy (map (substMethodClassVars classVars instTy) args)
+  Ty.TyCon name args -> Ty.TyCon name (map (substMethodClassVars classVars instTy) args)
+  Ty.TyFun args ret -> Ty.TyFun (map (substMethodClassVars classVars instTy) args) (substMethodClassVars classVars instTy ret)
+  Ty.TyApp f a -> Ty.TyApp (substMethodClassVars classVars instTy f) (substMethodClassVars classVars instTy a)
+  _ -> ty
+
+normalizeMethodExpr :: M.Map CST.Symbol Integer -> Res.RExpr -> Res.RExpr
+normalizeMethodExpr extraMap (Loc.Located sp expr) =
+  Loc.Located sp $ case expr of
+    Res.RLit _ -> expr
+    Res.RBool _ -> expr
+    Res.RUnit -> expr
+    Res.RVar _ -> expr
+    Res.RLam (Res.RLamList required extra) mRet body ->
+      Res.RLam
+        (Res.RLamList (map normTSymbol required) (normExtra extra))
+        (fmap (resolveNamedTypeVars extraMap) mRet)
+        (normalizeMethodExpr extraMap body)
+    Res.RLet binds body ->
+      Res.RLet
+        [(normTSymbol binder, normalizeMethodExpr extraMap rhs) | (binder, rhs) <- binds]
+        (normalizeMethodExpr extraMap body)
+    Res.RIf c t f ->
+      Res.RIf (rw c) (rw t) (rw f)
+    Res.RApp fn args ->
+      Res.RApp (rw fn) (map rw args)
+    Res.RType name params ctors ->
+      Res.RType name params ctors
+    Res.RCase scrutinee arms ->
+      Res.RCase (rw scrutinee) [(pat, rw armBody) | (pat, armBody) <- arms]
+    Res.RFieldAccess field subExpr ->
+      Res.RFieldAccess field (rw subExpr)
+    Res.RKeyArg key subExpr ->
+      Res.RKeyArg key (rw subExpr)
+    Res.RCls name tvars supers methods ->
+      Res.RCls name tvars supers methods
+    Res.RInst className instTy methods ->
+      Res.RInst className (resolveNamedTypeVars extraMap instTy) [(name, rw body) | (name, body) <- methods]
+    Res.RFFI name link paramTys retTy ->
+      Res.RFFI name link paramTys retTy
+    Res.RFFIStruct name fields ->
+      Res.RFFIStruct name fields
+    Res.RFFIVar name link paramTys retTy ->
+      Res.RFFIVar name link paramTys retTy
+    Res.RFFIEnum name variants ->
+      Res.RFFIEnum name variants
+    Res.RFFICallback name paramTys retTy ->
+      Res.RFFICallback name paramTys retTy
+  where
+    rw = normalizeMethodExpr extraMap
+    normTSymbol ts = ts { CST.symType = fmap (resolveNamedTypeVars extraMap) (CST.symType ts) }
+    normExtra ex = case ex of
+      Res.RNoExtra -> Res.RNoExtra
+      Res.ROptParams opts -> Res.ROptParams [(normTSymbol ts, rw defExpr) | (ts, defExpr) <- opts]
+      Res.RRestParam ts -> Res.RRestParam (normTSymbol ts)
+      Res.RKeyParams keys -> Res.RKeyParams [(normTSymbol ts, rw defExpr) | (ts, defExpr) <- keys]
+
+dictPredType :: M.Map CST.Symbol Integer -> CST.ClassPredicate -> Ty.Type
+dictPredType pm predInfo =
+  Ty.TyCon ("__DICT_" <> CST.cpClass predInfo) [resolveNamedTypeVars pm (CST.cpType predInfo)]
+
+resolveNamedTypeVars :: M.Map CST.Symbol Integer -> Ty.Type -> Ty.Type
+resolveNamedTypeVars pm ty = case ty of
+  Ty.TyCon name [] -> case M.lookup name pm of
+    Just idx -> Ty.TyVar idx
+    Nothing -> ty
+  Ty.TyCon name args -> case M.lookup name pm of
+    Just idx -> foldl Ty.TyApp (Ty.TyVar idx) (map (resolveNamedTypeVars pm) args)
+    Nothing -> Ty.TyCon name (map (resolveNamedTypeVars pm) args)
+  Ty.TyFun args ret -> Ty.TyFun (map (resolveNamedTypeVars pm) args) (resolveNamedTypeVars pm ret)
+  Ty.TyApp f a -> Ty.TyApp (resolveNamedTypeVars pm f) (resolveNamedTypeVars pm a)
+  _ -> ty
+
+matchNamedTypePattern :: S.Set CST.Symbol -> Ty.Type -> Ty.Type -> Maybe (M.Map CST.Symbol Ty.Type)
+matchNamedTypePattern vars = go M.empty
+  where
+    go subst pat actual = case pat of
+      Ty.TyCon name [] | S.member name vars ->
+        bindVar subst name actual
+      Ty.TyCon name args | S.member name vars -> do
+        let (actualHead, actualArgs) = unapplyType actual
+            actualArity = length actualArgs
+            patArity = length args
+        if actualArity < patArity
+          then Nothing
+          else do
+            let (headArgs, tailArgs) = splitAt (actualArity - patArity) actualArgs
+                boundHead = foldl Ty.TyApp actualHead headArgs
+            subst' <- bindVar subst name boundHead
+            foldM (\acc (p, a) -> go acc p a) subst' (zip args tailArgs)
+      Ty.TyCon name args -> do
+        let (actualHead, actualArgs) = unapplyType actual
+        case actualHead of
+          Ty.TyCon actualName [] | actualName == name && length args == length actualArgs ->
+            foldM (\acc (p, a) -> go acc p a) subst (zip args actualArgs)
+          _ -> Nothing
+      Ty.TyFun patArgs patRet ->
+        case actual of
+          Ty.TyFun actualArgs actualRet
+            | length patArgs == length actualArgs -> do
+                subst' <- foldM (\acc (p, a) -> go acc p a) subst (zip patArgs actualArgs)
+                go subst' patRet actualRet
+          _ -> Nothing
+      Ty.TyApp patF patA ->
+        case actual of
+          Ty.TyApp actF actA -> do
+            subst' <- go subst patF actF
+            go subst' patA actA
+          _ -> Nothing
+      _ ->
+        if pat == actual then Just subst else Nothing
+
+    bindVar subst name actual =
+      case M.lookup name subst of
+        Nothing -> Just (M.insert name actual subst)
+        Just existing | existing == actual -> Just subst
+        _ -> Nothing
+
+applyNamedSubst :: M.Map CST.Symbol Ty.Type -> Ty.Type -> Ty.Type
+applyNamedSubst subst ty = case ty of
+  Ty.TyCon name [] ->
+    M.findWithDefault ty name subst
+  Ty.TyCon name args ->
+    case M.lookup name subst of
+      Just headTy -> foldl Ty.TyApp headTy (map (applyNamedSubst subst) args)
+      Nothing -> Ty.TyCon name (map (applyNamedSubst subst) args)
+  Ty.TyFun args ret ->
+    Ty.TyFun (map (applyNamedSubst subst) args) (applyNamedSubst subst ret)
+  Ty.TyApp f a ->
+    Ty.TyApp (applyNamedSubst subst f) (applyNamedSubst subst a)
+  _ -> ty
+
+containsTyVar :: TyVar -> Ty.Type -> Bool
+containsTyVar target ty = case ty of
+  Ty.TyVar v -> v == target
+  Ty.TyFun args ret -> any (containsTyVar target) (ret : args)
+  Ty.TyCon _ args -> any (containsTyVar target) args
+  Ty.TyApp f a -> containsTyVar target f || containsTyVar target a
+  _ -> False
+
+resolveTyVarFromPattern :: DictNeed -> Ty.Type -> Ty.Type
+resolveTyVarFromPattern dn actual =
+  case matchTyVarPattern (dnParamPat dn) actual of
+    Just subst -> M.findWithDefault (dnTyVar dn) varKey subst
+    Nothing -> dnTyVar dn
+  where
+    varKey = case dnTyVar dn of
+      Ty.TyVar v -> v
+      _ -> -1
+
+matchTyVarPattern :: Ty.Type -> Ty.Type -> Maybe (M.Map TyVar Ty.Type)
+matchTyVarPattern = go M.empty
+  where
+    go subst pat actual = case pat of
+      Ty.TyVar v ->
+        bindVar subst v actual
+      Ty.TyCon name args -> do
+        let (actualHead, actualArgs) = unapplyType actual
+        case actualHead of
+          Ty.TyCon actualName [] | actualName == name && length args == length actualArgs ->
+            foldM (\acc (p, a) -> go acc p a) subst (zip args actualArgs)
+          _ -> Nothing
+      Ty.TyFun patArgs patRet ->
+        case actual of
+          Ty.TyFun actualArgs actualRet
+            | length patArgs == length actualArgs -> do
+                subst' <- foldM (\acc (p, a) -> go acc p a) subst (zip patArgs actualArgs)
+                go subst' patRet actualRet
+          _ -> Nothing
+      Ty.TyApp patF patA ->
+        case patF of
+          Ty.TyVar v -> do
+            let (actualHead, actualArgs) = unapplyType actual
+            if null actualArgs
+              then Nothing
+              else do
+                subst' <- bindVar subst v actualHead
+                if length (collectAppArgs pat) /= length actualArgs
+                  then Nothing
+                  else foldM (\acc (p, a) -> go acc p a) subst' (zip (collectAppArgs pat) actualArgs)
+          _ -> case actual of
+            Ty.TyApp actF actA -> do
+              subst' <- go subst patF actF
+              go subst' patA actA
+            _ -> Nothing
+      _ ->
+        if pat == actual then Just subst else Nothing
+
+    bindVar subst v actual =
+      case M.lookup v subst of
+        Nothing -> Just (M.insert v actual subst)
+        Just existing | existing == actual -> Just subst
+        _ -> Nothing
+
+collectAppArgs :: Ty.Type -> [Ty.Type]
+collectAppArgs ty = case ty of
+  Ty.TyApp f a -> collectAppArgs f ++ [a]
+  Ty.TyCon _ args -> args
+  _ -> []
+
+unapplyType :: Ty.Type -> (Ty.Type, [Ty.Type])
+unapplyType ty = case ty of
+  Ty.TyCon name args -> (Ty.TyCon name [], args)
+  Ty.TyApp f a ->
+    let (headTy, args) = unapplyType f
+    in (headTy, args ++ [a])
+  _ -> (ty, [])
+
+firstJust :: [Maybe a] -> Maybe a
+firstJust [] = Nothing
+firstJust (Nothing : rest) = firstJust rest
+firstJust (justVal : _) = justVal
+
+mkDictArgForResolvedPred :: DictParamCtx -> CST.ClassPredicate -> TRExpr
+mkDictArgForResolvedPred dpc predInfo =
+  case CST.cpType predInfo of
+    Ty.TyVar v ->
+      case M.lookup (CST.cpClass predInfo, v) dpc of
+        Just dpn ->
+          let dictTy = Ty.TyCon ("__DICT_" <> CST.cpClass predInfo) [Ty.TyVar v]
+          in Loc.Located dictSp (Ty.Typed dictTy (TRVar (Res.VarBinding 0 dpn)))
+        Nothing -> error ("dictPass: no dict for " ++ T.unpack (CST.cpClass predInfo))
+    concreteTy ->
+      let dictTy = Ty.TyCon ("__DICT_" <> CST.cpClass predInfo) [concreteTy]
+          iName = "__inst_" <> CST.cpClass predInfo <> "_" <> typeToName concreteTy
+      in Loc.Located dictSp (Ty.Typed dictTy (TRVar (Res.VarBinding 0 iName)))
 
 -- | Look up an instance for a class and type, returning a specific method.
 -- Supports parametric instances: type variables in the instance pattern match any type.
@@ -1206,46 +1683,55 @@ infer (Loc.Located sp expr) = Loc.Located sp <$> case expr of
   Res.RKeyArg _ _ -> do
     t <- recordError sp "&key argument outside function application"
     pure $ Ty.Typed t TRUnit
-  Res.RLam (Res.RLamList required rExtra) _mRet body -> do
-    reqTys <- traverse paramType required
-    let reqNames = map CST.symName required
+  Res.RLam (Res.RLamList required rExtra) mRet body -> do
+    ctx <- askCtx
+    annMap <- freshAnnotationVarMap ctx required rExtra mRet
+    let required' = map (normTSymbol annMap) required
+        extra' = normExtra annMap rExtra
+        mRet' = fmap (resolveNamedTypeVars annMap) mRet
+        body' = normalizeMethodExpr annMap body
+    reqTys <- traverse paramType required'
+    let reqNames = map CST.symName required'
     -- Build the full param list including extra params
-    (extraNames, extraTys, extraDefaults) <- inferExtra sp rExtra
+    (extraNames, extraTys, extraDefaults) <- inferExtra sp extra'
     let allNames = reqNames ++ extraNames
         allTys   = reqTys ++ extraTys
-        paramSchemes = map (Forall S.empty) allTys
+        paramSchemes = map (Forall S.empty []) allTys
         newBindings = M.fromList (zip allNames paramSchemes)
     -- Type-check default expressions to ensure consistency
     mapM_ (\(defExpr, expectedTy) -> do
       tdef <- localCtx (M.union newBindings) (infer defExpr)
       constrain sp (typeOf tdef) expectedTy
       ) extraDefaults
-    bodyExpr <- localCtx (M.union newBindings) (infer body)
+    bodyExpr <- localCtx (M.union newBindings) (infer body')
     let funTy = Ty.TyFun allTys (typeOf bodyExpr)
     pure $ Ty.Typed funTy (TRLam (zip allNames allTys) (typeOf bodyExpr) bodyExpr)
   Res.RLet binds body -> do
     ctx <- askCtx
-    let names = map (CST.symName . fst) binds
-    freshTys <- traverse (const fresh) names
-    let monoSchemes = map (Forall S.empty) freshTys
+    annMap <- freshLetAnnotationVarMap ctx binds
+    let binds' = [(normTSymbol annMap binder, normalizeMethodExpr annMap rhs) | (binder, rhs) <- binds]
+        names = map (CST.symName . fst) binds'
+    reserveTypeVarIds (M.elems annMap)
+    bindTys <- traverse (paramType . fst) binds'
+    let monoSchemes = map (Forall S.empty []) bindTys
         recCtx = M.union (M.fromList (zip names monoSchemes)) ctx
     -- Collect func metadata from lambda bindings
-    let funcMetas = collectFuncMetas (zip names (map snd binds))
+    let funcMetas = collectFuncMetas (zip names (map snd binds'))
     (rhsExprs, (rhsConstraints, _)) <- RWS.listen $
       localFuncs (M.union funcMetas) $
-      traverse (\(_, rhs) -> localCtx (const recCtx) (infer rhs)) binds
-    sequence_ $ zipWith (constrain sp) freshTys (map typeOf rhsExprs)
+      traverse (\(_, rhs) -> localCtx (const recCtx) (infer rhs)) binds'
+    sequence_ $ zipWith (constrain sp) bindTys (map typeOf rhsExprs)
     -- Solve RHS constraints eagerly so generalization uses concrete types,
     -- not raw inference variables (fixes over-generalization of applied fns).
-    let eagerConstraints = rhsConstraints ++ zipWith (Constraint sp) freshTys (map typeOf rhsExprs)
-        concreteFreshTys  = case solveAll eagerConstraints of
-                              Right subst -> map (apply subst) freshTys
+    let eagerConstraints = rhsConstraints ++ zipWith (Constraint sp) bindTys (map typeOf rhsExprs)
+        concreteBindTys  = case solveAll eagerConstraints of
+                              Right subst -> map (apply subst) bindTys
                               Left _      -> map typeOf rhsExprs
-        generalizedSchemes = map (generalize ctx) concreteFreshTys
+        generalizedSchemes = map (generalize ctx) concreteBindTys
         bodyCtx = M.union (M.fromList (zip names generalizedSchemes)) ctx
     bodyExpr <- localFuncs (M.union funcMetas) $
       localCtx (const bodyCtx) (infer body)
-    let typedBinds = zip3 names (map typeOf rhsExprs) rhsExprs
+    let typedBinds = zip3 names concreteBindTys rhsExprs
     pure $ Ty.Typed (typeOf bodyExpr) (TRLet typedBinds bodyExpr)
   Res.RCls name _tvars _supers _methods ->
     -- Class info is extracted in pre-pass, just pass through
@@ -1400,14 +1886,85 @@ typeOf :: TRExpr -> Ty.Type
 typeOf (Loc.Located _ (Ty.Typed t _)) = t
 
 generalize :: Context -> Ty.Type -> Scheme
-generalize ctx t = Forall (tvs t `S.difference` tvs (M.elems ctx)) t
+generalize ctx t = Forall (tvs t `S.difference` tvs (M.elems ctx)) [] t
 
 instantiate :: Scheme -> Infer Ty.Type
-instantiate (Forall vs t) = do
+instantiate (Forall vs _ t) = do
   let vars = S.toList vs
   ftvs <- traverse (const fresh) vars
   let subst = M.fromList (zip vars ftvs)
   return $ apply subst t
+
+reserveTypeVarIds :: [Integer] -> Infer ()
+reserveTypeVarIds ids = do
+  cur <- RWS.get
+  let next = case ids of
+        [] -> cur
+        _ -> max cur (maximum ids + 1)
+  RWS.put next
+
+freshLetAnnotationVarMap :: Context -> [(CST.TSymbol, Res.RExpr)] -> Infer (M.Map CST.Symbol Integer)
+freshLetAnnotationVarMap ctx binds = do
+  let knownTypes = collectTypeNames ctx `S.union` builtinTypeNames
+      freeNames =
+        S.unions
+          [ collectAnnotationTypeNames ty
+          | (binder, _) <- binds
+          , Just ty <- [CST.symType binder]
+          ]
+          `S.difference` knownTypes
+  start <- RWS.get
+  let names = S.toList freeNames
+      freshIds = take (length names) [start ..]
+  RWS.put (start + fromIntegral (length names))
+  pure (M.fromList (zip names freshIds))
+
+freshAnnotationVarMap :: Context -> [CST.TSymbol] -> Res.RLamExtra -> Maybe Ty.Type -> Infer (M.Map CST.Symbol Integer)
+freshAnnotationVarMap ctx required extra mRet = do
+  let knownTypes = collectTypeNames ctx `S.union` builtinTypeNames
+      freeNames =
+        collectLamAnnotationNames required extra mRet `S.difference` knownTypes
+  start <- RWS.get
+  let names = S.toList freeNames
+      freshIds = take (length names) [start ..]
+  RWS.put (start + fromIntegral (length names))
+  pure (M.fromList (zip names freshIds))
+
+collectLamAnnotationNames :: [CST.TSymbol] -> Res.RLamExtra -> Maybe Ty.Type -> S.Set CST.Symbol
+collectLamAnnotationNames required extra mRet =
+  S.unions
+    [ S.unions [collectAnnotationTypeNames ty | Just ty <- map CST.symType required]
+    , extraNames extra
+    , maybe S.empty collectAnnotationTypeNames mRet
+    ]
+  where
+    extraNames ex = case ex of
+      Res.RNoExtra -> S.empty
+      Res.ROptParams opts -> S.unions [collectAnnotationTypeNames ty | (ts, _) <- opts, Just ty <- [CST.symType ts]]
+      Res.RRestParam ts -> maybe S.empty collectAnnotationTypeNames (CST.symType ts)
+      Res.RKeyParams keys -> S.unions [collectAnnotationTypeNames ty | (ts, _) <- keys, Just ty <- [CST.symType ts]]
+
+collectAnnotationTypeNames :: Ty.Type -> S.Set CST.Symbol
+collectAnnotationTypeNames ty = case ty of
+  Ty.TyCon name args ->
+    let rest = S.unions (map collectAnnotationTypeNames args)
+    in if S.member name builtinTypeNames then rest else S.insert name rest
+  Ty.TyFun args ret ->
+    S.unions (collectAnnotationTypeNames ret : map collectAnnotationTypeNames args)
+  Ty.TyApp f a ->
+    collectAnnotationTypeNames f `S.union` collectAnnotationTypeNames a
+  _ ->
+    S.empty
+
+normTSymbol :: M.Map CST.Symbol Integer -> CST.TSymbol -> CST.TSymbol
+normTSymbol annMap ts = ts { CST.symType = fmap (resolveNamedTypeVars annMap) (CST.symType ts) }
+
+normExtra :: M.Map CST.Symbol Integer -> Res.RLamExtra -> Res.RLamExtra
+normExtra annMap ex = case ex of
+  Res.RNoExtra -> Res.RNoExtra
+  Res.ROptParams opts -> Res.ROptParams [(normTSymbol annMap ts, normalizeMethodExpr annMap defExpr) | (ts, defExpr) <- opts]
+  Res.RRestParam ts -> Res.RRestParam (normTSymbol annMap ts)
+  Res.RKeyParams keys -> Res.RKeyParams [(normTSymbol annMap ts, normalizeMethodExpr annMap defExpr) | (ts, defExpr) <- keys]
 
 -- Extended lambda list helpers
 
@@ -1498,7 +2055,7 @@ inferPattern ty pat sp = case pat of
   Res.RPatWild ->
     pure (TRPatWild ty, [])
   Res.RPatVar s ->
-    pure (TRPatVar s ty, [(s, Forall S.empty ty)])
+    pure (TRPatVar s ty, [(s, Forall S.empty [] ty)])
   Res.RPatCon ctor subpats -> do
     ctx <- askCtx
     ctorTy <- case M.lookup ctor ctx of

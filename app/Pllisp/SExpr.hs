@@ -555,14 +555,31 @@ toCls sp (Loc.Located _ (SAtom name) : Loc.Located _ (SList superExprs) : Loc.Lo
 toCls sp _ = Left $ ConvertError sp "invalid class: expected (class Name (supers...) (tyvars...) methods...)"
 
 toClassMethod :: Loc.Span -> SExpr -> Either ConvertError CST.ClassMethod
-toClassMethod sp (Loc.Located _ (SList (Loc.Located _ (SAtom name) : tys)))
-  | length tys < 2 = Left $ ConvertError sp "class method must have at least one arg type and a return type"
-  | otherwise = do
+toClassMethod sp (Loc.Located _ (SList (Loc.Located _ (SAtom name) : rest))) = do
+  let (predExprs, tys) = case rest of
+        (Loc.Located _ (SList preds) : more)
+          | all isPredExpr preds -> (preds, more)
+        _ -> ([], rest)
+  if length tys < 2
+    then Left $ ConvertError sp "class method must have at least one arg type and a return type"
+    else do
+      preds' <- mapM toClassPredicate predExprs
       tys' <- mapM toMethodType tys
       let argTys = init tys'
           retTy  = last tys'
-      Right $ CST.ClassMethod name argTys retTy
+      Right $ CST.ClassMethod name preds' argTys retTy
 toClassMethod sp _ = Left $ ConvertError sp "invalid class method signature"
+
+toClassPredicate :: SExpr -> Either ConvertError CST.ClassPredicate
+toClassPredicate (Loc.Located _ (SList [Loc.Located _ (SAtom className), tyExpr])) = do
+  ty <- toMethodType tyExpr
+  Right $ CST.ClassPredicate className ty
+toClassPredicate (Loc.Located sp _) =
+  Left $ ConvertError sp "invalid class predicate"
+
+isPredExpr :: SExpr -> Bool
+isPredExpr (Loc.Located _ (SList [Loc.Located _ (SAtom _), _])) = True
+isPredExpr _ = False
 
 toMethodType :: SExpr -> Either ConvertError Ty.Type
 toMethodType (Loc.Located _ (SType inner)) = toType inner

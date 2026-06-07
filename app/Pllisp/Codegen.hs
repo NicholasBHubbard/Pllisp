@@ -10,7 +10,7 @@ import qualified Pllisp.LambdaLift as LL
 import qualified Pllisp.Type as Ty
 
 import Data.Bits ((.|.))
-import Control.Monad (forM, forM_, void)
+import Control.Monad (forM, forM_, unless, void)
 import Control.Monad.State.Strict
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -41,6 +41,7 @@ data CgState = CgState
   , csInstrs  :: [T.Text]                  -- instructions, reverse order
   , csTcoLoop :: Maybe (T.Text, [(CST.Symbol, T.Text, Ty.Type)])
                  -- TCO: (loop label, [(param name, alloca operand, type)])
+  , csCurrentDef :: Maybe CST.Symbol
   , csFFI       :: M.Map CST.Symbol FFIInfo
   , csStructs   :: M.Map CST.Symbol Ty.StructLayout -- FFI struct layouts
   , csCallbacks :: M.Map CST.Symbol ([Ty.CType], Ty.CType) -- callback: param CTypes, ret CType
@@ -62,7 +63,7 @@ codegen prog = evalState go initState
     structs   = collectFFIStructs (LL.llExprs prog)
     callbacks = collectCallbacks (LL.llExprs prog)
     defMap    = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
-    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis structs callbacks
+    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing Nothing ffis structs callbacks
     ffiList = filter (not . isBuiltinExtern . ffiExternSym . snd) (M.toList ffis)
     ffiDecls = map genFFIDecl ffiList
 
@@ -95,7 +96,7 @@ codegenRepl sessionPrefix roundNum priorGlobals importedMeta prog = evalState go
     structs   = collectFFIStructs metaExprs
     callbacks = collectCallbacks metaExprs
     defMap    = M.fromList [(LL.defName d, d) | d <- LL.llDefs prog]
-    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing ffis structs callbacks
+    initState = CgState 0 [] "entry" M.empty ctors defMap [] Nothing Nothing ffis structs callbacks
     ffiList = filter (not . isBuiltinExtern . ffiExternSym . snd) (M.toList ffis)
     ffiDecls = map genFFIDecl ffiList
     prefix = "__r" <> tshow roundNum <> "_"
@@ -464,7 +465,13 @@ lookupVar name = do
           ffis <- gets csFFI
           case M.lookup name ffis of
             Just ffi -> pure ("@" <> ffiExternSym ffi)
-            Nothing -> error ("Codegen: unbound variable: " <> T.unpack name)
+            Nothing -> do
+              currentDef <- gets csCurrentDef
+              let scopeVars = T.unpack (T.intercalate ", " (M.keys vars))
+                  whereTxt = maybe "<top-level>" T.unpack currentDef
+              error ("Codegen: unbound variable: " <> T.unpack name
+                   <> " while generating " <> whereTxt
+                   <> " with vars [" <> scopeVars <> "]")
 
 tshow :: Show a => a -> T.Text
 tshow = T.pack . show
@@ -480,7 +487,14 @@ genDef def = do
   savedInstrs <- gets csInstrs
   savedBlock  <- gets csBlock
   savedTco    <- gets csTcoLoop
-  modify' (\s -> s { csVars = M.empty, csInstrs = [], csBlock = "entry", csTcoLoop = Nothing })
+  savedCurrent <- gets csCurrentDef
+  modify' (\s -> s
+    { csVars = M.empty
+    , csInstrs = []
+    , csBlock = "entry"
+    , csTcoLoop = Nothing
+    , csCurrentDef = Just (LL.defName def)
+    })
 
   -- Bind regular params
   forM_ (LL.defParams def) $ \(pname, _) ->
@@ -501,7 +515,13 @@ genDef def = do
   emit ("ret " <> llvmType retTy <> " " <> result)
 
   instrs <- gets (reverse . csInstrs)
-  modify' (\s -> s { csVars = savedVars, csInstrs = savedInstrs, csBlock = savedBlock, csTcoLoop = savedTco })
+  modify' (\s -> s
+    { csVars = savedVars
+    , csInstrs = savedInstrs
+    , csBlock = savedBlock
+    , csTcoLoop = savedTco
+    , csCurrentDef = savedCurrent
+    })
 
   let paramList = "ptr %__closure" <>
         T.concat [", " <> llvmType pty <> " %" <> sanitize pname
@@ -1076,24 +1096,97 @@ genPatTest scrOp pat matchLbl nextLbl = case pat of
 
   LL.LLPatCon ctorName _ _ -> do
     structs <- gets csStructs
-    if M.member ctorName structs
-      then -- FFI struct: no tag, always matches
-        emit ("br label %" <> matchLbl)
-      else do
+    case M.lookup ctorName structs of
+      Just layout -> do
+        fields <- forM (zip subPats (Ty.slOffsets layout)) $ \(subPat, (_, offset, ct)) -> do
+          fieldVal <- loadStructFieldForPattern scrOp offset ct
+          pure (fieldVal, subPat)
+        genPatFieldTests fields matchLbl nextLbl
+      Nothing -> do
         ctors <- gets csCtors
         let ci = ctors M.! ctorName
         if ciNewtype ci
-          then -- Newtype: no tag, always matches
-            emit ("br label %" <> matchLbl)
+          then case subPats of
+            [subPat] -> genPatTest scrOp subPat matchLbl nextLbl
+            _ -> emit ("br label %" <> matchLbl)
           else do
+            ctorLbl <- freshLabel "case.ctor"
             tagR <- fresh
             emit (tagR <> " = load i32, ptr " <> scrOp)
             cmp <- fresh
             emit (cmp <> " = icmp eq i32 " <> tagR <> ", " <> tshow (ciTag ci))
-            emit ("br i1 " <> cmp <> ", label %" <> matchLbl <> ", label %" <> nextLbl)
+            emit ("br i1 " <> cmp <> ", label %" <> ctorLbl <> ", label %" <> nextLbl)
+            emitLabel ctorLbl
+            fields <- forM (zip [1..] subPats) $ \(i, subPat) -> do
+              fieldVal <- loadADTFieldForPattern scrOp i subPat
+              pure (fieldVal, subPat)
+            genPatFieldTests fields matchLbl nextLbl
+    where
+      subPats = case pat of
+        LL.LLPatCon _ _ pats -> pats
+        _ -> []
 
   -- Wildcard/var handled in genArms before reaching here
   _ -> emit ("br label %" <> matchLbl)
+
+genPatFieldTests :: [(T.Text, LL.LLPattern)] -> T.Text -> T.Text -> CgM ()
+genPatFieldTests [] matchLbl _ = emit ("br label %" <> matchLbl)
+genPatFieldTests ((fieldVal, subPat) : rest) matchLbl nextLbl =
+  case subPat of
+    LL.LLPatVar {} -> genPatFieldTests rest matchLbl nextLbl
+    LL.LLPatWild {} -> genPatFieldTests rest matchLbl nextLbl
+    _ -> do
+      let isLast = null rest
+      continueLbl <- if isLast then pure matchLbl else freshLabel "case.pat"
+      genPatTest fieldVal subPat continueLbl nextLbl
+      unless isLast $ do
+        emitLabel continueLbl
+        genPatFieldTests rest matchLbl nextLbl
+
+loadStructFieldForPattern :: T.Text -> Int -> Ty.CType -> CgM T.Text
+loadStructFieldForPattern scrOp offset ct = case ct of
+  Ty.CArr {} -> do
+    fieldPtr <- fresh
+    emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+      <> ", i64 " <> tshow offset)
+    pure fieldPtr
+  Ty.CStruct _ -> do
+    fieldPtr <- fresh
+    emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+      <> ", i64 " <> tshow offset)
+    pure fieldPtr
+  _ -> do
+    let cLlvm = Ty.cTypeLlvm ct
+        pllispTy = Ty.cTypeToPllisp ct
+        pLlvm = llvmType pllispTy
+    fieldPtr <- fresh
+    emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+      <> ", i64 " <> tshow offset)
+    loaded <- fresh
+    emit (loaded <> " = load " <> cLlvm <> ", ptr " <> fieldPtr)
+    if cLlvm == pLlvm
+      then pure loaded
+      else do
+        converted <- fresh
+        case pllispTy of
+          Ty.TyInt -> do
+            let ext = if isUnsignedCType ct then "zext" else "sext"
+            emit (converted <> " = " <> ext <> " " <> cLlvm <> " " <> loaded <> " to " <> pLlvm)
+          Ty.TyFlt ->
+            emit (converted <> " = fpext " <> cLlvm <> " " <> loaded <> " to " <> pLlvm)
+          _ -> pure ()
+        pure converted
+
+loadADTFieldForPattern :: T.Text -> Int -> LL.LLPattern -> CgM T.Text
+loadADTFieldForPattern scrOp fieldIndex subPat = do
+  let offset = slotSize * fieldIndex
+      fty = patType subPat
+  fieldPtr <- fresh
+  emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
+    <> ", i64 " <> tshow offset)
+  fieldVal <- fresh
+  emit (fieldVal <> " = load " <> llvmType fty <> ", ptr " <> fieldPtr)
+  pure fieldVal
 
 bindPatVars :: T.Text -> LL.LLPattern -> CgM ()
 bindPatVars scrOp pat = case pat of
@@ -1102,62 +1195,18 @@ bindPatVars scrOp pat = case pat of
     case M.lookup ctorName structs of
       Just layout -> -- FFI struct: use C offsets and type conversion
         forM_ (zip subPats (Ty.slOffsets layout)) $ \(subPat, (_, offset, ct)) ->
-          case subPat of
-            LL.LLPatVar name _ -> case ct of
-              Ty.CArr {} -> do
-                -- Array field: return pointer to inline storage
-                fieldPtr <- fresh
-                emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
-                  <> ", i64 " <> tshow offset)
-                bindVar name fieldPtr
-              Ty.CStruct _ -> do
-                -- Nested struct: return pointer to inline storage
-                fieldPtr <- fresh
-                emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
-                  <> ", i64 " <> tshow offset)
-                bindVar name fieldPtr
-              _ -> do
-                let cLlvm = Ty.cTypeLlvm ct
-                    pllispTy = Ty.cTypeToPllisp ct
-                    pLlvm = llvmType pllispTy
-                fieldPtr <- fresh
-                emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
-                  <> ", i64 " <> tshow offset)
-                loaded <- fresh
-                emit (loaded <> " = load " <> cLlvm <> ", ptr " <> fieldPtr)
-                if cLlvm == pLlvm
-                  then bindVar name loaded
-                  else do
-                    converted <- fresh
-                    case pllispTy of
-                      Ty.TyInt -> do
-                        let ext = if isUnsignedCType ct then "zext" else "sext"
-                        emit (converted <> " = " <> ext <> " " <> cLlvm <> " " <> loaded <> " to " <> pLlvm)
-                      Ty.TyFlt ->
-                        emit (converted <> " = fpext " <> cLlvm <> " " <> loaded <> " to " <> pLlvm)
-                      _ -> pure ()
-                    bindVar name converted
-            _ -> pure ()
+          loadStructFieldForPattern scrOp offset ct >>= (`bindPatVars` subPat)
       Nothing -> do
         ctors <- gets csCtors
         let ci = ctors M.! ctorName
         if ciNewtype ci
           then -- Newtype: scrutinee IS the unwrapped value
             case subPats of
-              [LL.LLPatVar name _] -> bindVar name scrOp
+              [subPat] -> bindPatVars scrOp subPat
               _ -> pure ()
           else -- Regular ADT: use tag+slot layout
             forM_ (zip [1..] subPats) $ \(i, subPat) -> do
-              let offset = slotSize * (i :: Int)
-              fieldPtr <- fresh
-              emit (fieldPtr <> " = getelementptr i8, ptr " <> scrOp
-                <> ", i64 " <> tshow offset)
-              let fty = patType subPat
-              fieldVal <- fresh
-              emit (fieldVal <> " = load " <> llvmType fty <> ", ptr " <> fieldPtr)
-              case subPat of
-                LL.LLPatVar name _ -> bindVar name fieldVal
-                _                  -> pure ()
+              loadADTFieldForPattern scrOp i subPat >>= (`bindPatVars` subPat)
   LL.LLPatVar name _ -> bindVar name scrOp
   _ -> pure ()
 

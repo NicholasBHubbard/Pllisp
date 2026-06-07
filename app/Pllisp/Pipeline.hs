@@ -332,9 +332,10 @@ compileModulesDetailedFrom seed expandedMap compileStates moduleInfos order =
                                         errs))
                                 Right (typed, modEnvs) -> do
                                   let renameMap = Mod.moduleRenameMap modName (CST.progExprs modProg)
-                                      typed' = Mod.renameTypedModuleSymbols renameMap typed
-                                      modEnvs' = Mod.renameTCEnvsSymbols renameMap modEnvs
-                                      exports = Mod.renameExportSchemes renameMap (Mod.collectExports modEnvs typed)
+                                      typeNames = Mod.moduleTypeNames (CST.progExprs modProg)
+                                      typed' = Mod.renameTypedModuleSymbols renameMap typeNames typed
+                                      modEnvs' = Mod.renameTCEnvsSymbols renameMap typeNames modEnvs
+                                      exports = Mod.renameExportSchemes renameMap typeNames (Mod.collectExports modEnvs typed)
                                       accExports' = M.insert modName exports accExports
                                       compileState =
                                         case M.lookup modName compileStates of

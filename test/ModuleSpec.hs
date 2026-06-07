@@ -103,7 +103,7 @@ spec = do
   describe "export collection" $ do
     it "collects let binding schemes" $ do
       let exports = collectExports "(let ((x 1)) x)"
-      M.lookup "X" exports `shouldBe` Just (TC.Forall S.empty Ty.TyInt)
+      M.lookup "X" exports `shouldBe` Just (TC.Forall S.empty [] Ty.TyInt)
 
     it "collects bindings across nested chain" $ do
       let exports = collectExports "(let ((x 1)) x) (let ((y 2)) y)"
@@ -121,10 +121,10 @@ spec = do
     it "constructor exports have proper schemes" $ do
       let exports = collectExports "(type M (a) (N) (J a))"
       case M.lookup "J" exports of
-        Just (TC.Forall _ (Ty.TyFun _ _)) -> pure ()
+        Just (TC.Forall _ _ (Ty.TyFun _ _)) -> pure ()
         other -> expectationFailure ("expected TyFun scheme for J, got: " ++ show other)
       case M.lookup "N" exports of
-        Just (TC.Forall _ (Ty.TyCon "M" _)) -> pure ()
+        Just (TC.Forall _ _ (Ty.TyCon "M" _)) -> pure ()
         other -> expectationFailure ("expected TyCon M for N, got: " ++ show other)
 
   describe "dependency ordering" $ do
@@ -154,7 +154,7 @@ spec = do
 
   describe "buildImportScope" $ do
     it "qualified-only import: ALIAS.NAME in scope, bare NAME not" $ do
-      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty [] Ty.TyInt))
           imports = [CST.Import "FOO" "FOO" []]
           (resolveScope, tcCtx, normMap) = Mod.buildImportScope exports imports
       S.member "FOO.BAR" resolveScope `shouldBe` True
@@ -164,7 +164,7 @@ spec = do
       M.lookup "FOO.BAR" normMap `shouldBe` Just "FOO.BAR"
 
     it "import with unquals: both qualified and unqualified in scope" $ do
-      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty [] Ty.TyInt))
           imports = [CST.Import "FOO" "FOO" ["BAR"]]
           (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
       S.member "FOO.BAR" resolveScope `shouldBe` True
@@ -173,7 +173,7 @@ spec = do
       M.member "BAR" tcCtx `shouldBe` False
 
     it "alias changes qualified prefix" $ do
-      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty [] Ty.TyInt))
           imports = [CST.Import "FOO" "F" []]
           (resolveScope, tcCtx, normMap) = Mod.buildImportScope exports imports
       S.member "F.BAR" resolveScope `shouldBe` True
@@ -183,7 +183,7 @@ spec = do
       M.lookup "F.BAR" normMap `shouldBe` Just "FOO.BAR"
 
     it "alias with unquals" $ do
-      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty [] Ty.TyInt))
           imports = [CST.Import "FOO" "F" ["BAR"]]
           (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
       S.member "F.BAR" resolveScope `shouldBe` True
@@ -191,7 +191,7 @@ spec = do
       S.member "FOO.BAR" resolveScope `shouldBe` False
 
     it "original module name not usable when alias is set" $ do
-      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty Ty.TyInt))
+      let exports = M.singleton "FOO" (M.singleton "BAR" (TC.Forall S.empty [] Ty.TyInt))
           imports = [CST.Import "FOO" "F" []]
           (resolveScope, _, _) = Mod.buildImportScope exports imports
       S.member "FOO.BAR" resolveScope `shouldBe` False
@@ -199,8 +199,8 @@ spec = do
 
     it "multiple imports with no collisions" $ do
       let exports = M.fromList
-            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
-            , ("B", M.singleton "Y" (TC.Forall S.empty Ty.TyStr))
+            [ ("A", M.singleton "X" (TC.Forall S.empty [] Ty.TyInt))
+            , ("B", M.singleton "Y" (TC.Forall S.empty [] Ty.TyStr))
             ]
           imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" []]
           (resolveScope, tcCtx, _normMap) = Mod.buildImportScope exports imports
@@ -213,16 +213,16 @@ spec = do
   describe "checkImportCollisions" $ do
     it "accepts non-overlapping unquals" $ do
       let exports = M.fromList
-            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
-            , ("B", M.singleton "Y" (TC.Forall S.empty Ty.TyStr))
+            [ ("A", M.singleton "X" (TC.Forall S.empty [] Ty.TyInt))
+            , ("B", M.singleton "Y" (TC.Forall S.empty [] Ty.TyStr))
             ]
           imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" ["Y"]]
       Mod.checkImportCollisions exports imports `shouldBe` Right ()
 
     it "detects unqualified name collision" $ do
       let exports = M.fromList
-            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
-            , ("B", M.singleton "X" (TC.Forall S.empty Ty.TyStr))
+            [ ("A", M.singleton "X" (TC.Forall S.empty [] Ty.TyInt))
+            , ("B", M.singleton "X" (TC.Forall S.empty [] Ty.TyStr))
             ]
           imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" ["X"]]
       case Mod.checkImportCollisions exports imports of
@@ -231,14 +231,14 @@ spec = do
 
     it "no collision when same name is only qualified" $ do
       let exports = M.fromList
-            [ ("A", M.singleton "X" (TC.Forall S.empty Ty.TyInt))
-            , ("B", M.singleton "X" (TC.Forall S.empty Ty.TyStr))
+            [ ("A", M.singleton "X" (TC.Forall S.empty [] Ty.TyInt))
+            , ("B", M.singleton "X" (TC.Forall S.empty [] Ty.TyStr))
             ]
           imports = [CST.Import "A" "A" ["X"], CST.Import "B" "B" []]
       Mod.checkImportCollisions exports imports `shouldBe` Right ()
 
     it "rejects unqualified names a module does not export" $ do
-      let exports = M.singleton "A" (M.singleton "X" (TC.Forall S.empty Ty.TyInt))
+      let exports = M.singleton "A" (M.singleton "X" (TC.Forall S.empty [] Ty.TyInt))
           imports = [CST.Import "A" "A" ["Y"]]
       case Mod.checkImportCollisions exports imports of
         Left err  -> err `shouldContain` "module A does not export Y"
@@ -246,8 +246,8 @@ spec = do
 
     it "allows repeated unqualified imports from the same module" $ do
       let exports = M.singleton "CLI" (M.fromList
-            [ ("PARSE-ARGV!", TC.Forall S.empty Ty.TyUnit)
-            , ("FLAG-VALUE", TC.Forall S.empty Ty.TyBool)
+            [ ("PARSE-ARGV!", TC.Forall S.empty [] Ty.TyUnit)
+            , ("FLAG-VALUE", TC.Forall S.empty [] Ty.TyBool)
             ])
           imports =
             [ CST.Import "CLI" "CLI" ["PARSE-ARGV!", "FLAG-VALUE"]

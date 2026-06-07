@@ -88,9 +88,9 @@ compileTimeBuiltins = M.fromList
   , ("SYNTAX-NUMBER?", syntaxFun [Ty.TySyntax] Ty.TyBool)
   , ("SYNTAX-BOOL?", syntaxFun [Ty.TySyntax] Ty.TyBool)
   , ("SYNTAX-TYPE?", syntaxFun [Ty.TySyntax] Ty.TyBool)
-  , ("EQ", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0, Ty.TyVar 0] Ty.TyBool))
-  , ("ERROR", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyStr] (Ty.TyVar 0)))
-  , ("SYNTAX-LIFT", TC.Forall (S.singleton 0) (Ty.TyFun [Ty.TyVar 0] Ty.TySyntax))
+  , ("EQ", TC.Forall (S.singleton 0) [] (Ty.TyFun [Ty.TyVar 0, Ty.TyVar 0] Ty.TyBool))
+  , ("ERROR", TC.Forall (S.singleton 0) [] (Ty.TyFun [Ty.TyStr] (Ty.TyVar 0)))
+  , ("SYNTAX-LIFT", TC.Forall (S.singleton 0) [] (Ty.TyFun [Ty.TyVar 0] Ty.TySyntax))
   , ("SYNTAX-SYMBOL", syntaxFun [Ty.TyStr] Ty.TySyntax)
   , ("SYNTAX-RAW-SYMBOL", syntaxFun [Ty.TyStr] Ty.TySyntax)
   , ("__MODULE-SYMBOL", syntaxFun [Ty.TyStr, Ty.TyStr] Ty.TySyntax)
@@ -101,7 +101,7 @@ compileTimeBuiltins = M.fromList
   , ("SYNTAX-USYM", syntaxFun [Ty.TyStr] Ty.TySyntax)
   , ("SYNTAX-RX", syntaxFun [Ty.TyStr, Ty.TyStr] Ty.TySyntax)
   , ("SYNTAX-TYPE", syntaxFun [Ty.TySyntax] Ty.TySyntax)
-  , ("SYNTAX-EMPTY", TC.Forall S.empty Ty.TySyntax)
+  , ("SYNTAX-EMPTY", TC.Forall S.empty [] Ty.TySyntax)
   , ("SYNTAX-CONS", syntaxFun [Ty.TySyntax, Ty.TySyntax] Ty.TySyntax)
   , ("SYNTAX-APPEND", syntaxFun [Ty.TySyntax, Ty.TySyntax] Ty.TySyntax)
   , ("SYNTAX-INT-VALUE", syntaxFun [Ty.TySyntax] Ty.TyInt)
@@ -118,7 +118,7 @@ compileTimeBuiltins = M.fromList
   , ("RX-CAPTURES", syntaxFun [Ty.TyRx, Ty.TyStr] (Ty.TyCon "LIST" [Ty.TyStr]))
   ]
   where
-    syntaxFun args ret = TC.Forall S.empty (Ty.TyFun args ret)
+    syntaxFun args ret = TC.Forall S.empty [] (Ty.TyFun args ret)
 
 primitiveState :: CompileState
 primitiveState =
@@ -246,7 +246,7 @@ collectDeclarationExports envs typed =
       | Loc.Located _ (Ty.Typed _ (TC.TRFFIStruct name fields)) <- typed
       ]
     ffiEnumCtx = M.fromList
-      [ (name, TC.Forall S.empty Ty.TyInt)
+      [ (name, TC.Forall S.empty [] Ty.TyInt)
       | Loc.Located _ (Ty.Typed _ (TC.TRFFIEnum _ variants)) <- typed
       , (name, _) <- variants
       ]
@@ -763,7 +763,7 @@ matchClause clause args = go (mcParams clause) args M.empty
 compileMacroBody :: CompileState -> [MacroParam] -> SExpr.SExpr -> Either String TC.TRExpr
 compileMacroBody st params template = do
   expr <- firstLeft SExpr.ceMsg (SExpr.toCompileExpr template)
-  let paramCtx = M.fromList [(name, TC.Forall S.empty Ty.TySyntax) | name <- macroParamNames params]
+  let paramCtx = M.fromList [(name, TC.Forall S.empty [] Ty.TySyntax) | name <- macroParamNames params]
       ctx = M.union paramCtx (csCtCtx st)
       resolveScope = M.keysSet ctx
   resolved <- firstLeft renderResolveErrs (Resolve.resolveWith resolveScope M.empty [expr])
