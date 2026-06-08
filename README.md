@@ -70,7 +70,9 @@ cabal run pllisp -- repl example-programs/valid/typeclasses.pllisp
 ```
 
 The entry file can use any filename you pass on the command line. Imported
-modules are different: they are resolved as exact `MODULE.pll` filenames.
+modules are different: they resolve from module names to `.pll` paths.
+Flat modules still work as `MATH -> MATH.pll`. hierarchical modules now work
+too, for example `FOO.BAR.BAZ -> FOO/BAR/BAZ.pll`.
 
 ### Try the Example Programs
 
@@ -88,9 +90,10 @@ Good starting points:
 - `example-programs/valid/records.pllisp`
 - `example-programs/modules/valid/qualified-access/main.pllisp`
 
-Imported support files must use the module filename rule. For example, a main
-file can be named `main.pllisp`, but an imported `MATH` module must live in
-`MATH.pll`.
+Imported support files must use the module path rule. For example, a main file
+can be named `main.pllisp`, but an imported `MATH` module must live in
+`MATH.pll`, and an imported `FOO.BAR.BAZ` module must live in
+`FOO/BAR/BAZ.pll`.
 
 ### Run Tests
 

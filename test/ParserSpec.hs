@@ -249,6 +249,11 @@ spec = do
       CST.progName prog `shouldBe` Just "FOO"
       CST.progExprs prog `shouldBe` []
 
+    it "parses hierarchical module name" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(module Foo.Bar.Baz)"
+      CST.progName prog `shouldBe` Just "FOO.BAR.BAZ"
+      CST.progExprs prog `shouldBe` []
+
     it "no module declaration gives Nothing" $ do
       prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "42"
       CST.progName prog `shouldBe` Nothing
@@ -265,6 +270,13 @@ spec = do
       let imp = head (CST.progImports prog)
       CST.impModule imp `shouldBe` "FOO"
       CST.impAlias imp `shouldBe` "FOO"
+      CST.impUnqual imp `shouldBe` []
+
+    it "parses hierarchical import" $ do
+      prog <- either (fail . show) pure $ Parser.parseProgram "<test>" "(import Foo.Bar.Baz)"
+      let imp = head (CST.progImports prog)
+      CST.impModule imp `shouldBe` "FOO.BAR.BAZ"
+      CST.impAlias imp `shouldBe` "FOO.BAR.BAZ"
       CST.impUnqual imp `shouldBe` []
 
     it "parses import with unqualified symbols" $ do
@@ -301,6 +313,10 @@ spec = do
     it "parses Foo.bar as qualified symbol" $ do
       r <- either fail pure $ parseOne "Foo.bar"
       r `shouldBe` CST.ExprSym "FOO.BAR"
+
+    it "parses Foo.Bar.baz as hierarchical qualified symbol" $ do
+      r <- either fail pure $ parseOne "Foo.Bar.baz"
+      r `shouldBe` CST.ExprSym "FOO.BAR.BAZ"
 
     it "plain symbol still works" $ do
       r <- either fail pure $ parseOne "x"

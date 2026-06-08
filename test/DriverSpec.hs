@@ -71,6 +71,32 @@ spec = do
             ]) $ \fp ->
               Driver.runFiles [fp] `shouldReturn` ExitSuccess
 
+    it "loads hierarchical modules from nested directories" $
+      withTempModuleProject
+        [ ("FOO/BAR/BAZ.pll", unlines
+            [ "(module FOO.BAR.BAZ)"
+            , "(val answer 42)"
+            ])
+        ]
+        (unlines
+          [ "(import FOO.BAR.BAZ B)"
+          , "(print (int-to-str B.answer))"
+          ])
+        $ \fp -> Driver.runFiles [fp] `shouldReturn` ExitSuccess
+
+    it "rejects imported hierarchical modules whose declared name does not match their path" $
+      withTempModuleProject
+        [ ("FOO/BAR/BAZ.pll", unlines
+            [ "(module FOO.BAR.QUX)"
+            , "(val answer 42)"
+            ])
+        ]
+        (unlines
+          [ "(import FOO.BAR.BAZ B)"
+          , "(print (int-to-str B.answer))"
+          ])
+        $ \fp -> Driver.runFiles [fp] `shouldReturn` ExitFailure 1
+
     it "rejects malformed module declarations" $
       withTempSource "bad-module.pll" "(module)" $ \fp ->
         Driver.runFiles [fp] `shouldReturn` ExitFailure 1
@@ -190,7 +216,7 @@ withTempModuleProject files mainSrc action = do
   createDirectoryIfMissing True dir
   bracket (makeRunDir dir) removePathForcibly $ \runDir -> do
     preloadStdlib runDir
-    mapM_ (\(name, src) -> T.IO.writeFile (runDir </> name) (T.pack src)) files
+    mapM_ (writeModuleFile runDir) files
     let mainPath = runDir </> "main.pllisp"
     T.IO.writeFile mainPath (T.pack mainSrc)
     action mainPath
@@ -199,6 +225,10 @@ withTempModuleProject files mainSrc action = do
       let runDir = base </> "modules"
       createDirectoryIfMissing True runDir
       pure runDir
+
+    writeModuleFile runDir (name, src) = do
+      createDirectoryIfMissing True (takeDirectory (runDir </> name))
+      T.IO.writeFile (runDir </> name) (T.pack src)
 
 preloadStdlib :: FilePath -> IO ()
 preloadStdlib runDir = do

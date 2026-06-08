@@ -1,0 +1,2 @@
+(module FOO.BAR.BAZ)
+(val answer 42)

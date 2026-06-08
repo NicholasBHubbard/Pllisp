@@ -641,6 +641,12 @@ spec = do
       length imps `shouldBe` 1
       CST.impModule (head imps) `shouldBe` "FOO"
 
+    it "extracts hierarchical import from raw sexprs" $ do
+      sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>" "(import Foo.Bar.Baz)"
+      let imps = SExpr.preScanImports sexprs
+      length imps `shouldBe` 1
+      CST.impModule (head imps) `shouldBe` "FOO.BAR.BAZ"
+
     it "extracts import with unqualified names" $ do
       sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>" "(import Bar (x y))"
       let imps = SExpr.preScanImports sexprs
@@ -666,6 +672,10 @@ spec = do
       let imps = SExpr.preScanImports sexprs
       length imps `shouldBe` 1
       CST.impModule (head imps) `shouldBe` "BAR"
+
+    it "extracts hierarchical module name" $ do
+      sexprs <- either (fail . show) pure $ Parser.parseSExprs "<test>" "(module Foo.Bar.Baz) 42"
+      SExpr.preScanModuleName sexprs `shouldBe` Just "FOO.BAR.BAZ"
 
   describe "uninterned symbols" $ do
     it "parses :foo as SUSym" $ do

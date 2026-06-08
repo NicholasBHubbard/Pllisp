@@ -1,0 +1,2 @@
+(import FOO.BAR.BAZ B)
+(print (int-to-str B.answer))

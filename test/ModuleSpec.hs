@@ -309,6 +309,12 @@ spec = do
     it "handles path in filename" $ do
       Mod.validateModuleName "FOO" "src/Foo.pll" `shouldBe` Nothing
 
+    it "accepts matching hierarchical name and path" $ do
+      Mod.validateModuleName "FOO.BAR.BAZ" "src/Foo/Bar/Baz.pll" `shouldBe` Nothing
+
+    it "accepts matching hierarchical name in pllisp file" $ do
+      Mod.validateModuleName "FOO.BAR.BAZ" "src/Foo/Bar/Baz.pllisp" `shouldBe` Nothing
+
 -- Helpers
 
 desugar :: T.Text -> CST.CST

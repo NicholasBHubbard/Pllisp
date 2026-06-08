@@ -36,10 +36,38 @@ MATH.pll
 Important distinction:
 
 - the entry file can have any filename you pass to the CLI
-- imported support files must be named exactly `MODULE.pll`
+- imported support files must match their module path as `.pll` files
 
 On a case-sensitive filesystem, `(import MATH)` looks for `MATH.pll`, not
 `math.pll`.
+
+Pllisp supports hierarchical modules through dotted names and nested
+directories. For example,
+`(import FOO.BAR.BAZ)` looks for `FOO/BAR/BAZ.pll`.
+
+A hierarchical layout looks like this:
+
+```text
+main.pllisp
+FOO/
+  BAR/
+    BAZ.pll
+```
+
+`main.pllisp`:
+
+```lisp
+(import FOO.BAR.BAZ)
+(print (int-to-str (FOO.BAR.BAZ.answer)))
+```
+
+`FOO/BAR/BAZ.pll`:
+
+```lisp
+(module FOO.BAR.BAZ)
+
+(val answer 42)
+```
 
 ## Declaring a Module
 
@@ -49,16 +77,23 @@ Use:
 (module MATH)
 ```
 
+Hierarchical modules declare their full dotted name:
+
+```lisp
+(module FOO.BAR.BAZ)
+```
+
 A file may place its `module` declaration anywhere, but keeping it at the top
 is the least confusing style.
 
 For the main entry file, if you do write a `module` declaration, its name must
-match the file basename case-insensitively.
+match the file path case-insensitively.
 
 Examples:
 
 - `Foo.pll` may declare `(module FOO)`
 - `src/Foo.pll` may declare `(module FOO)`
+- `src/Foo/Bar/Baz.pll` may declare `(module FOO.BAR.BAZ)`
 - `Bar.pll` may not declare `(module FOO)`
 
 ## Imports
@@ -73,6 +108,8 @@ Supported forms:
 (import MATH (square))     # also bring square into scope
 (import MATH M)            # alias: M.square
 (import MATH M (square))   # alias + unqualified import
+(import FOO.BAR.BAZ)       # hierarchical qualifier: FOO.BAR.BAZ.answer
+(import FOO.BAR.BAZ B)     # alias for a hierarchical module
 ```
 
 ### Qualified Access

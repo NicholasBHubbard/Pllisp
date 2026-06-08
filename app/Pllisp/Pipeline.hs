@@ -16,7 +16,7 @@ module Pllisp.Pipeline
   ) where
 
 import System.Directory (doesFileExist)
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath (joinPath, takeDirectory, (</>))
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -204,13 +204,16 @@ scanAllModules searchDir stdlibDir rootImports =
                 Left err ->
                   pure (Left ("parse error in " ++ T.unpack modName ++ ": " ++ MP.errorBundlePretty err))
                 Right sexprs -> do
-                  let subImports = SExpr.preScanImports sexprs
-                      info = ModuleInfo modPath sexprs subImports
-                      visited' = S.insert modName visited
-                      acc' = M.insert modName info acc
-                      modDir = takeDirectory modPath
-                      newItems = [(imp, modDir) | imp <- subImports]
-                  go visited' acc' (rest ++ newItems)
+                  case SExpr.preScanModuleName sexprs >>= (`Mod.validateModuleName` modPath) of
+                    Just err -> pure (Left err)
+                    Nothing -> do
+                      let subImports = SExpr.preScanImports sexprs
+                          info = ModuleInfo modPath sexprs subImports
+                          visited' = S.insert modName visited
+                          acc' = M.insert modName info acc
+                          modDir = takeDirectory modPath
+                          newItems = [(imp, modDir) | imp <- subImports]
+                      go visited' acc' (rest ++ newItems)
 
 expandModulesFrom
   :: M.Map CST.Symbol MacroExpand.CompileState
@@ -366,11 +369,15 @@ dependencyMap existing moduleInfos =
 
 findModuleFile :: FilePath -> FilePath -> CST.Symbol -> IO (Maybe FilePath)
 findModuleFile searchDir stdlibDir modName = do
-  let localPath = searchDir </> T.unpack modName ++ ".pll"
+  let relPath = moduleRelativePath modName
+      localPath = searchDir </> relPath
   localExists <- doesFileExist localPath
   if localExists
     then pure (Just localPath)
     else do
-      let stdlibPath = stdlibDir </> T.unpack modName ++ ".pll"
+      let stdlibPath = stdlibDir </> relPath
       stdlibExists <- doesFileExist stdlibPath
       pure (if stdlibExists then Just stdlibPath else Nothing)
+
+moduleRelativePath :: CST.Symbol -> FilePath
+moduleRelativePath modName = joinPath (map T.unpack (T.splitOn "." modName)) ++ ".pll"

@@ -297,11 +297,7 @@ tsymbolParser = MP.label "typed symbol" $ MP.choice
 
 symbolParser :: Parser CST.Symbol
 symbolParser = MP.label "symbol" $ lexeme $ do
-  s <- rawIdent
-  mDot <- MP.optional (MP.C.char '.' *> rawIdent)
-  let sym = case mDot of
-        Nothing -> s
-        Just q  -> s <> "." <> q
+  sym <- dottedIdentParser
   if sym `elem` keywords
     then fail "reserved word"
     else pure sym
@@ -410,12 +406,7 @@ sexprAtomParser = MP.label "atom" $ lexeme $ arrowOp <|> dotAccessor <|> regular
       _ <- MP.C.char '.'
       s <- rawIdent
       pure ("." <> s)
-    regularAtom = do
-      s <- rawIdent
-      mDot <- MP.optional (MP.C.char '.' *> rawIdent)
-      pure $ case mDot of
-        Nothing -> s
-        Just q  -> s <> "." <> q
+    regularAtom = dottedIdentParser
 
 sexprQuasiParser :: Parser SExpr.SExprF
 sexprQuasiParser = do
@@ -431,6 +422,12 @@ sexprSpliceParser :: Parser SExpr.SExprF
 sexprSpliceParser = do
   _ <- MP.C.string ",@"
   SExpr.SSplice <$> sexprParser
+
+dottedIdentParser :: Parser T.Text
+dottedIdentParser = do
+  first <- rawIdent
+  rest <- MP.many (MP.C.char '.' *> rawIdent)
+  pure (T.intercalate "." (first : rest))
 
 sexprTypeParser' :: Parser SExpr.SExprF
 sexprTypeParser' = do

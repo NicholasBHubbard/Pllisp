@@ -64,7 +64,8 @@ Examples:
 
 The REPL uses the normal compiler pipeline. `(import MODULE)` works the same
 way it does in regular source files, including aliases and unqualified imports.
-Module filenames still have to follow the exact `MODULE.pll` rule.
+Module files still follow the normal path rule: `MATH` loads `MATH.pll`, and
+hierarchical module paths like `FOO.BAR.BAZ` load `FOO/BAR/BAZ.pll`.
 
 Use `:load FILE` when you want to bring in a whole script with ordinary
 top-level forms. Use `(import MODULE)` when you want module-style dependencies

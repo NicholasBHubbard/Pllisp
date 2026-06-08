@@ -10,10 +10,11 @@ import qualified Pllisp.SrcLoc   as Loc
 import qualified Pllisp.Type     as Ty
 import qualified Pllisp.TypeCheck as TC
 
+import           Data.List       (isSuffixOf)
 import qualified Data.Map.Strict as M
 import qualified Data.Set        as S
 import qualified Data.Text       as T
-import           System.FilePath (takeBaseName, takeFileName)
+import           System.FilePath (dropExtension, splitDirectories)
 
 -- TOP-LEVEL DESUGARING
 
@@ -750,7 +751,10 @@ dependencyOrder deps = go S.empty S.empty (M.keys deps) []
 -- Returns Nothing on success, Just error message on mismatch.
 validateModuleName :: CST.Symbol -> FilePath -> Maybe String
 validateModuleName name fp =
-  let baseName = T.toUpper (T.pack (takeBaseName (takeFileName fp)))
-  in if name == baseName
+  let expectedSegs = map normalizeSeg (T.splitOn "." name)
+      actualSegs = map normalizeSeg (map T.pack (filter (not . null) (splitDirectories (dropExtension fp))))
+  in if expectedSegs `isSuffixOf` actualSegs
      then Nothing
      else Just ("module name " ++ T.unpack name ++ " does not match filename " ++ fp)
+  where
+    normalizeSeg = T.unpack . T.toUpper

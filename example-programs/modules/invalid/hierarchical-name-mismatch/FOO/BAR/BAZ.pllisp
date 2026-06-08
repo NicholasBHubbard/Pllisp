@@ -1,0 +1,2 @@
+(module FOO.BAR.QUX)
+(val answer 42)

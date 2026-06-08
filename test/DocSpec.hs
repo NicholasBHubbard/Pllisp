@@ -30,6 +30,29 @@ spec = do
         , "The REPL does not automatically print arbitrary values."
         ]
 
+    it "documents hierarchical module paths" $ do
+      readme <- T.IO.readFile "README.md"
+      mapM_ (readme `shouldContainText`)
+        [ "hierarchical"
+        , "`FOO.BAR.BAZ`"
+        , "`FOO/BAR/BAZ.pll`"
+        ]
+
+      modulesDoc <- T.IO.readFile "doc/modules.md"
+      mapM_ (modulesDoc `shouldContainText`)
+        [ "hierarchical modules"
+        , "(module FOO.BAR.BAZ)"
+        , "(import FOO.BAR.BAZ)"
+        , "`FOO/BAR/BAZ.pll`"
+        ]
+
+      replDoc <- T.IO.readFile "doc/repl.md"
+      mapM_ (replDoc `shouldContainText`)
+        [ "hierarchical module paths"
+        , "`FOO.BAR.BAZ`"
+        , "`FOO/BAR/BAZ.pll`"
+        ]
+
     it "documents SPLICE-TOPLEVEL as an internal top-level macro mechanism" $ do
       macrosDoc <- T.IO.readFile "doc/macros.md"
       mapM_ (macrosDoc `shouldContainText`)
