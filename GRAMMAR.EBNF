@@ -1,31 +1,47 @@
-program      = expression , { expression } ;
+program          = { expression } ;
 
-expression   = left-paren , identifier , { whitespace , ( symbol | expression ) } , right-paren ;
+type-expression  = left-paren , "type" , whitespace , typename , { whitespace , type-parameter } , right-paren ;
 
-symbol       = identifier | number | string ;
+value-expression = left-paren , identifier , { whitespace , ( value-parameter | value-expression ) } , right-paren ;
 
-identifier   = ( underscore | letter ) , { underscore | letter | digit } ;
+reserved         = "type" | "mac" | "lam" | "let" ;
 
-number       = integer | float ;
+non-reserved     = ? identifier that is not reserved ? ;
 
-integer      = { digit } ;
+type-parameter   = typename | lowercase ;
 
-float        = integer , "." , integer ;
+direct-parameter = non-reserved | number | string ;
 
-string       = quote , { ? character besides quote ? | "\" , quote } , quote ;
+symbol           = identifier | number | string ;
 
-right-paren  = ")" ;
+identifier       = ( lowercase | "_" ) , { letter | digit | "_" } ;
 
-left-paren   = "(" ;
+typename         = uppercase , { letter | digit } ;
 
-quote        = '"' ;
+number           = integer | float ;
 
-letter       = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
+integer          = { digit } ;
 
-digit        = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+float            = integer , "." , integer ;
 
-whitespace   = ( " " | "\t" | "\n" | "\r" ) , { whitespace } ;
+string           = quote , { ? character besides quote ? | "\" , quote } , quote ;
 
-empty        = "" ;
+right-paren      = ")" ;
+
+left-paren       = "(" ;
+
+quote            = '"' ;
+
+digit            = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+
+letter           = uppercase | lowercase ;
+
+uppercase        = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | 
+
+lowercase        = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
+
+whitespace       = ( " " | "\t" | "\n" | "\r" ) , { whitespace } ;
+
+empty            = "" ;
        
-character    = "" | " " | "\t" | "\n" | "\r" | "\f" | "\b" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "!" | "@" | "#" | "$" | "%" | "^" | "&" | "*" | "(" | ")" | "-" | "_" | "+" | "=" ;
+character        = "" | " " | "\t" | "\n" | "\r" | "\f" | "\b" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "!" | "@" | "#" | "$" | "%" | "^" | "&" | "*" | "(" | ")" | "-" | "_" | "+" | "=" ;
