@@ -1,3 +1,0 @@
-(module MIDDLE)
-(import BASE (double))
-(fun quadruple (x) (double (double x)))

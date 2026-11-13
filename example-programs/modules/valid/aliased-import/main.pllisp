@@ -1,3 +1,0 @@
-(import MATH M)
-(print (int-to-str (M.square 4)))
-(print (int-to-str (M.cube 3)))

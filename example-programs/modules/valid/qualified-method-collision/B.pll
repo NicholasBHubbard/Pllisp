@@ -1,5 +1,0 @@
-(module B)
-(class SHOWSTR () (a)
-  (render %a %STR))
-(inst SHOWSTR %STR
-  (render (lam ((x %STR)) x)))

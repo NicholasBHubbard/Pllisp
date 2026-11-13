@@ -1,4 +1,0 @@
-(module STATE)
-
-(val banner "ready")
-(var counter 41)

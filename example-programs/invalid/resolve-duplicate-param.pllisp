@@ -1,2 +1,0 @@
-# Duplicate lambda parameter
-(lam (x x) x)

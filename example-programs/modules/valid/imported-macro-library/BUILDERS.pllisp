@@ -1,7 +1,0 @@
-(module BUILDERS)
-
-(eval-when (:compile-toplevel)
-  (let ((emit-double-print
-          (lam (expr)
-            `(print (int-to-str (add ,expr ,expr))))))
-    emit-double-print))

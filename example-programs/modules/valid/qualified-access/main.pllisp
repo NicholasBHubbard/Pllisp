@@ -1,2 +1,0 @@
-(import MATH)
-(print (int-to-str (MATH.square 5)))

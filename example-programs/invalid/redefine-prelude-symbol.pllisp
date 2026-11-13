@@ -1,1 +1,0 @@
-(fun just ((x %INT)) x)

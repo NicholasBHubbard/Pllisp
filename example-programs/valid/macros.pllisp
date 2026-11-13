@@ -1,9 +1,0 @@
-# Custom macros
-
-# times: repeat a body expression n times
-(mac times (n body)
-  (if (eq (syntax-int-value n) 0)
-    `unit
-    `(progn ,body (times ,(syntax-int (sub (syntax-int-value n) 1)) ,body))))
-
-(times 3 (print "hello"))

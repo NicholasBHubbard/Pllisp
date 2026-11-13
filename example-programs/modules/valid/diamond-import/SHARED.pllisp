@@ -1,2 +1,0 @@
-(module SHARED)
-(fun inc (x) (add x 1))

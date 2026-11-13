@@ -1,3 +1,0 @@
-# Parameter annotated as %INT but used as %STR
-(let ((f (lam ((x %INT)) (concat x "!"))))
-  (print (f 42)))

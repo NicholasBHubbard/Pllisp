@@ -1,3 +1,0 @@
-# TOOLS exports real-fn, not fake-fn; this should fail even though fake-fn is unused
-(import TOOLS (fake-fn))
-(print "ok")

@@ -1,3 +1,0 @@
-(import HELPER (double triple))
-(print (int-to-str (double 5)))
-(print (int-to-str (triple 5)))

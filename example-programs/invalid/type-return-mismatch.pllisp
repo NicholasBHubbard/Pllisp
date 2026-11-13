@@ -1,3 +1,0 @@
-# Return type annotated as %STR but body returns %INT
-(let ((f (lam ((x %INT)) %STR x)))
-  (print (f 42)))

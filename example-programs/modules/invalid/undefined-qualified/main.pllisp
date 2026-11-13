@@ -1,3 +1,0 @@
-# THINGS exports real-fn, not fake-fn
-(import THINGS)
-(print (int-to-str (THINGS.fake-fn 5)))

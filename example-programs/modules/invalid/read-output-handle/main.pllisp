@@ -1,5 +1,0 @@
-(import FILEIO (open-out next-line))
-
-(case (open-out "/tmp/pllisp-fileio-invalid-out.txt")
-  ((Left err) unit)
-  ((Right fh) (next-line fh)))

@@ -1,5 +1,0 @@
-(import FILEIO (open-in write))
-
-(case (open-in "/tmp/pllisp-fileio-invalid.txt")
-  ((Left err) unit)
-  ((Right fh) (write fh "nope")))

@@ -1,3 +1,0 @@
-(import DISPLAY (display))
-(print (display 42))
-(print (display "hello"))

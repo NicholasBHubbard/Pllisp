@@ -1,4 +1,0 @@
-(import STATE (banner counter))
-
-(let ((_ (set! counter 1)))
-  (set! banner "nope"))

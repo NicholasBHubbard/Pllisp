@@ -1,3 +1,0 @@
-(module B)
-(import A)
-(fun from-b (x) (mul x 2))

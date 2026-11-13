@@ -1,3 +1,0 @@
-# Occurs check: f applied to itself creates infinite type
-(let ((f (lam (x) (f f))))
-  (f 1))

@@ -1,2 +1,0 @@
-# Bool passed to Int arithmetic
-(add true 1)

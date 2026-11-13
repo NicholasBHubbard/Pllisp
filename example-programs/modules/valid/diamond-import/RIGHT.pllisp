@@ -1,3 +1,0 @@
-(module RIGHT)
-(import SHARED (inc))
-(fun inc-thrice (x) (inc (inc (inc x))))

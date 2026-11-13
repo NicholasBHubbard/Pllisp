@@ -1,3 +1,0 @@
-(let ((b true))
-  (case b
-    (true 1)))
