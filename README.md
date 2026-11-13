@@ -1,6 +1,6 @@
 # pllisp
 
-A compiler for a Lisp language
+A compiler for a Lisp language.
 
 # AI
 
