@@ -1,47 +1,55 @@
-program          = { expression } ;
+program             = { expression } ;
 
-type-expression  = left-paren , "type" , whitespace , typename , { whitespace , type-parameter } , right-paren ;
+expression          = function-expression | value-expression ;
 
-value-expression = left-paren , identifier , { whitespace , ( value-parameter | value-expression ) } , right-paren ;
+function-expression = function-named | function-anonymous
 
-reserved         = "type" | "mac" | "lam" | "let" ;
+function-named      = lparen , "fun" , identifier , lambda-list , ( value-expression |  ) , rparen;
 
-non-reserved     = ? identifier that is not reserved ? ;
+function-anonymous  = lparen , "fun" , lambda-list , ( value-expression | function-anonymous ) , { value-expression | function-anonymous } , rparen ;
 
-type-parameter   = typename | lowercase ;
+value-expression    = immediate | function-call ;
 
-direct-parameter = non-reserved | number | string ;
+function-call       = lparen , ( identifier | function-anonymous ) , { function-argument } , rparen ;
 
-symbol           = identifier | number | string ;
+function-argument   = value-expression | function-anonymous ;
 
-identifier       = ( lowercase | "_" ) , { letter | digit | "_" } ;
+lambda-list         = lparen , { lambda-parameter } , rparen ;
 
-typename         = uppercase , { letter | digit } ;
+lambda-parameter    =  [ "?" ] , identifier ;
 
-number           = integer | float ;
+immediate           = number | string | identifier | function-anonymous ;
 
-integer          = { digit } ;
+reserved            = "type" | "fun" | "let" ;
 
-float            = integer , "." , integer ;
+identifier          = ? identifier_ that is not reserved ? ;
 
-string           = quote , { ? character besides quote ? | "\" , quote } , quote ;
+identifier_         = ( lowercase | "_" ) , { letter | digit | "_" } ;
 
-right-paren      = ")" ;
+string              = '"' , { string-character | escape-sequence } , '"' ;
 
-left-paren       = "(" ;
+string-character    = ? any character except '"', "\" ? ;
 
-quote            = '"' ;
+escape-sequence     = "\" , ( '"' | "\" | "n" | "r" | "t" ) ;
 
-digit            = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+number              = integer | float ;
 
-letter           = uppercase | lowercase ;
+integer             = digit , { digit } ;
 
-uppercase        = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | 
+float               = integer , "." , integer ;
 
-lowercase        = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
+rparen              = ")" ;
 
-whitespace       = ( " " | "\t" | "\n" | "\r" ) , { whitespace } ;
+lparen              = "(" ;
 
-empty            = "" ;
-       
-character        = "" | " " | "\t" | "\n" | "\r" | "\f" | "\b" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "!" | "@" | "#" | "$" | "%" | "^" | "&" | "*" | "(" | ")" | "-" | "_" | "+" | "=" ;
+digit               = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+
+letter              = uppercase | lowercase ;
+
+uppercase           = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
+
+lowercase           = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
+
+ws                  = ( " " | "\t" | "\n" | "\r" ) , { ws } ;
+
+character           = " " | "\t" | "\n" | "\r" | "\f" | "\b" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "!" | "@" | "#" | "$" | "%" | "^" | "&" | "*" | "(" | ")" | "-" | "_" | "+" | "=" ;
