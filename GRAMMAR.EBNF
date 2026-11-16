@@ -12,8 +12,7 @@ function-anonymous  = lparen , "fun" , lambda-list , value-expression , { value-
 
 function-call       = function-call = lparen , value-expression , { value-expression } , rparen ;
 
-let-expression      = lparen , "let" , lparen , identifier , expression , rparen ,
-                      expression , rparen ;
+let-expression      = lparen , "let" , lparen , identifier , expression , rparen , expression , rparen ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 
