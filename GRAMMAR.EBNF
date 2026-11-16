@@ -1,38 +1,32 @@
 program             = { expression } ;
 
-expression          = function-expression | value-expression;
+expression          = function-named | value-expression ;
 
-function-expression = function-named | function-anonymous
+value-expression    = immediate | function-anonymous | function-call | let-expression ;
 
-function-named      = lparen , "fun" , identifier , lambda-list , ( value-expression |  ) , rparen;
+immediate           = number | string | identifier ;
 
-function-anonymous  = lparen , "fun" , lambda-list , ( value-expression | function-anonymous ) , { value-expression | function-anonymous } , rparen ;
+function-named      = lparen , "fun" , identifier , lambda-list ,
+                      [ value-expression ] , rparen ;
 
-let-expression      = lparen , "let" , lparen , identifier , expression , expression ;
+function-anonymous  = lparen , "fun" , lambda-list ,
+                      value-expression , { value-expression } , rparen ;
 
-value-expression    = immediate | function-call | let-expression ;
+function-call       = lparen , ( identifier | function-anonymous ) ,
+                      { value-expression } , rparen ;
 
-function-call       = lparen , ( identifier | function-anonymous ) , { function-argument } , rparen ;
-
-function-argument   = value-expression | function-anonymous ;
+let-expression      = lparen , "let" , lparen , identifier , expression , rparen ,
+                      expression , rparen ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 
-lambda-parameter    =  [ "?" ] , identifier ;
+lambda-parameter    = [ "?" ] , identifier ;
 
-immediate           = number | string | identifier | function-anonymous ;
+identifier          = ? an identifier-name whose full spelling is not reserved ? ;
+
+identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
 
 reserved            = "type" | "fun" | "let" ;
-
-identifier          = ? identifier_ that is not reserved ? ;
-
-identifier_         = ( lowercase | "_" ) , { letter | digit | "_" } ;
-
-string              = '"' , { string-character | escape-sequence } , '"' ;
-
-string-character    = ? any character except '"', "\" ? ;
-
-escape-sequence     = "\" , ( '"' | "\" | "n" | "r" | "t" ) ;
 
 number              = integer | float ;
 
@@ -40,20 +34,25 @@ integer             = digit , { digit } ;
 
 float               = integer , "." , integer ;
 
-rparen              = ")" ;
+string              = quote , { string-character | escape-sequence } , quote ;
+
+string-character    = ? any character except double quote, backslash, CR, or LF ? ;
+
+escape-sequence     = backslash , ( quote | backslash | "n" | "r" | "t" ) ;
+
+quote               = '"' ;
+backslash           = ? U+005C REVERSE SOLIDUS ? ;
 
 lparen              = "(" ;
+rparen              = ")" ;
 
-digit               = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+letter              = lowercase | uppercase ;
+lowercase           = ? an ASCII letter from a through z ? ;
+uppercase           = ? an ASCII letter from A through Z ? ;
+digit               = ? an ASCII digit from 0 through 9 ? ;
 
-letter              = uppercase | lowercase ;
+ws                  = ws-char , { ws-char } ;
+ws-char             = " " | ? tab ? | ? carriage return ? | ? line feed ? ;
 
-uppercase           = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
-
-lowercase           = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
-
-ws                  = ( " " | "\t" | "\n" | "\r" ) , { ws } ;
-
-comment             = "#" , ? all chars to the end of the line ? ;
-
-character           = " " | "\t" | "\n" | "\r" | "\f" | "\b" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "!" | "@" | "#" | "$" | "%" | "^" | "&" | "*" | "(" | ")" | "-" | "_" | "+" | "=" ;
+comment             = "#" , { comment-character } ;
+comment-character   = ? any character except CR or LF ? ;
