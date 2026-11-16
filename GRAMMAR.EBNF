@@ -1,6 +1,6 @@
 program             = { expression } ;
 
-expression          = function-expression | value-expression ;
+expression          = function-expression | value-expression;
 
 function-expression = function-named | function-anonymous
 
@@ -8,7 +8,9 @@ function-named      = lparen , "fun" , identifier , lambda-list , ( value-expres
 
 function-anonymous  = lparen , "fun" , lambda-list , ( value-expression | function-anonymous ) , { value-expression | function-anonymous } , rparen ;
 
-value-expression    = immediate | function-call ;
+let-expression      = lparen , "let" , lparen , identifier , expression , expression ;
+
+value-expression    = immediate | function-call | let-expression ;
 
 function-call       = lparen , ( identifier | function-anonymous ) , { function-argument } , rparen ;
 

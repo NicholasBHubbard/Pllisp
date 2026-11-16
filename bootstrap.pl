@@ -51,10 +51,28 @@ sub lex {
 }
 
 sub parse {
-    my @parse_table = (
-
-    )
+    my @tokens = @_;
+    my %ast = _parse_program(@tokens);
+    return %ast;
 }
+
+sub _parse_program {
+    _parse_c_zero_or_more(&_parse_expression);
+}
+
+sub _parse_c_peeksym {
+    return $TOKENS[0];
+}
+
+sub _parse_c_consumesym {
+    return shift @TOKENS;
+}
+
+sub _parse_c_error {
+    $! = 1;
+    die "parse error: @_\n";
+}
+
 
 exit main(@ARGV);
 
