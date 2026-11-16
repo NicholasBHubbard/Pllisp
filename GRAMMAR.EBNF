@@ -6,14 +6,11 @@ value-expression    = immediate | function-anonymous | function-call | let-expre
 
 immediate           = number | string | identifier ;
 
-function-named      = lparen , "fun" , identifier , lambda-list ,
-                      [ value-expression ] , rparen ;
+function-named      = lparen , "fun" , identifier , lambda-list , [ value-expression ] , rparen ;
 
-function-anonymous  = lparen , "fun" , lambda-list ,
-                      value-expression , { value-expression } , rparen ;
+function-anonymous  = lparen , "fun" , lambda-list , value-expression , { value-expression } , rparen ;
 
-function-call       = lparen , ( identifier | function-anonymous ) ,
-                      { value-expression } , rparen ;
+function-call       = function-call = lparen , value-expression , { value-expression } , rparen ;
 
 let-expression      = lparen , "let" , lparen , identifier , expression , rparen ,
                       expression , rparen ;
