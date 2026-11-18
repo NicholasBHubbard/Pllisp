@@ -1,46 +1,44 @@
 program             = { expression } ;
 
-expression          = function-named | value-expression ;
+expression          = immediate | lparen , expression-list , rparen ;
+value-expression    = immediate | lparen , value-list , rparen ;
 
-value-expression    = immediate | function-anonymous | function-call | let-expression ;
+expression-list     = "fun" , ( named-tail | anonymous-tail )
+                    | let-form
+                    | call-form ;
+
+value-list          = "fun" , anonymous-tail
+                    | let-form
+                    | call-form ;
+
+named-tail          = identifier , lambda-list , [ value-expression ] ;
+anonymous-tail      = lambda-list , value-expression , { value-expression } ;
+
+lambda-list         = lparen , { lambda-parameter } , rparen ;
+lambda-parameter    = [ "?" ] , identifier ;
+
+let-form            = "let" , binding , expression ;
+binding             = lparen , identifier , expression , rparen ;
+
+call-form           = value-expression , { value-expression } ;
 
 immediate           = number | string | identifier ;
 
-function-named      = lparen , "fun" , identifier , lambda-list , [ value-expression ] , rparen ;
-
-function-anonymous  = lparen , "fun" , lambda-list , value-expression , { value-expression } , rparen ;
-
-function-call       = function-call = lparen , value-expression , { value-expression } , rparen ;
-
-let-expression      = lparen , "let" , lparen , identifier , expression , rparen , expression , rparen ;
-
-lambda-list         = lparen , { lambda-parameter } , rparen ;
-
-lambda-parameter    = [ "?" ] , identifier ;
-
-identifier          = ? an identifier-name whose full spelling is not reserved ? ;
-
+identifier          = identifier-name - reserved ;
 identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
-
 reserved            = "type" | "fun" | "let" ;
 
-number              = integer | float ;
-
-integer             = digit , { digit } ;
-
-float               = integer , "." , integer ;
+number              = digits , [ "." , digits ] ;
+digits              = digit , { digit } ;
 
 string              = quote , { string-character | escape-sequence } , quote ;
-
 string-character    = ? any character except double quote, backslash, CR, or LF ? ;
-
 escape-sequence     = backslash , ( quote | backslash | "n" | "r" | "t" ) ;
-
-quote               = '"' ;
-backslash           = ? U+005C REVERSE SOLIDUS ? ;
 
 lparen              = "(" ;
 rparen              = ")" ;
+quote               = '"' ;
+backslash           = '\' ;
 
 letter              = lowercase | uppercase ;
 lowercase           = ? an ASCII letter from a through z ? ;
