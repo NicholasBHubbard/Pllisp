@@ -13,11 +13,8 @@ value-list          = fun-anonymous
 
 fun                 = fun-named | fun-anonymous ;
 
-fun-named           = "fun" , fun-named-tail ;
-fun-anonymous       = "fun" , fun-anonymous-tail ;
-
-fun-named-tail      = identifier , lambda-list , [ value-expression ] ;
-fun-anonymous-tail  = lambda-list , value-expression , { value-expression } ;
+fun-named           = "fun" , identifier , lambda-list , [ value-expression ] ;
+fun-anonymous       = "fun" , lambda-list , value-expression , { value-expression } ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 lambda-parameter    = [ "?" ] , identifier ;
@@ -29,9 +26,9 @@ call-form           = value-expression , { value-expression } ;
 
 immediate           = number | string | identifier ;
 
-identifier          = identifier-name - reserved ;
+identifier          = identifier-name - keyword ;
 identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
-reserved            = "type" | "fun" | "let" ;
+keyword             = "type" | "fun" | "let" ;
 
 number              = digits , [ "." , digits ] ;
 digits              = digit , { digit } ;
