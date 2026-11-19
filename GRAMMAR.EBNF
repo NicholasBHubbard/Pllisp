@@ -24,7 +24,7 @@ binding             = lparen , identifier , expression , rparen ;
 
 call-form           = value-expression , { value-expression } ;
 
-immediate           = number | string | identifier ;
+immediate           = number | string ;
 
 identifier          = identifier-name - keyword ;
 identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
