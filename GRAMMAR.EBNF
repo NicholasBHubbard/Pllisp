@@ -11,7 +11,7 @@ value-list          = fun-anonymous
                     | let-form
                     | call-form ;
 
-fun                 = fun-names | fun-anonymous ;
+fun                 = fun-named | fun-anonymous ;
 
 fun-named           = "fun" , fun-named-tail ;
 fun-anonymous       = "fun" , fun-anonymous-tail ;
