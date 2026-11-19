@@ -3,13 +3,18 @@ program             = { expression } ;
 expression          = immediate | lparen , expression-list , rparen ;
 value-expression    = immediate | lparen , value-list , rparen ;
 
-expression-list     = "fun" , ( named-tail | anonymous-tail )
+expression-list     = fun-form
                     | let-form
                     | call-form ;
 
-value-list          = "fun" , anonymous-tail
+value-list          = anonymous-fun-form
                     | let-form
                     | call-form ;
+
+fun-form            = named-fun-form | anonymous-fun-form ;
+
+named-fun-form      = "fun" , named-tail ;
+anonymous-fun-form  = "fun" , anonymous-tail ;
 
 named-tail          = identifier , lambda-list , [ value-expression ] ;
 anonymous-tail      = lambda-list , value-expression , { value-expression } ;
