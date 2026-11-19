@@ -4,11 +4,11 @@ expression          = immediate | lparen , expression-list , rparen ;
 value-expression    = immediate | lparen , value-list , rparen ;
 
 expression-list     = fun
-                    | let-form
+                    | let
                     | call-form ;
 
 value-list          = fun-anonymous
-                    | let-form
+                    | let
                     | call-form ;
 
 fun                 = fun-named | fun-anonymous ;
@@ -19,8 +19,8 @@ fun-anonymous       = "fun" , lambda-list , value-expression , { value-expressio
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 lambda-parameter    = [ "?" ] , identifier ;
 
-let-form            = "let" , binding , expression ;
-binding             = lparen , identifier , expression , rparen ;
+let                 = "let" , let-binding , expression ;
+let-binding         = lparen , identifier , expression , rparen ;
 
 call-form           = value-expression , { value-expression } ;
 
