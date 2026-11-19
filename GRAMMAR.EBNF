@@ -3,21 +3,21 @@ program             = { expression } ;
 expression          = immediate | lparen , expression-list , rparen ;
 value-expression    = immediate | lparen , value-list , rparen ;
 
-expression-list     = fun-form
+expression-list     = fun
                     | let-form
                     | call-form ;
 
-value-list          = anonymous-fun-form
+value-list          = fun-anonymous
                     | let-form
                     | call-form ;
 
-fun-form            = named-fun-form | anonymous-fun-form ;
+fun                 = fun-names | fun-anonymous ;
 
-named-fun-form      = "fun" , named-fun-tail ;
-anonymous-fun-form  = "fun" , anonymous-fun-tail ;
+fun-named           = "fun" , fun-named-tail ;
+fun-anonymous       = "fun" , fun-anonymous-tail ;
 
-named-fun-tail          = identifier , lambda-list , [ value-expression ] ;
-anonymous-fun-tail      = lambda-list , value-expression , { value-expression } ;
+fun-named-tail      = identifier , lambda-list , [ value-expression ] ;
+fun-anonymous-tail  = lambda-list , value-expression , { value-expression } ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 lambda-parameter    = [ "?" ] , identifier ;
