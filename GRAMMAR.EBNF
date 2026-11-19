@@ -13,11 +13,11 @@ value-list          = anonymous-fun-form
 
 fun-form            = named-fun-form | anonymous-fun-form ;
 
-named-fun-form      = "fun" , named-tail ;
-anonymous-fun-form  = "fun" , anonymous-tail ;
+named-fun-form      = "fun" , named-fun-tail ;
+anonymous-fun-form  = "fun" , anonymous-fun-tail ;
 
-named-tail          = identifier , lambda-list , [ value-expression ] ;
-anonymous-tail      = lambda-list , value-expression , { value-expression } ;
+named-fun-tail          = identifier , lambda-list , [ value-expression ] ;
+anonymous-fun-tail      = lambda-list , value-expression , { value-expression } ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 lambda-parameter    = [ "?" ] , identifier ;
