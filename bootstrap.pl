@@ -38,32 +38,40 @@ sub lex {
         { TYPE => 'TOK_STRING',     RE => qr/"([^"\\\r\n]|\\["\\nrt])*"/ },
         { TYPE => 'TOK_FLOAT',      RE => qr/[0-9]+\.[0-9]+/             },
         { TYPE => 'TOK_INTEGER',    RE => qr/[0-9]+/                     },
-        { TYPE => 'TOK_KW_FUN',     RE => qr/fun/                        },
-        { TYPE => 'TOK_KW_LET',     RE => qr/let/                        },
-        { TYPE => 'TOK_KW_MATCH',   RE => qr/match/                      },
-        { TYPE => 'TOK_KW_TYPE',    RE => qr/type/                       },
+        { TYPE => 'TOK_KW_FUN',     RE => qr/fun\b/                      },
+        { TYPE => 'TOK_KW_LET',     RE => qr/let\b/                      },
+        { TYPE => 'TOK_KW_MATCH',   RE => qr/match\b/                    },
+        { TYPE => 'TOK_KW_TYPE',    RE => qr/type\b/                     },
         { TYPE => 'TOK_IDENTIFIER', RE => qr/[a-z_][a-zA-Z0-9_]*/        },
         { TYPE => 'TOK_TYPENAME',   RE => qr/[A-Z][a-zA-Z0-9_]*/         },
     );
 
+    pos($program) = 0;
     my @tokens;
-    for (pos($program) = 0; pos $program < length $program;) {
+  TOKEN: while (pos $program < length $program) {
+        next TOKEN if $program =~ /\G(?:[ \t\r\n]+|#[^\r\n]*)/gc;
+
         for my $rule (@token_table) {
-            next if $program =~ /\G(?:[ \t\r\n]+|#[^\r\n]*)/gc;
-            if ($program =~ /\G($rule->{RE})/gc) {
-                push @tokens, {
-                    TYPE => $rule->{TYPE},
-                    VAL  => $1 // '',
-                    SPAN => { START => $-[0], END => $-[0] + length $1 },
-                };
-                last;
-            }
+            next unless $program =~ /\G($rule->{RE})/gc;
+
+            push @tokens, {
+                TYPE  => $rule->{TYPE},
+                VAL   => $1,
+                SPAN  => { START => $-[0], END => $+[0] },
+                TOKEN => 1,
+            };
+
+            next TOKEN;
         }
+
+        die "lex error at offset ", pos($program), "\n";
     }
+
     push @tokens, {
-        TYPE => 'TOK_EOF',
-        VAL  => undef,
-        SPAN => { SPAN => { START => length $program, END => length $program } },
+        TYPE  => 'TOK_EOF',
+        VAL   => undef,
+        SPAN  => { START => length $program, END => length $program },
+        TOKEN => 1,
     };
 
     return @tokens;
@@ -81,23 +89,254 @@ sub new {
 
 sub parse {
     my ($self) = @_;
-    my @forms = $self->_p_program();
-    $self->_expect('TOK_EOF');
+    my @forms;
+    push @forms, $self->_p_form() until $self->_accept('TOK_EOF');
     return \@forms;
 }
 
-sub _p_program {
+sub _p_form {
     my ($self) = @_;
-    my @forms;
-    while (not $self->_peek('TOK_EOF')) {
-        push @forms, $self->_p_form();
+
+    return $self->_p_atom() unless $self->_accept('TOK_LPAREN');
+
+    my $node;
+    if ($self->_peek('TOK_KW_TYPE')) {
+        $node = $self->_p_type_declaration();
+    } elsif ($self->_peek('TOK_KW_FUN')) {
+        $node = $self->_p_fun();
+    } elsif ($self->_peek([qw(TOK_KW_LET TOK_KW_MATCH TOK_IDENTIFIER TOK_TYPENAME)])) {
+        $node = $self->_p_common_form();
+    } else {
+        $self->_error("expected 'type', 'fun', 'let', 'match', or a callee");
     }
-    return @forms;
+    $self->_expect('TOK_RPAREN');
+
+    return $node;
+}
+
+sub _p_expression {
+    my ($self) = @_;
+
+    return $self->_p_atom() unless $self->_accept('TOK_LPAREN');
+
+    my $node;
+    if ($self->_peek('TOK_KW_FUN')) {
+        $node = $self->_p_fun_anonymous();
+    } elsif ($self->_peek([qw(TOK_KW_LET TOK_KW_MATCH TOK_IDENTIFIER TOK_TYPENAME)])) {
+        $node = $self->_p_common_form();
+    } else {
+        $self->_error("expected 'fun', 'let', 'match', or a callee");
+    }
+
+    $self->_expect('TOK_RPAREN');
+    return $node;
+}
+
+sub _p_type_declaration {
+    my ($self) = @_;
+
+    $self->_expect('TOK_KW_TYPE');
+
+    my $has_params = $self->_accept('TOK_LPAREN');
+    my $name = $self->_expect('TOK_TYPENAME');
+    my @params;
+
+    if ($has_params) {
+        do {
+            push @params, $self->_expect('TOK_IDENTIFIER');
+        } until ($self->_accept('TOK_RPAREN'));
+    }
+
+    my @variants;
+    do {
+        $self->_expect('TOK_LPAREN');
+        my $constructor = $self->_expect('TOK_TYPENAME');
+
+        my @fields;
+        until ($self->_accept('TOK_RPAREN')) {
+            push @fields, $self->_p_type_expression();
+        }
+
+        push @variants, { NAME => $constructor, FIELDS => \@fields };
+    } while ($self->_peek('TOK_LPAREN'));
+
+    return {
+        TYPE_DECLARATION => {
+            NAME            => $name,
+            TYPE_PARAMETERS => \@params,
+            VARIANTS        => \@variants,
+        },
+    };
+}
+
+sub _p_type_expression {
+    my ($self) = @_;
+
+    if (my $name = $self->_accept('TOK_TYPENAME')) {
+        return { TYPE_NAME => $name };
+    } elsif (my $var = $self->_accept('TOK_IDENTIFIER')) {
+        return { TYPE_VARIABLE => $var };
+    } elsif ($self->_accept('TOK_LPAREN')) {
+        my $name = $self->_expect('TOK_TYPENAME');
+        my @args;
+        do {
+            push @args, $self->_p_type_expression();
+        } until ($self->_accept('TOK_RPAREN'));
+
+        return { TYPE_APPLICATION => { NAME => $name, ARGS => \@args } };
+    } else {
+        $self->_error('expected a type');
+    }
+}
+
+sub _p_common_form {
+    my ($self) = @_;
+
+    if ($self->_peek('TOK_KW_LET')) {
+        return $self->_p_let();
+    } elsif ($self->_peek('TOK_KW_MATCH')) {
+        return $self->_p_match();
+    } elsif ($self->_peek([qw(TOK_IDENTIFIER TOK_TYPENAME)])) {
+        return $self->_p_call();
+    } else {
+        $self->_error("expected 'let', 'match', or a callee");
+    }
+}
+
+sub _p_let {
+    my ($self) = @_;
+
+    $self->_expect('TOK_KW_LET');
+    $self->_expect('TOK_LPAREN');
+
+    my $name = $self->_expect('TOK_IDENTIFIER');
+    my $type;
+    $type = $self->_p_type_expression() if $self->_accept('TOK_COLON');
+
+    my $value = $self->_p_expression();
+    $self->_expect('TOK_RPAREN');
+
+    my $body = $self->_p_expression();
+    return {
+        LET => {
+            BINDING => { NAME => $name, TYPE => $type, VALUE => $value },
+            BODY    => $body,
+        },
+    };
+}
+
+sub _p_match {
+    my ($self) = @_;
+
+    $self->_expect('TOK_KW_MATCH');
+    my $subject = $self->_p_expression();
+
+    my @arms;
+    do {
+        $self->_expect('TOK_LPAREN'); # Start of arm
+        $self->_expect('TOK_LPAREN'); # Start of pattern
+
+        my $constructor = $self->_expect('TOK_TYPENAME');
+        my @bindings;
+        while (my $name = $self->_accept('TOK_IDENTIFIER')) {
+            push @bindings, $name;
+        }
+
+        $self->_expect('TOK_RPAREN'); # End of pattern
+        my $body = $self->_p_expression();
+        $self->_expect('TOK_RPAREN'); # End of arm
+
+        push @arms, {
+            PATTERN => { CONSTRUCTOR => $constructor, BINDINGS => \@bindings },
+            BODY    => $body,
+        };
+    } while ($self->_peek('TOK_LPAREN'));
+
+    return { MATCH => { SUBJECT => $subject, ARMS => \@arms } };
+}
+
+sub _p_call {
+    my ($self) = @_;
+
+    my $callee = $self->_expect([qw(TOK_IDENTIFIER TOK_TYPENAME)]);
+    my @args;
+
+    until ($self->_peek('TOK_RPAREN')) {
+        push @args, $self->_p_expression();
+    }
+
+    return { CALL => { CALLEE => $callee, ARGS => \@args } };
+}
+
+sub _p_fun {
+    my ($self) = @_;
+
+    if ($self->_peek('TOK_KW_FUN', 'TOK_LPAREN')) {
+        return $self->_p_fun_anonymous();
+    }
+
+    $self->_expect('TOK_KW_FUN');
+
+    if (my $name = $self->_accept('TOK_IDENTIFIER')) {
+        my $fun = $self->_p_fun_tail();
+        $fun->{NAME} = $name;
+        return { FUN_NAMED => $fun };
+    } else {
+        $self->_error("expected a function name or '('");
+    }
+}
+
+sub _p_fun_anonymous {
+    my ($self) = @_;
+    $self->_expect('TOK_KW_FUN');
+    return { FUN_ANONYMOUS => $self->_p_fun_tail() };
+}
+
+sub _p_fun_tail {
+    my ($self) = @_;
+
+    my $parameters = $self->_p_lambda_list();
+
+    my $type; if ($self->_accept('TOK_ARROW')) {
+        $type = $self->_p_type_expression();
+    }
+
+    my @body = ($self->_p_expression());
+    until ($self->_peek('TOK_RPAREN')) {
+        push @body, $self->_p_expression();
+    }
+
+    return {
+        PARAMETERS => $parameters,
+        RETURN_TYPE => $type,
+        BODY => \@body,
+    };
+}
+
+sub _p_lambda_list {
+    my ($self) = @_;
+
+    $self->_expect('TOK_LPAREN');
+
+    my @parameters;
+    until ($self->_accept('TOK_RPAREN')) {
+        my $identifier = $self->_expect('TOK_IDENTIFIER');
+        my $type; if ($self->_accept('TOK_COLON')) {
+            $type = $self->_p_type_expression();
+        }
+        push @parameters, { NAME => $identifier, TYPE => $type, };
+    }
+
+    return \@parameters;
 }
 
 sub _p_atom {
     my ($self) = @_;
-
+    if (my $token = $self->_accept([qw(TOK_IDENTIFIER TOK_INTEGER TOK_FLOAT TOK_STRING)])) {
+        return { ATOM => $token };
+    } else {
+        $self->_error();
+    }
 }
 
 sub _accept {
