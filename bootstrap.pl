@@ -81,24 +81,29 @@ sub new {
 
 sub parse {
     my ($self) = @_;
-    my @expressions = $self->_p_program();
+    my @forms = $self->_p_program();
     $self->_expect('TOK_EOF');
-    return \@expressions;
+    return \@forms;
 }
 
 sub _p_program {
     my ($self) = @_;
-    my @expressions;
+    my @forms;
     while (not $self->_peek('TOK_EOF')) {
-        push @expressions, $self->_p_expression();
+        push @forms, $self->_p_form();
     }
-    return @expressions;
+    return @forms;
+}
+
+sub _p_atom {
+    my ($self) = @_;
+
 }
 
 sub _accept {
     my ($self, @types) = @_;
     if (my $match = $self->_peek(@types)) {
-        $self->_consume(scalar @types || 1);
+        $self->{cursor} += (@types || 1);
         return $match;
     }
     return 0;
@@ -113,12 +118,6 @@ sub _expect {
         my @parts = map { ref($_) eq 'ARRAY' ? join(' or ', @$_) : $_ } @types;
         @parts ? 'expected ' . join(' then ', @parts) : 'expected a token';
     });
-}
-
-sub _consume {
-    my ($self, $n) = @_;
-    $self->{cursor} += $n // 1;
-    return undef;
 }
 
 sub _peek {
