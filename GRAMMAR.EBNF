@@ -5,11 +5,11 @@ value-expression    = immediate | lparen , value-list , rparen ;
 
 expression-list     = fun
                     | let
-                    | call-form ;
+                    | call ;
 
 value-list          = fun-anonymous
                     | let
-                    | call-form ;
+                    | call ;
 
 fun                 = fun-named | fun-anonymous ;
 
@@ -22,7 +22,7 @@ lambda-parameter    = [ "?" ] , identifier ;
 let                 = "let" , let-binding , expression ;
 let-binding         = lparen , identifier , expression , rparen ;
 
-call-form           = identifier , { value-expression } ;
+call                = identifier , { value-expression } ;
 
 atom                = immediate | identifier ;
 immediate           = number | string ;
