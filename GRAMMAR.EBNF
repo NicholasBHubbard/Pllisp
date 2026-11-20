@@ -22,7 +22,7 @@ lambda-parameter    = [ "?" ] , identifier ;
 let                 = "let" , let-binding , expression ;
 let-binding         = lparen , identifier , expression , rparen ;
 
-call-form           = value-expression , { value-expression } ;
+call-form           = identifier , { value-expression } ;
 
 immediate           = number | string ;
 
