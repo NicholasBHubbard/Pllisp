@@ -1,37 +1,49 @@
-program             = { expression } ;
+program             = { form } ;
 
-expression          = atom | lparen , expression-list , rparen ;
-value-expression    = atom | lparen , value-list , rparen ;
-
-expression-list     = fun
-                    | let
-                    | call ;
-
-value-list          = fun-anonymous
-                    | let
-                    | call ;
-
-fun                 = fun-named | fun-anonymous ;
-
-fun-named           = "fun" , identifier , lambda-list , function-body ;
-fun-anonymous       = "fun" , lambda-list , function-body ;
-
-function-body       = value-expression , { value-expression } ;
-
-lambda-list         = lparen , { lambda-parameter } , rparen ;
-lambda-parameter    = [ "?" ] , identifier ;
-
-let                 = "let" , let-binding , expression ;
-let-binding         = lparen , identifier , expression , rparen ;
-
-call                = identifier , { value-expression } ;
+form                = atom | lparen , ( type-declaration | fun | common-form ) , rparen ;
+expression          = atom | lparen , ( fun-anonymous | common-form ) , rparen ;
+common-form         = let | match | call ;
 
 atom                = immediate | identifier ;
 immediate           = number | string ;
+
+type-declaration    = "type" , type-head , variant , { variant } ;
+type-head           = type-name
+                    | lparen , type-name , type-variable , { type-variable } , rparen ;
+variant             = lparen , constructor-name , { type-expression } , rparen ;
+
+type-expression     = type-name
+                    | type-variable
+                    | lparen , type-name , type-expression , { type-expression } , rparen ;
+
+fun                 = "fun" , [ identifier ] , function-tail ;
+fun-anonymous       = "fun" , function-tail ;
+function-tail       = lambda-list , [ "->" , type-expression ] , function-body ;
+function-body       = expression , { expression } ;
+
+lambda-list         = lparen , { lambda-parameter } , rparen ;
+lambda-parameter    = identifier , [ ":" , type-expression ] ;
+
+let                 = "let" , let-binding , expression ;
+let-binding         = lparen , identifier , [ ":" , type-expression ] , expression , rparen ;
+
+match               = "match" , expression , match-arm , { match-arm } ;
+match-arm           = lparen , pattern , expression , rparen ;
+pattern             = lparen , constructor-name , { identifier } , rparen ;
+
+call                = callee , { expression } ;
+callee              = identifier | constructor-name ;
+
+type-name           = upper-name ;
+constructor-name    = upper-name ;
+type-variable       = identifier ;
+
+(* Lexer: skip whitespace and comments between tokens *)
+
 identifier          = identifier-name - keyword ;
 identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
-
-keyword             = "type" | "fun" | "let" ;
+upper-name          = uppercase , { letter | digit | "_" } ;
+keyword             = "fun" | "let" | "match" | "type" ;
 
 number              = digits , [ "." , digits ] ;
 digits              = digit , { digit } ;
@@ -50,8 +62,7 @@ lowercase           = ? an ASCII letter from a through z ? ;
 uppercase           = ? an ASCII letter from A through Z ? ;
 digit               = ? an ASCII digit from 0 through 9 ? ;
 
-ws                  = ws-char , { ws-char } ;
-ws-char             = " " | ? tab ? | ? carriage return ? | ? line feed ? ;
-
+ws                  = ws-character , { ws-character } ;
+ws-character        = " " | ? tab ? | ? carriage return ? | ? line feed ? ;
 comment             = "#" , { comment-character } ;
 comment-character   = ? any character except CR or LF ? ;
