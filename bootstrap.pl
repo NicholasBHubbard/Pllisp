@@ -112,7 +112,7 @@ sub _accept {
 sub _expect {
     my ($self, @types) = @_;
     if (my $match = $self->_accept(@types)) {
-        return $match
+        return $match;
     }
     $self->_error(do {
         my @parts = map { ref($_) eq 'ARRAY' ? join(' or ', @$_) : $_ } @types;
