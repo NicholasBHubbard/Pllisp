@@ -17,9 +17,9 @@ type-expression     = type-name
 
 (* Functions *)
 
-fun                 = "fun" , [ identifier ] , function-tail ;
-fun-anonymous       = "fun" , function-tail ;
-function-tail       = lambda-list , [ "->" , type-expression ] , function-body ;
+fun                 = "fun" , [ identifier ] , fun-tail ;
+fun-anonymous       = "fun" , fun-tail ;
+fun-tail            = lambda-list , [ "->" , type-expression ] , function-body ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 lambda-parameter    = identifier , [ ":" , type-expression ] ;
