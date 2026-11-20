@@ -1,7 +1,7 @@
 program             = { expression } ;
 
-expression          = immediate | lparen , expression-list , rparen ;
-value-expression    = immediate | lparen , value-list , rparen ;
+expression          = atom | lparen , expression-list , rparen ;
+value-expression    = atom | lparen , value-list , rparen ;
 
 expression-list     = fun
                     | let
@@ -13,8 +13,10 @@ value-list          = fun-anonymous
 
 fun                 = fun-named | fun-anonymous ;
 
-fun-named           = "fun" , identifier , lambda-list , [ value-expression ] ;
-fun-anonymous       = "fun" , lambda-list , value-expression , { value-expression } ;
+fun-named           = "fun" , identifier , lambda-list , function-body ;
+fun-anonymous       = "fun" , lambda-list , function-body ;
+
+function-body       = value-expression , { value-expression } ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 lambda-parameter    = [ "?" ] , identifier ;
