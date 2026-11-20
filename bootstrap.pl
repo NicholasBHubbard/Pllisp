@@ -31,21 +31,23 @@ sub lex {
     my ($program) = @_;
 
     my @token_table = (
-        { TYPE => 'TOK_LPAREN',     RE => qr/\(/                  },
-        { TYPE => 'TOK_RPAREN',     RE => qr/\)/                  },
-        { TYPE => 'TOK_STRING',     RE => qr/"[^"]*"/             },
-        { TYPE => 'TOK_FLOAT',      RE => qr/[0-9]+\.[0-9]+/      },
-        { TYPE => 'TOK_INTEGER',    RE => qr/[0-9]+/              },
-        { TYPE => 'TOK_KW_FUN',     RE => qr/fun/                 },
-        { TYPE => 'TOK_KW_LET',     RE => qr/let/                 },
-        { TYPE => 'TOK_KW_MATCH',   RE => qr/match/               },
-        { TYPE => 'TOK_KW_TYPE',    RE => qr/type/                },
-        { TYPE => 'TOK_IDENTIFIER', RE => qr/[a-z_][a-zA-Z0-9_]*/ },
-        { TYPE => 'TOK_TYPENAME',   RE => qr/[A-Z][a-zA-Z0-9_]*/  },
+        { TYPE => 'TOK_LPAREN',     RE => qr/\(/                         },
+        { TYPE => 'TOK_RPAREN',     RE => qr/\)/                         },
+        { TYPE => 'TOK_ARROW',      RE => qr/->/                         },
+        { TYPE => 'TOK_COLON',      RE => qr/:/                          },
+        { TYPE => 'TOK_STRING',     RE => qr/"([^"\\\r\n]|\\["\\nrt])*"/ },
+        { TYPE => 'TOK_FLOAT',      RE => qr/[0-9]+\.[0-9]+/             },
+        { TYPE => 'TOK_INTEGER',    RE => qr/[0-9]+/                     },
+        { TYPE => 'TOK_KW_FUN',     RE => qr/fun/                        },
+        { TYPE => 'TOK_KW_LET',     RE => qr/let/                        },
+        { TYPE => 'TOK_KW_MATCH',   RE => qr/match/                      },
+        { TYPE => 'TOK_KW_TYPE',    RE => qr/type/                       },
+        { TYPE => 'TOK_IDENTIFIER', RE => qr/[a-z_][a-zA-Z0-9_]*/        },
+        { TYPE => 'TOK_TYPENAME',   RE => qr/[A-Z][a-zA-Z0-9_]*/         },
     );
 
     my @tokens;
-    for (pos($program) = 0; pos $program < length $program;;) {
+    for (pos($program) = 0; pos $program < length $program;) {
         for my $rule (@token_table) {
             next if $program =~ /\G(?:[ \t\r\n]+|#[^\r\n]*)/gc;
             if ($program =~ /\G($rule->{RE})/gc) {
@@ -61,7 +63,7 @@ sub lex {
     push @tokens, {
         TYPE => 'TOK_EOF',
         VAL  => undef,
-        SPAN => SPAN => { START => length $program, END => length $program },
+        SPAN => { SPAN => { START => length $program, END => length $program } },
     };
 
     return @tokens;

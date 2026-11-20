@@ -38,8 +38,6 @@ type-name           = upper-name ;
 constructor-name    = upper-name ;
 type-variable       = identifier ;
 
-(* Lexer: skip whitespace and comments between tokens *)
-
 identifier          = identifier-name - keyword ;
 identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
 upper-name          = uppercase , { letter | digit | "_" } ;
