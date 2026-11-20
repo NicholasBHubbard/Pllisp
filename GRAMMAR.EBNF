@@ -4,8 +4,7 @@ form                = atom | lparen , ( type-declaration | fun | common-form ) ,
 expression          = atom | lparen , ( fun-anonymous | common-form ) , rparen ;
 common-form         = let | match | call ;
 
-atom                = immediate | identifier ;
-immediate           = number | string ;
+(* Type declarations *)
 
 type-declaration    = "type" , type-head , variant , { variant } ;
 type-head           = type-name
@@ -16,13 +15,18 @@ type-expression     = type-name
                     | type-variable
                     | lparen , type-name , type-expression , { type-expression } , rparen ;
 
+(* Functions *)
+
 fun                 = "fun" , [ identifier ] , function-tail ;
 fun-anonymous       = "fun" , function-tail ;
 function-tail       = lambda-list , [ "->" , type-expression ] , function-body ;
-function-body       = expression , { expression } ;
 
 lambda-list         = lparen , { lambda-parameter } , rparen ;
 lambda-parameter    = identifier , [ ":" , type-expression ] ;
+
+function-body       = expression , { expression } ;
+
+(* Common forms *)
 
 let                 = "let" , let-binding , expression ;
 let-binding         = lparen , identifier , [ ":" , type-expression ] , expression , rparen ;
@@ -34,9 +38,16 @@ pattern             = lparen , constructor-name , { identifier } , rparen ;
 call                = callee , { expression } ;
 callee              = identifier | constructor-name ;
 
+(* Atoms and names *)
+
+atom                = immediate | identifier ;
+immediate           = number | string ;
+
 type-name           = upper-name ;
 constructor-name    = upper-name ;
 type-variable       = identifier ;
+
+(* Lexical rules *)
 
 identifier          = identifier-name - keyword ;
 identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
