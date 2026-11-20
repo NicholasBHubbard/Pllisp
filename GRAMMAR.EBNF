@@ -24,10 +24,11 @@ let-binding         = lparen , identifier , expression , rparen ;
 
 call-form           = identifier , { value-expression } ;
 
+atom                = immediate | identifier ;
 immediate           = number | string ;
-
 identifier          = identifier-name - keyword ;
 identifier-name     = ( lowercase | "_" ) , { letter | digit | "_" } ;
+
 keyword             = "type" | "fun" | "let" ;
 
 number              = digits , [ "." , digits ] ;
