@@ -10,6 +10,8 @@ use autodie;
 
 use Data::Dumper;
 
+exit main(@ARGV);
+
 sub main {
     my ($file) = @_;
     open(my $fh, '<', $file);
@@ -221,8 +223,7 @@ sub _p_let {
     $self->_expect('TOK_LPAREN');
 
     my $name = $self->_expect('TOK_IDENTIFIER');
-    my $type;
-    $type = $self->_p_type_expression() if $self->_accept('TOK_COLON');
+    my $type; $type = $self->_p_type_expression() if $self->_accept('TOK_COLON');
 
     my $value = $self->_p_expression();
     $self->_expect('TOK_RPAREN');
@@ -407,6 +408,26 @@ sub _error {
 
 } # package Parser
 
-exit main(@ARGV);
+package Evaluator {
+
+sub new {
+    my ($class, $ast) = @_;
+    return bless {
+        ast => $ast,
+        env => { symtab => [] },
+    }, $class;
+}
+
+# each scope gets a symbol table
+
+# sub eval {
+#     my ($self) = @_;
+# }
+
+# sub _e_let {
+#     my ($self) = @_;
+# }
+
+} # package Evaluator
 
 __END__
