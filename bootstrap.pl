@@ -16,7 +16,7 @@ sub main {
     my $program = do { local $/; <$fh> };
     close $fh;
 
-    my @tokens = lex($program);
+    my @tokens = Lexer->new($program)->lex();
     say 'LEX RESULT:';
     print Dumper(\@tokens);
 
@@ -27,8 +27,17 @@ sub main {
     return 0;
 }
 
+package Lexer {
+
+sub new {
+    my ($class, $program) = @_;
+    return bless {
+        program => $program,
+    }, $class;
+}
+
 sub lex {
-    my ($program) = @_;
+    my ($self) = @_;
 
     my @token_table = (
         { TYPE => 'TOK_LPAREN',     RE => qr/\(/                         },
@@ -46,13 +55,13 @@ sub lex {
         { TYPE => 'TOK_TYPENAME',   RE => qr/[A-Z][a-zA-Z0-9_]*/         },
     );
 
-    pos($program) = 0;
+    pos($self->{program}) = 0;
     my @tokens;
-  TOKEN: while (pos $program < length $program) {
-        next TOKEN if $program =~ /\G(?:[ \t\r\n]+|#[^\r\n]*)/gc;
+  TOKEN: while (pos $self->{program} < length $self->{program}) {
+        next TOKEN if $self->{program} =~ /\G(?:[ \t\r\n]+|#[^\r\n]*)/gc;
 
         for my $rule (@token_table) {
-            next unless $program =~ /\G($rule->{RE})/gc;
+            next unless $self->{program} =~ /\G($rule->{RE})/gc;
 
             push @tokens, {
                 TYPE  => $rule->{TYPE},
@@ -64,18 +73,20 @@ sub lex {
             next TOKEN;
         }
 
-        die "lex error at offset ", pos($program), "\n";
+        die "lex error at offset ", pos($self->{program}), "\n";
     }
 
     push @tokens, {
         TYPE  => 'TOK_EOF',
         VAL   => undef,
-        SPAN  => { START => length $program, END => length $program },
+        SPAN  => { START => length $self->{program}, END => length $self->{program} },
         TOKEN => 1,
     };
 
     return @tokens;
 }
+
+} # package Lexer
 
 package Parser {
 
